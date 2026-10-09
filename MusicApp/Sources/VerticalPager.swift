@@ -96,7 +96,7 @@ struct VerticalPager: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - 首页单页卡片：汽水音乐风格全屏播放页（清新浅色版）
+// MARK: - 首页单页卡片：正方形封面置顶 + 歌名/作者 + 拖动条（清新浅色版）
 
 struct PlayerCard: View {
     @EnvironmentObject private var player: PlayerManager
@@ -107,7 +107,7 @@ struct PlayerCard: View {
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
-            let safeBottom = geo.safeAreaInsets.bottom
+            let coverSize = min(geo.size.width * 0.72, 300)
 
             ZStack {
                 background
@@ -118,68 +118,67 @@ struct PlayerCard: View {
                         .padding(.horizontal, 20)
                         .padding(.top, safeTop + 6)
 
-                    Spacer()
+                    Spacer(minLength: 12)
 
-                    // 歌曲信息 + 播放控制（叠在背景上）
-                    VStack(alignment: .leading, spacing: 0) {
-                        infoSection
-                            .padding(.horizontal, 26)
+                    // 1:1 正方形封面（小圆角）
+                    AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
 
-                        controlsSection
-                            .padding(.horizontal, 26)
-                            .padding(.top, 26)
+                    // 歌曲名称
+                    Text(track.title)
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                        .padding(.top, 26)
+
+                    // 作者名称
+                    Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
+                        .font(.system(size: 15))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                        .padding(.top, 6)
+
+                    Spacer(minLength: 12)
+
+                    // 拖动条 + 时间
+                    VStack(spacing: 10) {
+                        Slider(
+                            value: Binding(
+                                get: { player.progress },
+                                set: { player.seek(toFraction: $0) }
+                            ),
+                            in: 0...1
+                        )
+                        .tint(Theme.accent)
+
+                        HStack {
+                            Text(formatTime(player.currentTime))
+                            Spacer()
+                            Text(formatTime(player.duration))
+                        }
+                        .font(.system(size: 12, weight: .medium).monospacedDigit())
+                        .foregroundColor(Theme.textSecondary)
                     }
-                    .padding(.bottom, safeBottom + 96)
+                    .padding(.horizontal, 26)
+
+                    // 底部留白（TabBar 空间）
+                    Spacer(minLength: 76)
                 }
+                .frame(maxWidth: .infinity)
             }
             .clipped()
         }
         .id(track.id)
     }
 
-    // MARK: - 背景：封面铺满 + 提亮 + 底部渐变保证文字可读
+    // MARK: - 背景：清新浅色渐变
 
-    @ViewBuilder
     private var background: some View {
-        ZStack {
-            if let url = track.coverURL {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        fallbackGradient
-                    }
-                }
-            } else {
-                fallbackGradient
-            }
-
-            // 提亮为浅色调
-            Color.white.opacity(0.62)
-            // 顶部更亮，保证标题栏可读
-            LinearGradient(
-                colors: [Color.white.opacity(0.55), Color.white.opacity(0.0)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            // 底部渐变，保证文字可读
-            LinearGradient(
-                colors: [Color.white.opacity(0.0), Color.white.opacity(0.9)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-        }
-        .ignoresSafeArea()
-    }
-
-    private var fallbackGradient: some View {
         LinearGradient(
-            colors: [Color(hex: 0xE2F5EE), Color(hex: 0xF0EAFB)],
+            colors: [Color(hex: 0xF2F9F6), Color(hex: 0xF7F3FA)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
+        .ignoresSafeArea()
     }
 
     // MARK: - 顶部标题栏
@@ -214,114 +213,6 @@ struct PlayerCard: View {
                 .background(.white.opacity(0.85), in: Capsule())
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    // MARK: - 歌曲信息区
-
-    private var infoSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                if let artist = track.artist, !artist.isEmpty {
-                    Text(artist)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Theme.textSecondary)
-                }
-                if let album = track.album, !album.isEmpty {
-                    Text("· \(album)")
-                        .font(.system(size: 15))
-                        .foregroundColor(Theme.textTertiary)
-                        .lineLimit(1)
-                }
-            }
-            .lineLimit(1)
-
-            Text(track.title)
-                .font(.system(size: 30, weight: .bold))
-                .foregroundColor(Theme.textPrimary)
-                .lineLimit(1)
-
-            // 标识行：时长 / 播放进度位次
-            HStack(spacing: 8) {
-                tagLabel(icon: "clock", text: track.durText ?? "--:--")
-                tagLabel(icon: "list.number", text: "第 \(index + 1) / \(total) 首")
-            }
-        }
-    }
-
-    private func tagLabel(icon: String, text: String) -> some View {
-        Label {
-            Text(text)
-                .font(.system(size: 12, weight: .semibold))
-        } icon: {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: .semibold))
-        }
-        .foregroundColor(Theme.accent)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Theme.accentSoft, in: Capsule())
-    }
-
-    // MARK: - 播放控制区
-
-    private var controlsSection: some View {
-        VStack(spacing: 14) {
-            // 进度条
-            Slider(
-                value: Binding(
-                    get: { player.progress },
-                    set: { player.seek(toFraction: $0) }
-                ),
-                in: 0...1
-            )
-            .tint(Theme.accent)
-
-            HStack {
-                Text(formatTime(player.currentTime))
-                Spacer()
-                Text(formatTime(player.duration))
-            }
-            .font(.system(size: 12, weight: .medium).monospacedDigit())
-            .foregroundColor(Theme.textSecondary)
-
-            // 控制按钮
-            HStack(spacing: 50) {
-                Button {
-                    player.previous()
-                } label: {
-                    Image(systemName: "backward.fill")
-                        .font(.system(size: 26))
-                        .foregroundColor(Theme.textPrimary)
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    player.toggle()
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(.white)
-                            .frame(width: 74, height: 74)
-                            .shadow(color: Theme.softShadow, radius: 12, x: 0, y: 6)
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 34))
-                            .foregroundColor(Theme.accent)
-                            .offset(x: player.isPlaying ? 0 : 2)
-                    }
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    player.next()
-                } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 26))
-                        .foregroundColor(Theme.textPrimary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.top, 2)
         }
     }
 }

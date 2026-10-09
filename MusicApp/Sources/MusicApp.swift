@@ -27,8 +27,9 @@ struct MusicApp: App {
     }
 }
 
+/// 页面索引：0=发现音乐 1=首页播放页 2=我的
 struct MainTabView: View {
-    @State private var selection = 0
+    @State private var selection = 1
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -38,13 +39,13 @@ struct MainTabView: View {
             Group {
                 switch selection {
                 case 0:
-                    HomeView()
-                        .ignoresSafeArea()
-                case 1:
                     DiscoverView()
                         .safeAreaInset(edge: .bottom, spacing: 0) {
                             Color.clear.frame(height: 62)
                         }
+                case 1:
+                    HomeView()
+                        .ignoresSafeArea()
                 default:
                     MineView()
                         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -54,62 +55,89 @@ struct MainTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // 清新浅色悬浮 TabBar
+            // 清新浅色悬浮 TabBar：发现音乐 | 播放控制 | 我的
             AppTabBar(selection: $selection)
         }
     }
 }
 
-/// 悬浮 TabBar：首页（全屏播放页）上更透明，其余页面浅色毛玻璃
+/// 悬浮 TabBar：播放控制居中（首页时显示播放/暂停按钮，其他页面显示当前歌曲封面，点击回首页）
 struct AppTabBar: View {
+    @EnvironmentObject private var player: PlayerManager
     @Binding var selection: Int
 
-    private let items: [(Int, String, String)] = [
-        (0, "首页", "house.fill"),
-        (1, "发现音乐", "sparkles"),
-        (2, "我的", "person.crop.circle.fill"),
-    ]
-
-    private func foreground(for item: Int) -> Color {
-        if selection == 0 {
-            return selection == item ? Theme.accent : Theme.textTertiary
-        }
-        return selection == item ? Theme.accent : Theme.textSecondary
-    }
-
     var body: some View {
-        HStack {
-            ForEach(items, id: \.0) { item in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        selection = item.0
-                    }
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: item.2)
-                            .font(.system(size: 21))
-                        Text(item.1)
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(foreground(for: item.0))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                }
-                .buttonStyle(.plain)
-            }
+        HStack(spacing: 0) {
+            tabButton(icon: "sparkles", label: "发现音乐", index: 0)
+
+            playControl
+
+            tabButton(icon: "person.crop.circle.fill", label: "我的", index: 2)
         }
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background {
-            if selection == 0 {
-                // 播放页上：半透明白，柔和
-                Rectangle().fill(.ultraThinMaterial)
-            } else {
-                Rectangle().fill(.ultraThinMaterial)
-                    .overlay(alignment: .top) {
-                        Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
-                    }
-            }
+            Rectangle().fill(.ultraThinMaterial)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
+                }
         }
+    }
+
+    private func tabButton(icon: String, label: String, index: Int) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selection = index
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 21))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(selection == index ? Theme.accent : Theme.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 播放控制格：首页显示播放/暂停大按钮；其他页面显示当前歌曲封面
+    private var playControl: some View {
+        Button {
+            if selection == 1 {
+                player.toggle()
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selection = 1
+                }
+            }
+        } label: {
+            Group {
+                if selection == 1 {
+                    ZStack {
+                        Circle()
+                            .fill(Theme.accent)
+                            .frame(width: 46, height: 46)
+                            .shadow(color: Theme.accent.opacity(0.35), radius: 8, x: 0, y: 3)
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                            .offset(x: player.isPlaying ? 0 : 1.5)
+                    }
+                } else {
+                    AlbumArt(
+                        size: 44,
+                        title: player.current?.title ?? "音乐",
+                        coverURL: player.current?.coverURL,
+                        radius: 12
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
     }
 }
