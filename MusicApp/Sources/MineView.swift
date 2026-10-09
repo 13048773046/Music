@@ -30,7 +30,7 @@ struct MineView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
-                    .padding(.bottom, 20)
+                    .padding(.bottom, 120)
                 }
             }
             .navigationBarHidden(true)

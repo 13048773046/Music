@@ -206,12 +206,15 @@ struct PlayerCard: View {
         }
     }
 
-    /// 异步提取当前歌曲封面主色
+    /// 异步提取当前歌曲封面主色，并同步背景亮度给透明导航栏
     private func loadBackground() async {
         bgColor = nil
+        player.playerCardBackgroundLight = true
         guard let url = track.coverURL else { return }
         let ui = await CoverPalette.color(for: track.id, from: url)
-        bgColor = Color(uiColor: ui)
+        let color = Color(uiColor: ui)
+        bgColor = color
+        player.playerCardBackgroundLight = luminance(of: color) > 0.55
     }
 
     // MARK: - 亮度与动态文字色

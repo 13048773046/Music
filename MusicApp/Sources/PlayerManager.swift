@@ -38,6 +38,8 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var playMode: PlayMode = .listLoop
+    /// 首页播放页背景是否偏浅（供透明导航栏决定文字颜色）
+    @Published var playerCardBackgroundLight: Bool = true
 
     private var pendingArtwork: UIImage?
     private var timeObserver: Any?

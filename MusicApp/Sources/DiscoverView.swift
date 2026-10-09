@@ -91,20 +91,18 @@ struct DiscoverView: View {
                 }
 
                 sectionTitle("全部歌曲", subtitle: "共 \(tracks.count) 首")
-                LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 14),
-                              GridItem(.flexible(), spacing: 14)],
-                    spacing: 16
-                ) {
+                LazyVStack(spacing: 10) {
                     ForEach(tracks) { track in
-                        GridCard(track: track) {
+                        TrackRow(track: track) {
                             player.play(track, in: tracks)
                         }
+                        .softCard(radius: 14, padding: 8)
                     }
                 }
                 .padding(.horizontal, 20)
             }
-            .padding(.vertical, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 120)
         }
         .refreshable {
             await load()
@@ -230,74 +228,6 @@ private struct LatestCard: View {
             }
             .frame(width: 150, alignment: .leading)
             .softCard(radius: 18, padding: 12)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - 全部歌曲网格卡片
-
-private struct GridCard: View {
-    @EnvironmentObject private var player: PlayerManager
-    let track: Track
-    let onTap: () -> Void
-
-    private var isCurrent: Bool {
-        player.current?.id == track.id
-    }
-
-    var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                // 封面：随列宽自适应 1:1，干净无阴影
-                ZStack(alignment: .topTrailing) {
-                    AlbumArt(
-                        size: 200,
-                        title: track.title,
-                        coverURL: track.coverURL,
-                        radius: 12
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-
-                    if isCurrent {
-                        HStack(spacing: 3) {
-                            if player.isPlaying {
-                                EqualizerBars(color: .white)
-                            } else {
-                                Image(systemName: "pause.fill")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(.white)
-                            }
-                        }
-                        .padding(6)
-                        .background(Theme.accent, in: Circle())
-                        .padding(6)
-                    }
-                }
-                .aspectRatio(1, contentMode: .fit)
-
-                Text(track.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundColor(Theme.textPrimary)
-                    .padding(.horizontal, 2)
-
-                HStack(spacing: 4) {
-                    Text(track.artist ?? "未知歌手")
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.textSecondary)
-                        .lineLimit(1)
-                    if let durText = track.durText, durText != "--:--" {
-                        Text("· \(durText)")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.textTertiary)
-                    }
-                }
-                .padding(.horizontal, 2)
-                .padding(.bottom, 2)
-            }
-            .softCard(radius: 16, padding: 8)
         }
         .buttonStyle(.plain)
     }

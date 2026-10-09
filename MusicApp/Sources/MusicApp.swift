@@ -37,22 +37,16 @@ struct MainTabView: View {
         ZStack(alignment: .bottom) {
             Theme.background.ignoresSafeArea()
 
-            // 内容区：首页为全屏播放页，其余页面保留系统列表
+            // 内容区：首页为全屏播放页，其余页面内容可从底部导航栏后滑过
             Group {
                 switch selection {
                 case 0:
                     DiscoverView()
-                        .safeAreaInset(edge: .bottom, spacing: 0) {
-                            Color.clear.frame(height: 62)
-                        }
                 case 1:
                     HomeView()
                         .ignoresSafeArea()
                 default:
                     MineView()
-                        .safeAreaInset(edge: .bottom, spacing: 0) {
-                            Color.clear.frame(height: 62)
-                        }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -79,12 +73,28 @@ struct AppTabBar: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background {
-            // 深色不透明导航条：遮挡下方内容，避免透出布局
-            Rectangle().fill(Theme.card.opacity(0.98))
-                .overlay(alignment: .top) {
-                    Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
-                }
+            if selection == 1 {
+                // 首页：透明导航栏，悬浮覆盖在播放页之上（播放页背景透出）
+                Rectangle().fill(.clear)
+            } else {
+                // 其他页：深色不透明导航栏，延伸到屏幕最底部，悬浮覆盖在内容之上
+                Rectangle()
+                    .fill(Theme.card.opacity(0.98))
+                    .ignoresSafeArea(edges: .bottom)
+                    .overlay(alignment: .top) {
+                        Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
+                    }
+            }
         }
+    }
+
+    /// 图标文字颜色：首页时按播放页背景亮度动态（浅背景深字/深背景白字）
+    private func tabForeground(selected: Bool) -> Color {
+        if selection == 1 {
+            if selected { return Theme.accent }
+            return player.playerCardBackgroundLight ? Theme.textSecondary : .white.opacity(0.72)
+        }
+        return selected ? Theme.accent : Theme.textSecondary
     }
 
     private func tabButton(icon: String, label: String, index: Int) -> some View {
@@ -99,7 +109,7 @@ struct AppTabBar: View {
                 Text(label)
                     .font(.system(size: 11, weight: .medium))
             }
-            .foregroundColor(selection == index ? Theme.accent : Theme.textSecondary)
+            .foregroundColor(tabForeground(selected: selection == index))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
         }
