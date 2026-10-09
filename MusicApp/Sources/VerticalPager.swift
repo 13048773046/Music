@@ -95,14 +95,16 @@ struct VerticalPager: UIViewControllerRepresentable {
     }
 }
 
-/// 首页单页卡片：沉浸式播放界面（封面 + 信息 + 进度 + 控制）
+/// 首页单页卡片：全屏播放界面（封面主色背景 + 封面 + 信息 + 进度 + 控制）
 struct PlayerCard: View {
     @EnvironmentObject private var player: PlayerManager
     let track: Track
+    @State private var backgroundColor: UIColor?
 
     var body: some View {
         ZStack {
             background
+
             VStack(spacing: 0) {
                 Spacer(minLength: 60)
 
@@ -112,9 +114,10 @@ struct PlayerCard: View {
                     Text(track.title)
                         .font(.title2.bold())
                         .lineLimit(1)
+                        .foregroundColor(.white)
                     Text(track.artist ?? "未知歌手")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.75))
                         .lineLimit(1)
                 }
                 .padding(.top, 28)
@@ -129,16 +132,16 @@ struct PlayerCard: View {
                         ),
                         in: 0...1
                     )
-                    .tint(.purple)
+                    .tint(.white)
 
                     HStack {
                         Text(formatTime(player.currentTime))
                             .font(.caption2.monospacedDigit())
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.white.opacity(0.7))
                         Spacer()
                         Text(formatTime(player.duration))
                             .font(.caption2.monospacedDigit())
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.white.opacity(0.7))
                     }
 
                     HStack(spacing: 60) {
@@ -147,7 +150,7 @@ struct PlayerCard: View {
                         } label: {
                             Image(systemName: "backward.fill")
                                 .font(.system(size: 26))
-                                .foregroundColor(.primary)
+                                .foregroundColor(.white)
                         }
                         .buttonStyle(.plain)
 
@@ -156,7 +159,7 @@ struct PlayerCard: View {
                         } label: {
                             Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                 .font(.system(size: 68))
-                                .foregroundColor(.primary)
+                                .foregroundColor(.white)
                         }
                         .buttonStyle(.plain)
 
@@ -165,7 +168,7 @@ struct PlayerCard: View {
                         } label: {
                             Image(systemName: "forward.fill")
                                 .font(.system(size: 26))
-                                .foregroundColor(.primary)
+                                .foregroundColor(.white)
                         }
                         .buttonStyle(.plain)
                     }
@@ -175,20 +178,34 @@ struct PlayerCard: View {
                 Spacer(minLength: 44)
             }
         }
+        .task(id: track.id) {
+            await loadBackgroundColor()
+        }
         .clipped()
     }
 
+    /// 按封面主色生成背景；无封面时用浅色净面
     @ViewBuilder
     private var background: some View {
-        if let url = track.coverURL {
-            AsyncImage(url: url) { phase in
-                if case .success(let image) = phase {
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .opacity(0.10)
-                } else {
-                    defaultBackground
+        if let bg = backgroundColor {
+            ZStack {
+                LinearGradient(
+                    colors: [bg, bg.withAlphaComponent(0.9)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                // 轻微压暗，保证白色文字清晰
+                Color.black.opacity(0.12)
+                if let url = track.coverURL {
+                    AsyncImage(url: url) { phase in
+                        if case .success(let image) = phase {
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .opacity(0.06)
+                        }
+                    }
+                    .ignoresSafeArea()
                 }
             }
             .ignoresSafeArea()
@@ -204,5 +221,13 @@ struct PlayerCard: View {
             endPoint: .bottom
         )
         .ignoresSafeArea()
+    }
+
+    private func loadBackgroundColor() async {
+        guard let url = track.coverURL else {
+            backgroundColor = nil
+            return
+        }
+        backgroundColor = await CoverPalette.color(for: track.id, from: url)
     }
 }
