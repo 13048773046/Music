@@ -21,6 +21,69 @@ enum API {
         base.appendingPathComponent("cover").appendingPathComponent(id)
     }
 
+    static func avatarURL(_ id: String) -> URL {
+        base.appendingPathComponent("avatar").appendingPathComponent(id)
+    }
+
+    // MARK: - 用户注册 / 登录（multipart）
+
+    static func register(account: String, password: String, name: String,
+                         avatarData: Data?) async throws -> User {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        func field(_ n: String, _ v: String) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
+            body.append(Data("\(v)\r\n".utf8))
+        }
+        field("account", account)
+        field("password", password)
+        field("name", name)
+        if let avatarData {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"avatar\"; filename=\"avatar.jpg\"\r\n\r\n".utf8))
+            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(avatarData)
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        return try await submitUser(path: "register", boundary: boundary, body: body)
+    }
+
+    static func login(account: String, password: String) async throws -> User {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        func field(_ n: String, _ v: String) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
+            body.append(Data("\(v)\r\n".utf8))
+        }
+        field("account", account)
+        field("password", password)
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        return try await submitUser(path: "login", boundary: boundary, body: body)
+    }
+
+    private static func submitUser(path: String, boundary: String, body: Data) async throws -> User {
+        var req = URLRequest(url: base.appendingPathComponent(path))
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 30
+        req.httpBody = body
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            if let err = try? JSONDecoder().decode([String: String].self, from: data),
+               let msg = err["err"] {
+                throw APIError.message(msg)
+            }
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(User.self, from: data)
+    }
+
     static func upload(data: Data, filename: String, title: String, artist: String, album: String,
                        coverData: Data? = nil, coverFilename: String? = nil) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"

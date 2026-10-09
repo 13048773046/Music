@@ -56,6 +56,7 @@ final class PlayerManager: NSObject, ObservableObject {
         try? session.setActive(true)
 
         setupRemoteCommands()
+        setupInterruptionHandling()
 
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 2),
@@ -235,6 +236,34 @@ final class PlayerManager: NSObject, ObservableObject {
             }
             self?.seek(toSeconds: e.positionTime)
             return .success
+        }
+    }
+
+    // MARK: - 音频打断处理（微信语音 / 来电等打断后自动恢复播放）
+
+    private func setupInterruptionHandling() {
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self = self,
+                  let info = note.userInfo,
+                  let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
+
+            if typeValue == AVAudioSession.InterruptionType.began.rawValue {
+                // 被打断（如微信发语音）：UI 显示暂停状态
+                self.isPlaying = false
+            } else if typeValue == AVAudioSession.InterruptionType.ended.rawValue {
+                // 打断结束：系统允许恢复时重新激活会话并继续播放
+                guard let option = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
+                if AVAudioSession.InterruptionOptions(rawValue: option).contains(.shouldResume) {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    self.player.play()
+                    self.isPlaying = true
+                    self.updateNowPlaying()
+                }
+            }
         }
     }
 

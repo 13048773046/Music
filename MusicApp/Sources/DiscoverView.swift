@@ -2,7 +2,7 @@ import SwiftUI
 
 struct DiscoverView: View {
     @EnvironmentObject private var player: PlayerManager
-    @State private var tracks: [Track] = []
+    @EnvironmentObject private var library: Library
     @State private var state: LoadState = .loading
     @State private var latest: [Track] = []
     @State private var recommended: [Track] = []
@@ -68,7 +68,7 @@ struct DiscoverView: View {
                         HStack(spacing: 14) {
                             ForEach(recommended) { track in
                                 RecommendCard(track: track) {
-                                    player.play(track, in: tracks)
+                                    player.play(track, in: library.tracks)
                                 }
                             }
                         }
@@ -82,7 +82,7 @@ struct DiscoverView: View {
                         HStack(spacing: 14) {
                             ForEach(latest) { track in
                                 LatestCard(track: track) {
-                                    player.play(track, in: tracks)
+                                    player.play(track, in: library.tracks)
                                 }
                             }
                         }
@@ -90,11 +90,11 @@ struct DiscoverView: View {
                     }
                 }
 
-                sectionTitle("全部歌曲", subtitle: "共 \(tracks.count) 首")
+                sectionTitle("全部歌曲", subtitle: "共 \(library.tracks.count) 首")
                 LazyVStack(spacing: 10) {
-                    ForEach(tracks) { track in
+                    ForEach(library.tracks) { track in
                         TrackRow(track: track) {
-                            player.play(track, in: tracks)
+                            player.play(track, in: library.tracks)
                         }
                         .softCard(radius: 14, padding: 8)
                     }
@@ -145,21 +145,24 @@ struct DiscoverView: View {
         .padding(.horizontal, 20)
     }
 
-    // MARK: - 加载
+    // MARK: - 加载（复用启动页预加载的 Library 数据）
 
     func load() async {
+        if library.isLoaded {
+            applySections()
+            return
+        }
         state = .loading
-        do {
-            let list = try await API.tracks()
-            tracks = list
-            if list.isEmpty {
-                state = .empty
-            } else {
-                buildSections(from: list)
-                state = .loaded
-            }
-        } catch {
-            state = .failed(error.localizedDescription)
+        await library.load()
+        applySections()
+    }
+
+    private func applySections() {
+        if library.tracks.isEmpty {
+            state = .empty
+        } else {
+            buildSections(from: library.tracks)
+            state = .loaded
         }
     }
 

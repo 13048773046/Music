@@ -3,6 +3,8 @@ import SwiftUI
 @main
 struct MusicApp: App {
     @StateObject private var player = PlayerManager.shared
+    @StateObject private var auth = AuthManager.shared
+    @StateObject private var library = Library.shared
     @State private var showSplash = true
 
     var body: some Scene {
@@ -11,12 +13,21 @@ struct MusicApp: App {
                 if showSplash {
                     SplashView()
                         .transition(.opacity)
+                } else if auth.currentUser == nil {
+                    LoginView()
+                        .environmentObject(auth)
+                        .environmentObject(player)
+                        .environmentObject(library)
                 } else {
                     MainTabView()
                         .environmentObject(player)
+                        .environmentObject(auth)
+                        .environmentObject(library)
                 }
             }
             .onAppear {
+                // 启动页期间就并发拉取歌曲列表，进首页即播，减少等待
+                Task { await Library.shared.load() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     withAnimation(.easeInOut(duration: 0.45)) {
                         showSplash = false
@@ -67,7 +78,7 @@ struct AppTabBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            tabButton(icon: "sparkles", label: "发现音乐", index: 0)
+            tabButton(icon: "sparkles", label: "发现", index: 0)
 
             playControl
 

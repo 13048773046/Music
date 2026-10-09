@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// 首页：汽水音乐风格，上下滑动切换歌曲的沉浸式播放页
+/// 歌曲列表直接复用 Library 单例（启动页已开始预加载），进页面即播。
 struct HomeView: View {
     @EnvironmentObject private var player: PlayerManager
-    @State private var tracks: [Track] = []
+    @EnvironmentObject private var library: Library
     @State private var state: LoadState = .loading
 
     var body: some View {
@@ -26,7 +27,7 @@ struct HomeView: View {
                     title: "加载失败",
                     message: message
                 ) {
-                    Task { await load() }
+                    Task { await refresh() }
                 }
 
             case .empty:
@@ -37,9 +38,7 @@ struct HomeView: View {
                 )
 
             case .loaded:
-                if tracks.isEmpty {
-                    EmptyView()
-                } else {
+                if !library.tracks.isEmpty {
                     // 竖滑页直接绑定播放器全局索引：
                     // 无论从发现页/我的页切回首页，还是通知栏/锁屏切歌，
                     // 首页都会自动跳到当前正在播放的那一首
@@ -48,37 +47,27 @@ struct HomeView: View {
                             get: { player.currentIndex },
                             set: { player.currentIndex = $0 }
                         ),
-                        tracks: tracks,
+                        tracks: library.tracks,
                         onPageChanged: { index in
-                            guard tracks.indices.contains(index) else { return }
-                            player.play(tracks[index], in: tracks)
+                            guard library.tracks.indices.contains(index) else { return }
+                            player.play(library.tracks[index], in: library.tracks)
                         }
                     )
                     .ignoresSafeArea()
                 }
             }
         }
-        .task {
-            if case .loaded = state {} else {
-                await load()
-            }
-        }
-        .onChange(of: tracks) { newTracks in
-            // 首次加载且播放器还没有队列时，自动播放第一首
-            if player.queue.isEmpty, !newTracks.isEmpty {
-                player.play(newTracks[0], in: newTracks)
-            }
-        }
+        .task { await refresh() }
     }
 
-    func load() async {
-        state = .loading
-        do {
-            let list = try await API.tracks()
-            tracks = list
-            state = list.isEmpty ? .empty : .loaded
-        } catch {
-            state = .failed(error.localizedDescription)
+    func refresh() async {
+        // 启动页已经预加载过：直接用缓存，避免重复请求
+        if library.isLoaded {
+            state = library.tracks.isEmpty ? .empty : .loaded
+            return
         }
+        state = .loading
+        await library.load()
+        state = library.tracks.isEmpty ? .empty : .loaded
     }
 }

@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct MineView: View {
     @EnvironmentObject private var player: PlayerManager
+    @EnvironmentObject private var auth: AuthManager
     @State private var trackCount: Int?
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
@@ -19,7 +20,7 @@ struct MineView: View {
 
                 ScrollView {
                     LazyVStack(spacing: 18) {
-                        // 渐变用户卡片
+                        // 用户卡片
                         userCard
                         // 统计卡片
                         statsRow
@@ -27,6 +28,8 @@ struct MineView: View {
                         actionCard
                         // 关于
                         aboutCard
+                        // 退出登录
+                        logoutCard
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -65,33 +68,37 @@ struct MineView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: - 用户卡片（纯深色卡，无渐变无阴影）
+    // MARK: - 用户卡片（登录用户头像 + 昵称）
 
     private var userCard: some View {
         HStack(spacing: 16) {
             ZStack {
-                Circle()
-                    .fill(Theme.accentSoft)
+                if let avatarURL = auth.currentUser?.avatarURL {
+                    CachedCoverImage(url: avatarURL, title: auth.currentUser?.name ?? "用户") {
+                        Circle().fill(Theme.accentSoft)
+                    }
                     .frame(width: 68, height: 68)
-                Image(systemName: "person.fill")
-                    .font(.system(size: 30))
-                    .foregroundColor(Theme.accent)
+                    .clipShape(Circle())
+                } else {
+                    Circle()
+                        .fill(Theme.accentSoft)
+                        .frame(width: 68, height: 68)
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 30))
+                        .foregroundColor(Theme.accent)
+                }
             }
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("音乐爱好者")
+                Text(auth.currentUser?.name ?? "未登录")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(Theme.textPrimary)
-                Text("享受每一段旋律")
+                Text(auth.currentUser?.account ?? "登录后同步你的音乐")
                     .font(.system(size: 13))
                     .foregroundColor(Theme.textSecondary)
             }
 
             Spacer()
-
-            Image(systemName: "music.note.list")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(Theme.textTertiary)
         }
         .padding(20)
         .background(
@@ -102,6 +109,34 @@ struct MineView: View {
                         .stroke(Theme.cardBorder, lineWidth: 1)
                 )
         )
+    }
+
+    // MARK: - 退出登录
+
+    private var logoutCard: some View {
+        Button {
+            auth.logout()
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("退出登录")
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+            }
+            .foregroundColor(.red)
+            .padding(18)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Theme.card)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Theme.cardBorder, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 统计卡片
