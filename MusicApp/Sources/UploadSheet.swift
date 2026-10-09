@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct UploadSheet: View {
     let fileURL: URL
     var onUploaded: () async -> Void
+    @EnvironmentObject private var auth: AuthManager
 
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
@@ -196,6 +197,7 @@ struct UploadSheet: View {
                 title: title.trimmingCharacters(in: .whitespaces),
                 artist: artist.trimmingCharacters(in: .whitespaces),
                 album: album.trimmingCharacters(in: .whitespaces),
+                userId: auth.currentUser?.id ?? "",
                 coverData: coverData,
                 coverFilename: "cover.jpg"
             )

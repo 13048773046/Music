@@ -187,6 +187,8 @@ final class PlayerManager: NSObject, ObservableObject {
         pendingArtwork = nil
         updateNowPlaying()
         loadArtworkIfNeeded()
+        // 上报播放量
+        Task { await API.reportPlay(current.id) }
     }
 
     /// 异步加载歌曲封面用于锁屏展示（无封面则保持默认渐变封面）

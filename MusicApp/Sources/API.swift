@@ -17,6 +17,60 @@ enum API {
         base.appendingPathComponent("stream").appendingPathComponent(id)
     }
 
+    // MARK: - 互动：播放 / 点赞 / 评论 / 分享
+
+    static func reportPlay(_ trackId: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("play").appendingPathComponent(trackId))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    static func toggleLike(trackId: String, userId: String) async throws -> (liked: Bool, count: Int) {
+        var req = URLRequest(url: base.appendingPathComponent("like").appendingPathComponent(trackId))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["userId": userId])
+        let (data, _) = try await URLSession.shared.data(for: req)
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (liked: (obj?["liked"] as? Bool) ?? false,
+                count: (obj?["likeCount"] as? Int) ?? 0)
+    }
+
+    static func reportShare(_ trackId: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("share").appendingPathComponent(trackId))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    struct Comment: Codable, Identifiable, Hashable {
+        let id: String
+        let userId: String
+        let userName: String
+        let content: String
+        let created: Double
+    }
+
+    static func fetchComments(trackId: String) async throws -> [Comment] {
+        let url = base.appendingPathComponent("comments").appendingPathComponent(trackId)
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode([Comment].self, from: data)
+    }
+
+    static func postComment(trackId: String, userId: String, userName: String, content: String) async throws {
+        var req = URLRequest(url: base.appendingPathComponent("comment").appendingPathComponent(trackId))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "userId": userId, "userName": userName, "content": content
+        ])
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
     static func coverURL(_ id: String) -> URL {
         base.appendingPathComponent("cover").appendingPathComponent(id)
     }
@@ -125,6 +179,7 @@ enum API {
     }
 
     static func upload(data: Data, filename: String, title: String, artist: String, album: String,
+                       userId: String = "",
                        coverData: Data? = nil, coverFilename: String? = nil) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
@@ -145,6 +200,7 @@ enum API {
         field("title", title)
         field("artist", artist)
         field("album", album)
+        field("userId", userId)
         filePart("file", filename, "audio/mpeg", data)
         if let coverData, let coverFilename {
             filePart("cover", coverFilename, "image/jpeg", coverData)

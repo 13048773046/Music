@@ -138,8 +138,21 @@ struct EqualizerBars: View {
 
 struct TrackRow: View {
     @EnvironmentObject private var player: PlayerManager
+    @EnvironmentObject private var auth: AuthManager
     let track: Track
     let onTap: () -> Void
+
+    @State private var liked: Bool
+    @State private var likeCount: Int
+    @State private var showComments = false
+    @State private var shareURL: URL?
+
+    init(track: Track, onTap: @escaping () -> Void) {
+        self.track = track
+        self.onTap = onTap
+        _liked = State(initialValue: track.isLiked ?? false)
+        _likeCount = State(initialValue: track.likeCount ?? 0)
+    }
 
     private var isCurrent: Bool {
         player.current?.id == track.id
@@ -147,7 +160,7 @@ struct TrackRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 AlbumArt(size: 52, title: track.title, coverURL: track.coverURL, radius: 14)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -156,14 +169,12 @@ struct TrackRow: View {
                         .lineLimit(1)
                         .foregroundColor(Theme.textPrimary)
                     HStack(spacing: 4) {
-                        if let artist = track.artist, !artist.isEmpty {
-                            Text(artist)
-                                .font(.system(size: 13))
-                                .foregroundColor(Theme.textSecondary)
-                                .lineLimit(1)
-                        }
-                        if let durText = track.durText, durText != "--:--" {
-                            Text("· \(durText)")
+                        Text(track.displayAuthor)
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(1)
+                        if let pc = track.playCount, pc > 0 {
+                            Text("· 播放 \(pc)")
                                 .font(.system(size: 12))
                                 .foregroundColor(Theme.textTertiary)
                         }
@@ -171,6 +182,41 @@ struct TrackRow: View {
                 }
 
                 Spacer()
+
+                // 点赞
+                Button {
+                    Task { await toggleLike() }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: liked ? "heart.fill" : "heart")
+                            .font(.system(size: 15))
+                            .foregroundColor(liked ? .red : Theme.textTertiary)
+                        if likeCount > 0 {
+                            Text("\(likeCount)")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textTertiary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // 评论
+                Button { showComments = true } label: {
+                    Image(systemName: "bubble.right")
+                        .font(.system(size: 15))
+                        .foregroundColor(Theme.textTertiary)
+                }
+                .buttonStyle(.plain)
+
+                // 分享
+                Button {
+                    Task { await share() }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 15))
+                        .foregroundColor(Theme.textTertiary)
+                }
+                .buttonStyle(.plain)
 
                 if isCurrent {
                     if player.isPlaying {
@@ -182,14 +228,47 @@ struct TrackRow: View {
                     }
                 } else {
                     Image(systemName: "play.circle")
-                        .font(.system(size: 22))
+                        .font(.system(size: 20))
                         .foregroundColor(Theme.textTertiary)
                 }
             }
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
+        .sheet(isPresented: $showComments) {
+            CommentSheet(track: track)
+                .environmentObject(auth)
+                .environmentObject(player)
+        }
+        .sheet(item: $shareURL) { u in
+            ShareSheet(url: u)
+        }
     }
+
+    private func toggleLike() async {
+        guard let uid = auth.currentUser?.id else { return }
+        do {
+            let r = try await API.toggleLike(trackId: track.id, userId: uid)
+            liked = r.liked
+            likeCount = r.count
+        } catch {}
+    }
+
+    private func share() async {
+        await API.reportShare(track.id)
+        // 分享歌曲流式地址给朋友
+        shareURL = API.streamURL(track.id)
+    }
+}
+
+/// 系统分享 sheet 桥接
+extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url.absoluteString], applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - 通用时间格式化

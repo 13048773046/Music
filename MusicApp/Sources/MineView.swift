@@ -64,6 +64,7 @@ struct MineView: View {
                 UploadSheet(fileURL: url) {
                     await loadCount()
                 }
+                .environmentObject(auth)
             }
         }
         .sheet(isPresented: $showProfileEdit) {
