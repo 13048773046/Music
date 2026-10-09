@@ -25,10 +25,16 @@ enum API {
         base.appendingPathComponent("avatar").appendingPathComponent(id)
     }
 
+    static func backgroundURL(_ id: String) -> URL {
+        base.appendingPathComponent("background").appendingPathComponent(id)
+    }
+
     // MARK: - 用户注册 / 登录（multipart）
 
     static func register(account: String, password: String, name: String,
-                         avatarData: Data?) async throws -> User {
+                         avatarData: Data?,
+                         gender: String = "", age: Int = 0, signature: String = "",
+                         backgroundData: Data?) async throws -> User {
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
         func field(_ n: String, _ v: String) {
@@ -36,16 +42,21 @@ enum API {
             body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
             body.append(Data("\(v)\r\n".utf8))
         }
+        func filePart(_ n: String, _ v: Data) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n\r\n".utf8))
+            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(v)
+            body.append(Data("\r\n".utf8))
+        }
         field("account", account)
         field("password", password)
         field("name", name)
-        if let avatarData {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"avatar\"; filename=\"avatar.jpg\"\r\n\r\n".utf8))
-            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
-            body.append(avatarData)
-            body.append(Data("\r\n".utf8))
-        }
+        field("gender", gender)
+        field("age", String(age))
+        field("signature", signature)
+        if let avatarData { filePart("avatar", avatarData) }
+        if let backgroundData { filePart("background", backgroundData) }
         body.append(Data("--\(boundary)--\r\n".utf8))
         return try await submitUser(path: "register", boundary: boundary, body: body)
     }

@@ -7,11 +7,22 @@ struct User: Codable, Identifiable, Hashable {
     let id: String
     let account: String
     let name: String
-    let avatar: String?   // 服务端头像文件名，空字符串/缺省 = 无头像
+    let avatar: String?        // 服务端头像文件名，空字符串/缺省 = 无头像
+    let gender: String?         // 男 / 女 / 保密
+    let age: Int?
+    let background: String?    // 服务端背景图文件名
+    let signature: String?      // 用户签名
+    let ip: String?            // 最近登录 IP（后端自动获取）
+    let created: Double?       // 注册时间戳
 
     var avatarURL: URL? {
         guard let avatar, !avatar.isEmpty else { return nil }
         return API.avatarURL(id)
+    }
+
+    var backgroundURL: URL? {
+        guard let background, !background.isEmpty else { return nil }
+        return API.backgroundURL(id)
     }
 }
 
@@ -73,9 +84,12 @@ final class AuthManager: ObservableObject {
         saveSession(user)
     }
 
-    func register(account: String, password: String, name: String, avatarData: Data?) async throws {
-        let user = try await API.register(account: account, password: password,
-                                          name: name, avatarData: avatarData)
+    func register(account: String, password: String, name: String, avatarData: Data?,
+                  gender: String, age: Int, signature: String,
+                  backgroundData: Data?) async throws {
+        let user = try await API.register(account: account, password: password, name: name,
+                                          avatarData: avatarData, gender: gender, age: age,
+                                          signature: signature, backgroundData: backgroundData)
         saveSession(user)
     }
 

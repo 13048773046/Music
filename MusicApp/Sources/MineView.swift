@@ -68,47 +68,93 @@ struct MineView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: - 用户卡片（登录用户头像 + 昵称）
+    // MARK: - 用户资料卡（背景图 + 昵称 + 性别/年龄 + 签名 + IP，不显示头像）
 
     private var userCard: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                if let avatarURL = auth.currentUser?.avatarURL {
-                    CachedCoverImage(url: avatarURL,
-                                     title: auth.currentUser?.name ?? "用户",
-                                     placeholder: Circle().fill(Theme.accentSoft))
-                        .frame(width: 68, height: 68)
-                        .clipShape(Circle())
-                } else {
-                    Circle()
-                        .fill(Theme.accentSoft)
-                        .frame(width: 68, height: 68)
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 30))
-                        .foregroundColor(Theme.accent)
+        let u = auth.currentUser
+        return VStack(alignment: .leading, spacing: 0) {
+            // 背景图横幅
+            ZStack(alignment: .bottomLeading) {
+                Group {
+                    if let bgURL = u?.backgroundURL {
+                        CachedCoverImage(url: bgURL, title: u?.name ?? "",
+                                         placeholder: Rectangle().fill(Theme.card))
+                            .frame(height: 150)
+                            .clipped()
+                    } else {
+                        Rectangle()
+                            .fill(Theme.card)
+                            .frame(height: 150)
+                    }
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(u?.name ?? "未登录")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.white)
+                    HStack(spacing: 8) {
+                        if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
+                            tag(gender)
+                        }
+                        if let age = u?.age, age > 0 {
+                            tag("\(age) 岁")
+                        }
+                    }
+                }
+                .padding(16)
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(auth.currentUser?.name ?? "未登录")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(Theme.textPrimary)
-                Text(auth.currentUser?.account ?? "登录后同步你的音乐")
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
+            VStack(alignment: .leading, spacing: 10) {
+                if let sig = u?.signature, !sig.isEmpty {
+                    Text(sig)
+                        .font(.system(size: 14))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                infoRow(icon: "at", label: "账号", value: u?.account ?? "--")
+                infoRow(icon: "network", label: "登录 IP", value: u?.ip?.isEmpty == false ? u!.ip! : "--")
+                infoRow(icon: "calendar", label: "注册时间",
+                        value: Self.dateString(u?.created ?? 0))
             }
-
-            Spacer()
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.card)
         }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Theme.card)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Theme.cardBorder, lineWidth: 1)
-                )
-        )
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .stroke(Theme.cardBorder, lineWidth: 1))
+    }
+
+    private func tag(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.black.opacity(0.45), in: Capsule())
+    }
+
+    private func infoRow(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textTertiary)
+                .frame(width: 20)
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textTertiary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+        }
+    }
+
+    private static func dateString(_ ts: Double) -> String {
+        guard ts > 0 else { return "--" }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date(timeIntervalSince1970: ts))
     }
 
     // MARK: - 退出登录

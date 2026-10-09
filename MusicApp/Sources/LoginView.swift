@@ -2,8 +2,8 @@ import SwiftUI
 import PhotosUI
 
 /// 登录 / 注册页：未登录用户启动后看到。
-/// 注册只需 账号 + 密码 + 昵称 + 头像，成功后自动写入 Keychain 直接进首页；
-/// 登录态持久化，杀后台重进无需再次登录。
+/// 注册：账号 + 密码 + 昵称 + 头像 + 性别 + 年龄 + 签名 + 背景图；
+/// 成功后自动写入 Keychain 直接进首页，杀后台重进免登录。
 struct LoginView: View {
     @EnvironmentObject private var auth: AuthManager
 
@@ -11,11 +11,19 @@ struct LoginView: View {
     @State private var account = ""
     @State private var password = ""
     @State private var name = ""
+    @State private var gender = "保密"
+    @State private var ageText = ""
+    @State private var signature = ""
     @State private var avatarData: Data?
     @State private var avatarImage: UIImage?
     @State private var pickerItem: PhotosPickerItem?
+    @State private var bgData: Data?
+    @State private var bgImage: UIImage?
+    @State private var bgPickerItem: PhotosPickerItem?
     @State private var busy = false
     @State private var error: String?
+
+    private let genders = ["男", "女", "保密"]
 
     private var canSubmit: Bool {
         !busy
@@ -29,26 +37,29 @@ struct LoginView: View {
             Theme.background.ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 16) {
                     Image("AppLogo")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 84, height: 84)
+                        .frame(width: 76, height: 76)
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
                     Text("流萤音乐")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(.system(size: 24, weight: .bold))
                         .foregroundColor(Theme.textPrimary)
 
                     if isRegister {
+                        bgPicker
                         avatarPicker
+                        field("昵称", text: $name)
+                        genderRow
+                        field("年龄", text: $ageText)
+                            .keyboardType(.numberPad)
+                        field("签名（一句话介绍自己）", text: $signature)
                     }
 
                     field("账号", text: $account)
                     SecureFieldCustom("密码", text: $password)
-                    if isRegister {
-                        field("昵称", text: $name)
-                    }
 
                     Button {
                         Task { await submit() }
@@ -88,11 +99,35 @@ struct LoginView: View {
                     }
                 }
                 .padding(24)
-                .padding(.top, 40)
+                .padding(.top, 36)
             }
         }
         .onChange(of: pickerItem) { _ in
             Task { await loadAvatar() }
+        }
+        .onChange(of: bgPickerItem) { _ in
+            Task { await loadBackground() }
+        }
+    }
+
+    // MARK: - 性别选择
+
+    private var genderRow: some View {
+        HStack(spacing: 10) {
+            ForEach(genders, id: \.self) { g in
+                Button {
+                    gender = g
+                } label: {
+                    Text(g)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(gender == g ? .white : Theme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(gender == g ? Theme.accent : Theme.card,
+                                    in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -106,16 +141,52 @@ struct LoginView: View {
                         .resizable()
                         .scaledToFill()
                 } else {
-                    Circle()
-                        .fill(Theme.card)
+                    Circle().fill(Theme.card)
                     Image(systemName: "person.crop.circle.badge.plus")
                         .font(.system(size: 22))
                         .foregroundColor(Theme.accent)
                 }
             }
-            .frame(width: 84, height: 84)
+            .frame(width: 76, height: 76)
             .clipShape(Circle())
             .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var bgPicker: some View {
+        PhotosPicker(selection: $bgPickerItem, matching: .images) {
+            ZStack(alignment: .bottomLeading) {
+                Group {
+                    if let bgImage {
+                        Image(uiImage: bgImage)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Theme.card)
+                            .overlay(
+                                Image(systemName: "photo.on.rectangle")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(Theme.accent)
+                            )
+                    }
+                }
+                .frame(height: 90)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Text(bgImage == nil ? "选择个人页背景图" : "更换背景图")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.45),
+                                in: RoundedRectangle(cornerRadius: 6))
+                    .padding(10)
+            }
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.cardBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -129,6 +200,15 @@ struct LoginView: View {
         }
     }
 
+    private func loadBackground() async {
+        guard let item = bgPickerItem else { return }
+        if let data = try? await item.loadTransferable(type: Data.self),
+           let image = UIImage(data: data) {
+            bgData = data
+            bgImage = image
+        }
+    }
+
     // MARK: - 提交
 
     private func submit() async {
@@ -136,15 +216,19 @@ struct LoginView: View {
         error = nil
         do {
             if isRegister {
-                try await auth.register(account: account.trimmingCharacters(in: .whitespaces),
-                                        password: password,
-                                        name: name.trimmingCharacters(in: .whitespaces),
-                                        avatarData: avatarData)
+                try await auth.register(
+                    account: account.trimmingCharacters(in: .whitespaces),
+                    password: password,
+                    name: name.trimmingCharacters(in: .whitespaces),
+                    avatarData: avatarData,
+                    gender: gender,
+                    age: Int(ageText) ?? 0,
+                    signature: signature.trimmingCharacters(in: .whitespaces),
+                    backgroundData: bgData)
             } else {
                 try await auth.login(account: account.trimmingCharacters(in: .whitespaces),
                                      password: password)
             }
-            // 成功后 currentUser 变化，根视图自动切到 MainTabView
         } catch {
             self.error = error.localizedDescription
         }
