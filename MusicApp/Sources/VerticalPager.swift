@@ -190,7 +190,7 @@ struct PlayerCard: View {
         if let bg = backgroundColor {
             ZStack {
                 LinearGradient(
-                    colors: [bg, bg.withAlphaComponent(0.9)],
+                    colors: [Color(bg), Color(bg).opacity(0.9)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
