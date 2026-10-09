@@ -1,0 +1,44 @@
+name: build-ipa-unsigned
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: cd MusicApp && xcodegen generate
+
+      - name: Archive (unsigned)
+        run: |
+          cd MusicApp
+          xcodebuild archive \
+            -project MusicApp.xcodeproj \
+            -scheme MusicApp \
+            -configuration Release \
+            -archivePath build/MusicApp.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned ipa
+        run: |
+          cd MusicApp
+          APP_PATH=$(find build/MusicApp.xcarchive/Products/Applications -name "*.app" | head -1)
+          echo "App: $APP_PATH"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP_PATH" build/ipa/Payload/
+          cd build/ipa
+          zip -r MusicApp-unsigned.ipa Payload
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MusicApp-unsigned-ipa
+          path: MusicApp/build/ipa/MusicApp-unsigned.ipa
