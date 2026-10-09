@@ -44,7 +44,7 @@ enum API {
         }
         func filePart(_ n: String, _ v: Data) {
             body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n".utf8))
             body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
             body.append(v)
             body.append(Data("\r\n".utf8))
@@ -88,7 +88,7 @@ enum API {
         }
         func filePart(_ n: String, _ v: Data) {
             body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n".utf8))
             body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
             body.append(v)
             body.append(Data("\r\n".utf8))
