@@ -22,8 +22,10 @@ struct VerticalPager: UIViewControllerRepresentable {
         pvc.delegate = context.coordinator
         context.coordinator.rebuild(tracks: tracks)
         if !tracks.isEmpty {
+            // 起始页跟随播放器当前索引；越界（如尚未播放）时兜底到第 0 页
+            let start = context.coordinator.controllers.indices.contains(currentIndex) ? currentIndex : 0
             pvc.setViewControllers(
-                [context.coordinator.controllers[currentIndex]],
+                [context.coordinator.controllers[start]],
                 direction: .forward,
                 animated: false,
                 completion: nil
