@@ -74,11 +74,11 @@ struct MineView: View {
         HStack(spacing: 16) {
             ZStack {
                 if let avatarURL = auth.currentUser?.avatarURL {
-                    CachedCoverImage(url: avatarURL, title: auth.currentUser?.name ?? "用户") {
-                        Circle().fill(Theme.accentSoft)
-                    }
-                    .frame(width: 68, height: 68)
-                    .clipShape(Circle())
+                    CachedCoverImage(url: avatarURL,
+                                     title: auth.currentUser?.name ?? "用户",
+                                     placeholder: Circle().fill(Theme.accentSoft))
+                        .frame(width: 68, height: 68)
+                        .clipShape(Circle())
                 } else {
                     Circle()
                         .fill(Theme.accentSoft)
