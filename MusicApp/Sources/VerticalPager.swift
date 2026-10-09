@@ -117,6 +117,9 @@ struct PlayerCard: View {
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
+            // 底部留白 = 透明导航栏内容高度(~63) + 底部安全区（home indicator），
+            // 保证进度条/时间等控件在任何机型上都不会被导航栏遮挡
+            let tabBarSpace = 70 + geo.safeAreaInsets.bottom
             // 封面加大约40%：几乎满宽，左外距很小
             let coverSize = max(geo.size.width - 28, 260)
             // 封面居中后的左外距（歌名/作者与之对齐）
@@ -177,8 +180,8 @@ struct PlayerCard: View {
                     }
                     .padding(.horizontal, sidePadding)
 
-                    // 底部留白（TabBar 空间）
-                    Spacer(minLength: 76)
+                    // 底部留白（TabBar 空间，自适应导航栏高度与底部安全区）
+                    Spacer(minLength: tabBarSpace)
                 }
                 .frame(maxWidth: .infinity)
             }
