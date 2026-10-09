@@ -261,12 +261,14 @@ struct PlayerProgressBar: View {
 
     private var shown: Double { scrubFraction ?? progress }
 
+    private func clamped(_ f: Double) -> Double { min(max(f, 0), 1) }
+    private func pointX(_ f: Double, width: CGFloat) -> CGFloat {
+        CGFloat(clamped(f)) * width
+    }
+
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
-            func clamped(_ f: Double) -> Double { min(max(f, 0), 1) }
-            func pointX(_ f: Double) -> CGFloat { CGFloat(clamped(f)) * width }
-
             ZStack(alignment: .leading) {
                 // 总轨道
                 Capsule()
@@ -275,11 +277,11 @@ struct PlayerProgressBar: View {
                 // 已缓冲段（比播放段浅，一眼看出缓存到哪里）
                 Capsule()
                     .fill(tint.opacity(0.38))
-                    .frame(width: pointX(buffer), height: 3)
+                    .frame(width: pointX(buffer, width: width), height: 3)
                 // 已播放段
                 Capsule()
                     .fill(tint)
-                    .frame(width: pointX(shown), height: 3)
+                    .frame(width: pointX(shown, width: width), height: 3)
 
                 // 拖头：缓冲中显示旋转加载动画，否则是小圆点
                 Group {
@@ -289,7 +291,7 @@ struct PlayerProgressBar: View {
                         Circle().fill(tint).frame(width: 10, height: 10)
                     }
                 }
-                .offset(x: pointX(shown) - (isBuffering && scrubFraction == nil ? 10 : 5))
+                .offset(x: pointX(shown, width: width) - (isBuffering && scrubFraction == nil ? 10 : 5))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())

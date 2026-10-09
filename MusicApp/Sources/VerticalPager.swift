@@ -72,13 +72,14 @@ struct VerticalPager: UIViewControllerRepresentable {
                 )
                 // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
                 hosting.view.backgroundColor = .clear
-                // 关键：关闭 UIHostingController 桥接层的自动安全区避让。
+                // 关键：取消 UIHostingController 桥接层的自动安全区避让。
                 // 之前直接在 PlayerCard 里读 geo.safeAreaInsets 加 padding 没效果，
-                // 是因为嵌套在 UIPageViewController 里时，安全区被桥接层“消费”掉了，
-                // GeometryReader 读到的 safeAreaInsets 恒为 0。
-                // 这里改为：内容从屏幕原点（状态栏正后方）开始布局，
-                // 顶部/底部安全区一律由 keyWindow 的真实值显式注入。
-                hosting.safeAreaRegions = []
+                // 是因为嵌套在 UIPageViewController 里时该值恒为 0——
+                // 桥接层已经悄悄处理过安全区，靠读值拿不到状态栏高度。
+                // 这里用负的 additionalSafeAreaInsets 把安全区抵消为 0，
+                // SwiftUI 内容从屏幕原点（状态栏正后方）开始布局，
+                // 顶部/底部安全区一律由 keyWindow 真实值显式注入（iOS 16.0 全版本兼容）。
+                hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
                 return hosting
             }
         }
