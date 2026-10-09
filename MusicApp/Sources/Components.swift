@@ -9,12 +9,13 @@ enum LoadState: Equatable {
     case failed(String)
 }
 
-// MARK: - 封面占位（支持真实封面图，无封面时用渐变占位）
+// MARK: - 封面组件（支持真实封面图，无封面时用柔和渐变占位）
 
 struct AlbumArt: View {
     let size: CGFloat
     let title: String
     var coverURL: URL? = nil
+    var radius: CGFloat? = nil
 
     var body: some View {
         Group {
@@ -38,52 +39,48 @@ struct AlbumArt: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: radius ?? size * 0.22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: radius ?? size * 0.22, style: .continuous)
+                .stroke(Theme.cardBorder, lineWidth: 1)
+        )
+        .shadow(color: Theme.cardShadow, radius: 10, x: 0, y: 5)
     }
 
     private var placeholder: some View {
-        let palette = paletteFrom(title)
+        let (c1, c2) = paletteFrom(title)
         return ZStack {
             LinearGradient(
-                colors: [palette.0, palette.1],
+                colors: [c1, c2],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             Image(systemName: "music.note")
                 .font(.system(size: size * 0.36, weight: .semibold))
-                .foregroundColor(.white.opacity(0.92))
+                .foregroundColor(.white.opacity(0.9))
         }
     }
 
     private func paletteFrom(_ text: String) -> (Color, Color) {
-        let palettes: [(Color, Color)] = [
-            (.purple, .blue),
-            (.pink, .orange),
-            (.teal, .blue),
-            (.indigo, .purple),
-            (.orange, .red),
-            (.mint, .teal),
-            (.blue, .cyan),
-            (.red, .purple)
-        ]
         var hash = 0
         for scalar in text.unicodeScalars {
             hash = (hash &* 31 &+ Int(scalar.value)) & 0x7fffffff
         }
-        return palettes[hash % palettes.count]
+        return Theme.placeholderPalettes[hash % Theme.placeholderPalettes.count]
     }
 }
 
 // MARK: - 播放中声波动画
 
 struct EqualizerBars: View {
+    var color: Color = Theme.accent
     @State private var animate = false
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<3, id: \.self) { index in
                 Capsule()
-                    .fill(Color.accentColor)
+                    .fill(color)
                     .frame(width: 3, height: animate ? 14 : 6)
                     .animation(
                         .easeInOut(duration: 0.5)
@@ -98,7 +95,7 @@ struct EqualizerBars: View {
     }
 }
 
-// MARK: - 列表行
+// MARK: - 列表行（白色卡片行）
 
 struct TrackRow: View {
     @EnvironmentObject private var player: PlayerManager
@@ -111,25 +108,25 @@ struct TrackRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 12) {
-                AlbumArt(size: 46, title: track.title)
+            HStack(spacing: 14) {
+                AlbumArt(size: 52, title: track.title, coverURL: track.coverURL, radius: 14)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(track.title)
-                        .font(.body)
+                        .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
-                        .foregroundColor(.primary)
+                        .foregroundColor(Theme.textPrimary)
                     HStack(spacing: 4) {
                         if let artist = track.artist, !artist.isEmpty {
                             Text(artist)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                                .font(.system(size: 13))
+                                .foregroundColor(Theme.textSecondary)
                                 .lineLimit(1)
                         }
                         if let durText = track.durText, durText != "--:--" {
                             Text("· \(durText)")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textTertiary)
                         }
                     }
                 }
@@ -141,16 +138,16 @@ struct TrackRow: View {
                         EqualizerBars()
                     } else {
                         Image(systemName: "pause.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.accentColor)
+                            .font(.system(size: 22))
+                            .foregroundColor(Theme.accent)
                     }
                 } else {
                     Image(systemName: "play.circle")
-                        .font(.system(size: 20))
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 22))
+                        .foregroundColor(Theme.textTertiary)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
     }
@@ -162,4 +159,46 @@ func formatTime(_ seconds: Double) -> String {
     guard seconds.isFinite, seconds >= 0 else { return "0:00" }
     let total = Int(seconds)
     return "\(total / 60):\(String(format: "%02d", total % 60))"
+}
+
+// MARK: - 空态 / 错误态通用视图
+
+struct StatusPlaceholder: View {
+    let icon: String
+    let title: String
+    let message: String
+    var retry: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Theme.accentSoft)
+                    .frame(width: 88, height: 88)
+                Image(systemName: icon)
+                    .font(.system(size: 36))
+                    .foregroundColor(Theme.accent)
+            }
+            Text(title)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(Theme.textPrimary)
+            Text(message)
+                .font(.system(size: 14))
+                .foregroundColor(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 36)
+            if let retry {
+                Button(action: retry) {
+                    Text("重试")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 10)
+                        .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }

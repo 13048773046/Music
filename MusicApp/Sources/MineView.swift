@@ -14,73 +14,26 @@ struct MineView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HStack(spacing: 16) {
-                        ZStack {
-                            Circle()
-                                .fill(Color(.secondarySystemFill))
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 30))
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(width: 64, height: 64)
+            ZStack {
+                Theme.background.ignoresSafeArea()
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("音乐爱好者")
-                                .font(.title3.bold())
-                            Text("享受每一段旋律")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                        }
+                ScrollView {
+                    LazyVStack(spacing: 18) {
+                        // 渐变用户卡片
+                        userCard
+                        // 统计卡片
+                        statsRow
+                        // 功能入口
+                        actionCard
+                        // 关于
+                        aboutCard
                     }
-                    .padding(.vertical, 6)
-                }
-
-                Section("我的音乐") {
-                    HStack {
-                        Label("歌曲总数", systemImage: "music.note.list")
-                        Spacer()
-                        if let count = trackCount {
-                            Text("\(count)")
-                                .foregroundColor(.secondary)
-                        } else {
-                            ProgressView()
-                        }
-                    }
-                    HStack {
-                        Label("正在播放", systemImage: "speaker.wave.2")
-                        Spacer()
-                        Text(player.current?.title ?? "无")
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                Section("管理") {
-                    Button {
-                        showImporter = true
-                    } label: {
-                        Label("上传歌曲", systemImage: "square.and.arrow.up")
-                    }
-                }
-
-                Section("关于") {
-                    HStack {
-                        Label("服务器", systemImage: "server.rack")
-                        Spacer()
-                        Text("www.dbmt999.asia")
-                            .foregroundColor(.secondary)
-                    }
-                    HStack {
-                        Label("版本", systemImage: "info.circle")
-                        Spacer()
-                        Text("v\(appVersion)")
-                            .foregroundColor(.secondary)
-                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 20)
                 }
             }
-            .navigationTitle("我的")
+            .navigationBarHidden(true)
             .task {
                 if trackCount == nil {
                     await loadCount()
@@ -109,6 +62,152 @@ struct MineView: View {
                 }
             }
         }
+        .tint(Theme.accent)
+    }
+
+    // MARK: - 用户卡片
+
+    private var userCard: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(.white.opacity(0.92))
+                    .frame(width: 68, height: 68)
+                Image(systemName: "person.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(Theme.accent)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("音乐爱好者")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+                Text("享受每一段旋律")
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.85))
+            }
+
+            Spacer()
+
+            Image(systemName: "music.note.list")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundColor(.white.opacity(0.9))
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Theme.accent, Theme.lilac],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: Theme.accent.opacity(0.3), radius: 14, x: 0, y: 8)
+        )
+    }
+
+    // MARK: - 统计卡片
+
+    private var statsRow: some View {
+        HStack(spacing: 14) {
+            statCard(
+                icon: "music.note.list",
+                value: trackCount.map(String.init) ?? "--",
+                label: "歌曲总数",
+                gradient: Theme.heroGradient
+            )
+            statCard(
+                icon: "speaker.wave.2.fill",
+                value: player.current?.title ?? "无",
+                label: "正在播放",
+                gradient: Theme.peachGradient
+            )
+        }
+    }
+
+    private func statCard(icon: String, value: String, label: String, gradient: LinearGradient) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(gradient)
+                    .frame(width: 40, height: 40)
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            Text(value)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .softCard(radius: 20, padding: 16)
+    }
+
+    // MARK: - 功能入口
+
+    private var actionCard: some View {
+        Button {
+            showImporter = true
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Theme.accentSoft)
+                        .frame(width: 46, height: 46)
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(Theme.accent)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("上传歌曲")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                    Text("从本机选择音频，自动识别歌曲信息")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Theme.textTertiary)
+            }
+            .softCard(radius: 20, padding: 16)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 关于
+
+    private var aboutCard: some View {
+        VStack(spacing: 0) {
+            aboutRow(icon: "server.rack", label: "服务器", value: "www.dbmt999.asia")
+            Divider().padding(.leading, 56)
+            aboutRow(icon: "info.circle", label: "版本", value: "v\(appVersion)")
+        }
+        .softCard(radius: 20, padding: 6)
+    }
+
+    private func aboutRow(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundColor(Theme.accent)
+                .frame(width: 30)
+            Text(label)
+                .font(.system(size: 14))
+                .foregroundColor(Theme.textPrimary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textSecondary)
+        }
+        .padding(.vertical, 13)
+        .padding(.horizontal, 12)
     }
 
     private func loadCount() async {

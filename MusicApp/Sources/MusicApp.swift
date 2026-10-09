@@ -32,6 +32,8 @@ struct MainTabView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            Theme.background.ignoresSafeArea()
+
             // 内容区：首页为全屏播放页，其余页面保留系统列表
             Group {
                 switch selection {
@@ -41,24 +43,24 @@ struct MainTabView: View {
                 case 1:
                     DiscoverView()
                         .safeAreaInset(edge: .bottom, spacing: 0) {
-                            Color.clear.frame(height: 64)
+                            Color.clear.frame(height: 62)
                         }
                 default:
                     MineView()
                         .safeAreaInset(edge: .bottom, spacing: 0) {
-                            Color.clear.frame(height: 64)
+                            Color.clear.frame(height: 62)
                         }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // 透明 Tab 覆盖层
+            // 清新浅色悬浮 TabBar
             AppTabBar(selection: $selection)
         }
     }
 }
 
-/// 悬浮透明 TabBar：首页（全屏播放页）上完全透明，其余页面半透明毛玻璃
+/// 悬浮 TabBar：首页（全屏播放页）上更透明，其余页面浅色毛玻璃
 struct AppTabBar: View {
     @Binding var selection: Int
 
@@ -70,26 +72,28 @@ struct AppTabBar: View {
 
     private func foreground(for item: Int) -> Color {
         if selection == 0 {
-            return selection == item ? .white : .white.opacity(0.55)
+            return selection == item ? Theme.accent : Theme.textTertiary
         }
-        return selection == item ? .purple : .secondary
+        return selection == item ? Theme.accent : Theme.textSecondary
     }
 
     var body: some View {
         HStack {
             ForEach(items, id: \.0) { item in
                 Button {
-                    selection = item.0
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selection = item.0
+                    }
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: item.2)
-                            .font(.system(size: 22))
+                            .font(.system(size: 21))
                         Text(item.1)
-                            .font(.system(size: 11))
+                            .font(.system(size: 11, weight: .medium))
                     }
                     .foregroundColor(foreground(for: item.0))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 7)
                 }
                 .buttonStyle(.plain)
             }
@@ -98,11 +102,12 @@ struct AppTabBar: View {
         .padding(.bottom, 6)
         .background {
             if selection == 0 {
-                Color.clear
+                // 播放页上：半透明白，柔和
+                Rectangle().fill(.ultraThinMaterial)
             } else {
                 Rectangle().fill(.ultraThinMaterial)
                     .overlay(alignment: .top) {
-                        Rectangle().fill(.primary.opacity(0.08)).frame(height: 0.5)
+                        Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
                     }
             }
         }

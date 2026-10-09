@@ -57,9 +57,10 @@ struct VerticalPager: UIViewControllerRepresentable {
         }
 
         func rebuild(tracks: [Track]) {
-            controllers = tracks.map { track in
+            let total = tracks.count
+            controllers = tracks.enumerated().map { index, track in
                 UIHostingController(
-                    rootView: PlayerCard(track: track)
+                    rootView: PlayerCard(track: track, index: index, total: total)
                         .environmentObject(PlayerManager.shared)
                 )
             }
@@ -95,139 +96,232 @@ struct VerticalPager: UIViewControllerRepresentable {
     }
 }
 
-/// 首页单页卡片：全屏播放界面（封面主色背景 + 封面 + 信息 + 进度 + 控制）
+// MARK: - 首页单页卡片：汽水音乐风格全屏播放页（清新浅色版）
+
 struct PlayerCard: View {
     @EnvironmentObject private var player: PlayerManager
     let track: Track
-    @State private var backgroundColor: UIColor?
+    let index: Int
+    let total: Int
 
     var body: some View {
-        ZStack {
-            background
+        GeometryReader { geo in
+            let safeTop = geo.safeAreaInsets.top
+            let safeBottom = geo.safeAreaInsets.bottom
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 60)
+            ZStack {
+                background
 
-                AlbumArt(size: 300, title: track.title, coverURL: track.coverURL)
+                VStack(spacing: 0) {
+                    // 顶部标题栏：App 名 + 播放模式
+                    topBar
+                        .padding(.horizontal, 20)
+                        .padding(.top, safeTop + 6)
 
-                VStack(spacing: 6) {
-                    Text(track.title)
-                        .font(.title2.bold())
-                        .lineLimit(1)
-                        .foregroundColor(.white)
-                    Text(track.artist ?? "未知歌手")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.75))
-                        .lineLimit(1)
-                }
-                .padding(.top, 28)
+                    Spacer()
 
-                Spacer()
+                    // 歌曲信息 + 播放控制（叠在背景上）
+                    VStack(alignment: .leading, spacing: 0) {
+                        infoSection
+                            .padding(.horizontal, 26)
 
-                VStack(spacing: 10) {
-                    Slider(
-                        value: Binding(
-                            get: { player.progress },
-                            set: { player.seek(toFraction: $0) }
-                        ),
-                        in: 0...1
-                    )
-                    .tint(.white)
-
-                    HStack {
-                        Text(formatTime(player.currentTime))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(.white.opacity(0.7))
-                        Spacer()
-                        Text(formatTime(player.duration))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(.white.opacity(0.7))
+                        controlsSection
+                            .padding(.horizontal, 26)
+                            .padding(.top, 26)
                     }
-
-                    HStack(spacing: 60) {
-                        Button {
-                            player.previous()
-                        } label: {
-                            Image(systemName: "backward.fill")
-                                .font(.system(size: 26))
-                                .foregroundColor(.white)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            player.toggle()
-                        } label: {
-                            Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 68))
-                                .foregroundColor(.white)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            player.next()
-                        } label: {
-                            Image(systemName: "forward.fill")
-                                .font(.system(size: 26))
-                                .foregroundColor(.white)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    .padding(.bottom, safeBottom + 96)
                 }
-                .padding(.horizontal, 30)
-
-                Spacer(minLength: 44)
             }
+            .clipped()
         }
-        .task(id: track.id) {
-            await loadBackgroundColor()
-        }
-        .clipped()
+        .id(track.id)
     }
 
-    /// 按封面主色生成背景；无封面时用浅色净面
+    // MARK: - 背景：封面铺满 + 提亮 + 底部渐变保证文字可读
+
     @ViewBuilder
     private var background: some View {
-        if let bg = backgroundColor {
-            ZStack {
-                LinearGradient(
-                    colors: [Color(bg), Color(bg).opacity(0.9)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                // 轻微压暗，保证白色文字清晰
-                Color.black.opacity(0.12)
-                if let url = track.coverURL {
-                    AsyncImage(url: url) { phase in
-                        if case .success(let image) = phase {
-                            image
-                                .resizable()
-                                .scaledToFill()
-                                .opacity(0.06)
-                        }
+        ZStack {
+            if let url = track.coverURL {
+                AsyncImage(url: url) { phase in
+                    if case .success(let image) = phase {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        fallbackGradient
                     }
-                    .ignoresSafeArea()
                 }
+            } else {
+                fallbackGradient
             }
-            .ignoresSafeArea()
-        } else {
-            defaultBackground
-        }
-    }
 
-    private var defaultBackground: some View {
-        LinearGradient(
-            colors: [Color(.secondarySystemBackground), Color(.systemBackground)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+            // 提亮为浅色调
+            Color.white.opacity(0.62)
+            // 顶部更亮，保证标题栏可读
+            LinearGradient(
+                colors: [Color.white.opacity(0.55), Color.white.opacity(0.0)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            // 底部渐变，保证文字可读
+            LinearGradient(
+                colors: [Color.white.opacity(0.0), Color.white.opacity(0.9)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
         .ignoresSafeArea()
     }
 
-    private func loadBackgroundColor() async {
-        guard let url = track.coverURL else {
-            backgroundColor = nil
-            return
+    private var fallbackGradient: some View {
+        LinearGradient(
+            colors: [Color(hex: 0xE2F5EE), Color(hex: 0xF0EAFB)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    // MARK: - 顶部标题栏
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: "music.note")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(Theme.accent)
+                Text("流萤音乐")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+            }
+
+            Spacer()
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    player.cyclePlayMode()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: player.playMode.symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(player.playMode.label)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(Theme.textSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(.white.opacity(0.85), in: Capsule())
+            }
+            .buttonStyle(.plain)
         }
-        backgroundColor = await CoverPalette.color(for: track.id, from: url)
+    }
+
+    // MARK: - 歌曲信息区
+
+    private var infoSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if let artist = track.artist, !artist.isEmpty {
+                    Text(artist)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                if let album = track.album, !album.isEmpty {
+                    Text("· \(album)")
+                        .font(.system(size: 15))
+                        .foregroundColor(Theme.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+            .lineLimit(1)
+
+            Text(track.title)
+                .font(.system(size: 30, weight: .bold))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+
+            // 标识行：时长 / 播放进度位次
+            HStack(spacing: 8) {
+                tagLabel(icon: "clock", text: track.durText ?? "--:--")
+                tagLabel(icon: "list.number", text: "第 \(index + 1) / \(total) 首")
+            }
+        }
+    }
+
+    private func tagLabel(icon: String, text: String) -> some View {
+        Label {
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+        } icon: {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundColor(Theme.accent)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Theme.accentSoft, in: Capsule())
+    }
+
+    // MARK: - 播放控制区
+
+    private var controlsSection: some View {
+        VStack(spacing: 14) {
+            // 进度条
+            Slider(
+                value: Binding(
+                    get: { player.progress },
+                    set: { player.seek(toFraction: $0) }
+                ),
+                in: 0...1
+            )
+            .tint(Theme.accent)
+
+            HStack {
+                Text(formatTime(player.currentTime))
+                Spacer()
+                Text(formatTime(player.duration))
+            }
+            .font(.system(size: 12, weight: .medium).monospacedDigit())
+            .foregroundColor(Theme.textSecondary)
+
+            // 控制按钮
+            HStack(spacing: 50) {
+                Button {
+                    player.previous()
+                } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 26))
+                        .foregroundColor(Theme.textPrimary)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    player.toggle()
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: 74, height: 74)
+                            .shadow(color: Theme.softShadow, radius: 12, x: 0, y: 6)
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 34))
+                            .foregroundColor(Theme.accent)
+                            .offset(x: player.isPlaying ? 0 : 2)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    player.next()
+                } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 26))
+                        .foregroundColor(Theme.textPrimary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 2)
+        }
     }
 }

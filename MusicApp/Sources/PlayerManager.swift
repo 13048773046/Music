@@ -2,6 +2,30 @@ import AVFoundation
 import MediaPlayer
 import UIKit
 
+// MARK: - 播放模式
+
+enum PlayMode: CaseIterable {
+    case listLoop   // 列表循环
+    case singleLoop // 单曲循环
+    case shuffle    // 随机播放
+
+    var symbol: String {
+        switch self {
+        case .listLoop: return "repeat"
+        case .singleLoop: return "repeat.1"
+        case .shuffle: return "shuffle"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .listLoop: return "列表循环"
+        case .singleLoop: return "单曲循环"
+        case .shuffle: return "随机播放"
+        }
+    }
+}
+
 final class PlayerManager: NSObject, ObservableObject {
     static let shared = PlayerManager()
 
@@ -13,6 +37,7 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var progress: Double = 0
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
+    @Published var playMode: PlayMode = .listLoop
 
     private var pendingArtwork: UIImage?
     private var timeObserver: Any?
@@ -78,14 +103,48 @@ final class PlayerManager: NSObject, ObservableObject {
 
     func next() {
         guard !queue.isEmpty else { return }
-        currentIndex = (currentIndex + 1) % queue.count
+        switch playMode {
+        case .singleLoop:
+            playCurrent()
+            return
+        case .shuffle:
+            let target = randomIndex(excluding: currentIndex)
+            currentIndex = target
+        default:
+            currentIndex = (currentIndex + 1) % queue.count
+        }
         playCurrent()
     }
 
     func previous() {
         guard !queue.isEmpty else { return }
-        currentIndex = (currentIndex - 1 + queue.count) % queue.count
+        switch playMode {
+        case .singleLoop:
+            playCurrent()
+            return
+        case .shuffle:
+            let target = randomIndex(excluding: currentIndex)
+            currentIndex = target
+        default:
+            currentIndex = (currentIndex - 1 + queue.count) % queue.count
+        }
         playCurrent()
+    }
+
+    /// 切换播放模式：列表循环 → 单曲循环 → 随机 → 列表循环
+    func cyclePlayMode() {
+        let all = PlayMode.allCases
+        let idx = all.firstIndex(of: playMode) ?? 0
+        playMode = all[(idx + 1) % all.count]
+    }
+
+    private func randomIndex(excluding current: Int) -> Int {
+        guard queue.count > 1 else { return 0 }
+        var target = Int.random(in: 0..<queue.count)
+        if target == current {
+            target = (target + 1) % queue.count
+        }
+        return target
     }
 
     func seek(toFraction fraction: Double) {

@@ -30,6 +30,7 @@ struct UploadSheet: View {
                     if detecting {
                         HStack(spacing: 10) {
                             ProgressView()
+                                .tint(Theme.accent)
                             Text("正在识别音频信息…")
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
@@ -37,7 +38,7 @@ struct UploadSheet: View {
                     } else {
                         Label("已识别音频信息，可修改", systemImage: "checkmark.seal")
                             .font(.footnote)
-                            .foregroundColor(.green)
+                            .foregroundColor(Theme.accent)
                     }
                     TextField("标题", text: $title)
                     TextField("歌手", text: $artist)
@@ -109,13 +110,17 @@ struct UploadSheet: View {
                             Spacer()
                             if uploading {
                                 ProgressView()
+                                    .tint(.white)
                             } else {
                                 Text("上传")
                                     .fontWeight(.semibold)
                             }
                             Spacer()
                         }
+                        .foregroundColor(.white)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
                     .disabled(!canUpload)
                 }
             }
