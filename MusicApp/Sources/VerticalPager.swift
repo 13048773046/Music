@@ -18,6 +18,8 @@ struct VerticalPager: UIViewControllerRepresentable {
             navigationOrientation: .vertical,
             options: nil
         )
+        // 透明背景：避免 UIKit 默认底色在状态栏/底部区域露出
+        pvc.view.backgroundColor = .clear
         pvc.dataSource = context.coordinator
         pvc.delegate = context.coordinator
         context.coordinator.rebuild(tracks: tracks)
@@ -61,10 +63,13 @@ struct VerticalPager: UIViewControllerRepresentable {
         func rebuild(tracks: [Track]) {
             let total = tracks.count
             controllers = tracks.enumerated().map { index, track in
-                UIHostingController(
+                let hosting = UIHostingController(
                     rootView: PlayerCard(track: track, index: index, total: total)
                         .environmentObject(PlayerManager.shared)
                 )
+                // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
+                hosting.view.backgroundColor = .clear
+                return hosting
             }
         }
 
@@ -186,6 +191,8 @@ struct PlayerCard: View {
         }
         .animation(.easeInOut(duration: 0.35), value: bgColor)
         .id(track.id)
+        // 让页面布局扩展到全屏：背景铺满状态栏区域与底部小白条区域
+        .ignoresSafeArea()
     }
 
     // MARK: - 背景：封面主色纯色
