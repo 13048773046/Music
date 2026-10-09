@@ -100,10 +100,6 @@ struct PlayerCard: View {
     @EnvironmentObject private var player: PlayerManager
     let track: Track
 
-    private var isCurrent: Bool {
-        player.current?.id == track.id
-    }
-
     var body: some View {
         ZStack {
             background
@@ -111,14 +107,6 @@ struct PlayerCard: View {
                 Spacer(minLength: 60)
 
                 AlbumArt(size: 300, title: track.title, coverURL: track.coverURL)
-                    .shadow(color: .black.opacity(0.35), radius: 28, y: 16)
-                    .scaleEffect(isCurrent && player.isPlaying ? 1.0 : 0.97)
-                    .animation(
-                        isCurrent && player.isPlaying
-                            ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
-                            : .default,
-                        value: isCurrent && player.isPlaying
-                    )
 
                 VStack(spacing: 6) {
                     Text(track.title)
@@ -198,8 +186,7 @@ struct PlayerCard: View {
                     image
                         .resizable()
                         .scaledToFill()
-                        .blur(radius: 90)
-                        .opacity(0.55)
+                        .opacity(0.10)
                 } else {
                     defaultBackground
                 }
@@ -212,7 +199,7 @@ struct PlayerCard: View {
 
     private var defaultBackground: some View {
         LinearGradient(
-            colors: [.purple.opacity(0.38), .blue.opacity(0.24), .black.opacity(0.10)],
+            colors: [Color(.secondarySystemBackground), Color(.systemBackground)],
             startPoint: .top,
             endPoint: .bottom
         )

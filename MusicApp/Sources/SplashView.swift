@@ -20,7 +20,6 @@ struct SplashView: View {
                         .font(.system(size: 54, weight: .semibold))
                         .foregroundColor(.white)
                 }
-                .shadow(color: .black.opacity(0.3), radius: 22, y: 12)
 
                 VStack(spacing: 6) {
                     Text("流萤音乐")

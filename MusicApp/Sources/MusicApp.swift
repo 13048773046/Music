@@ -44,12 +44,5 @@ struct MainTabView: View {
                 .tag(2)
         }
         .tint(.purple)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if player.current != nil {
-                MiniPlayerView(onOpenHome: {
-                    selection = 0
-                })
-            }
-        }
     }
 }

@@ -18,17 +18,13 @@ struct MineView: View {
                 Section {
                     HStack(spacing: 16) {
                         ZStack {
-                            LinearGradient(
-                                colors: [.purple, .blue],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+                            Circle()
+                                .fill(Color(.secondarySystemFill))
                             Image(systemName: "person.fill")
                                 .font(.system(size: 30))
-                                .foregroundColor(.white)
+                                .foregroundColor(.secondary)
                         }
                         .frame(width: 64, height: 64)
-                        .clipShape(Circle())
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text("音乐爱好者")
