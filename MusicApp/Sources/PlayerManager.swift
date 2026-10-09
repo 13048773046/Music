@@ -191,8 +191,8 @@ final class PlayerManager: NSObject, ObservableObject {
         if let album = current.album, !album.isEmpty {
             info[MPMediaItemPropertyAlbumTitle] = album
         }
-        info[MPMediaItemPropertyArtwork] = pendingArtwork.map {
-            MPMediaItemArtwork(boundsSize: $0.size) { _ in $0 }
+        info[MPMediaItemPropertyArtwork] = pendingArtwork.map { image in
+            MPMediaItemArtwork(boundsSize: image.size) { _ in image }
         } ?? Self.makeArtwork()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }

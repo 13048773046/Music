@@ -43,7 +43,7 @@ struct AlbumArt: View {
 
     private var placeholder: some View {
         let palette = paletteFrom(title)
-        ZStack {
+        return ZStack {
             LinearGradient(
                 colors: [palette.0, palette.1],
                 startPoint: .topLeading,
