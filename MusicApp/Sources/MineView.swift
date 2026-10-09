@@ -75,13 +75,15 @@ struct MineView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: - 用户资料卡（背景图 + 昵称 + 性别/年龄 + 签名 + IP，不显示头像）
+    // MARK: - 用户资料卡（背景图 + 头像 + 昵称 + 性别/年龄 + 签名 + IP，点击进编辑页）
 
     private var userCard: some View {
         let u = auth.currentUser
         return VStack(alignment: .leading, spacing: 0) {
-            // 背景图横幅
-            ZStack(alignment: .bottomLeading) {
+            // 头部：背景图 150 + 头像压边区 38
+            ZStack(alignment: .topLeading) {
+                Rectangle().fill(Theme.card)
+
                 Group {
                     if let bgURL = u?.backgroundURL {
                         CachedCoverImage(url: bgURL, title: u?.name ?? "",
@@ -95,21 +97,43 @@ struct MineView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(u?.name ?? "未登录")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
-                    HStack(spacing: 8) {
-                        if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
-                            tag(gender)
-                        }
-                        if let age = u?.age, age > 0 {
-                            tag("\(age) 岁")
+                HStack(alignment: .center, spacing: 14) {
+                    // 头像
+                    ZStack {
+                        if let avURL = u?.avatarURL {
+                            CachedCoverImage(url: avURL, title: u?.name ?? "",
+                                             placeholder: Circle().fill(Theme.accentSoft))
+                        } else {
+                            Circle().fill(Theme.accentSoft)
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(Theme.accent)
                         }
                     }
+                    .frame(width: 76, height: 76)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Theme.card, lineWidth: 3))
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(u?.name ?? "未登录")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(.white)
+                        HStack(spacing: 8) {
+                            if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
+                                tag(gender)
+                            }
+                            if let age = u?.age, age > 0 {
+                                tag("\(age) 岁")
+                            }
+                        }
+                    }
+                    .padding(.trailing, 12)
                 }
-                .padding(16)
+                .padding(.leading, 16)
+                .padding(.top, 112)   // 头像中心压在背景图下沿（150 - 38）
             }
+            .frame(height: 188)
+            .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 10) {
                 if let sig = u?.signature, !sig.isEmpty {

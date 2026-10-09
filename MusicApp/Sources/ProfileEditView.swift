@@ -70,7 +70,11 @@ struct ProfileEditView: View {
     // MARK: - 头部：背景图 + 头像
 
     private var header: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .topLeading) {
+            // 底层 card 色，撑满整个卡片（160 图区 + 40 头像区）
+            Rectangle().fill(Theme.card)
+
+            // 背景图：顶部 160 高
             PhotosPicker(selection: $bgPickerItem, matching: .images) {
                 Group {
                     if let bgImage {
@@ -82,7 +86,7 @@ struct ProfileEditView: View {
                         Rectangle().fill(Theme.card)
                     }
                 }
-                .frame(height: 180)
+                .frame(height: 160)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .overlay(alignment: .topTrailing) {
@@ -96,6 +100,7 @@ struct ProfileEditView: View {
             }
             .buttonStyle(.plain)
 
+            // 头像：压在背景图下沿（top = 160 - 38 = 122，leading = 16）
             PhotosPicker(selection: $avatarPickerItem, matching: .images) {
                 ZStack {
                     if let avatarImage {
@@ -121,12 +126,15 @@ struct ProfileEditView: View {
                 }
             }
             .buttonStyle(.plain)
-            .offset(x: 16, y: 28)
+            .padding(.leading, 16)
+            .padding(.top, 122)
         }
+        .frame(height: 200)
+        .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .stroke(Theme.cardBorder, lineWidth: 1))
-        .padding(.bottom, 28)
+        .padding(.bottom, 16)
     }
 
     // MARK: - 输入区
