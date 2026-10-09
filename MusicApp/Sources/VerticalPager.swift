@@ -107,7 +107,10 @@ struct PlayerCard: View {
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
-            let coverSize = min(geo.size.width * 0.72, 300)
+            // 封面加大约40%：几乎满宽，左外距很小
+            let coverSize = max(geo.size.width - 28, 260)
+            // 封面居中后的左外距（歌名/作者与之对齐）
+            let sidePadding = (geo.size.width - coverSize) / 2
 
             ZStack {
                 background
@@ -120,22 +123,24 @@ struct PlayerCard: View {
 
                     Spacer(minLength: 12)
 
-                    // 1:1 正方形封面（小圆角）
+                    // 1:1 正方形封面（小圆角，居中，左外距很小）
                     AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
 
-                    // 歌曲名称
-                    Text(track.title)
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
-                        .padding(.top, 26)
+                    // 歌曲名称 + 作者名称：左对齐，左外距与封面一致
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(track.title)
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
 
-                    // 作者名称
-                    Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
-                        .font(.system(size: 15))
-                        .foregroundColor(Theme.textSecondary)
-                        .lineLimit(1)
-                        .padding(.top, 6)
+                        Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
+                            .font(.system(size: 15))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, 26)
 
                     Spacer(minLength: 12)
 
@@ -158,7 +163,7 @@ struct PlayerCard: View {
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundColor(Theme.textSecondary)
                     }
-                    .padding(.horizontal, 26)
+                    .padding(.horizontal, sidePadding)
 
                     // 底部留白（TabBar 空间）
                     Spacer(minLength: 76)

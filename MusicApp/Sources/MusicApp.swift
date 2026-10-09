@@ -77,10 +77,8 @@ struct AppTabBar: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background {
-            Rectangle().fill(.ultraThinMaterial)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
-                }
+            // 沉浸式透明导航条
+            Rectangle().fill(.clear)
         }
     }
 
