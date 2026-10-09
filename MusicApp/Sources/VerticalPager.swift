@@ -62,15 +62,37 @@ struct VerticalPager: UIViewControllerRepresentable {
 
         func rebuild(tracks: [Track]) {
             let total = tracks.count
+            let top = Self.windowSafeAreaTop
+            let bottom = Self.windowSafeAreaBottom
             controllers = tracks.enumerated().map { index, track in
                 let hosting = UIHostingController(
-                    rootView: PlayerCard(track: track, index: index, total: total)
+                    rootView: PlayerCard(track: track, index: index, total: total,
+                                         topInset: top, bottomInset: bottom)
                         .environmentObject(PlayerManager.shared)
                 )
                 // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
                 hosting.view.backgroundColor = .clear
+                // 关键：关闭 UIHostingController 桥接层的自动安全区避让。
+                // 之前直接在 PlayerCard 里读 geo.safeAreaInsets 加 padding 没效果，
+                // 是因为嵌套在 UIPageViewController 里时，安全区被桥接层“消费”掉了，
+                // GeometryReader 读到的 safeAreaInsets 恒为 0。
+                // 这里改为：内容从屏幕原点（状态栏正后方）开始布局，
+                // 顶部/底部安全区一律由 keyWindow 的真实值显式注入。
+                hosting.safeAreaRegions = []
                 return hosting
             }
+        }
+
+        /// 从 keyWindow 读取真实安全区高度（顶部状态栏 / 底部 Home 指示条）
+        static var windowSafeAreaTop: CGFloat {
+            (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?
+                .windows.first(where: { $0.isKeyWindow })?
+                .safeAreaInsets.top ?? 0
+        }
+        static var windowSafeAreaBottom: CGFloat {
+            (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?
+                .windows.first(where: { $0.isKeyWindow })?
+                .safeAreaInsets.bottom ?? 0
         }
 
         // MARK: DataSource
@@ -110,17 +132,21 @@ struct PlayerCard: View {
     let track: Track
     let index: Int
     let total: Int
+    /// 真实安全区高度（由 Coordinator 从 keyWindow 注入，不依赖桥接层）
+    var topInset: CGFloat = 0
+    var bottomInset: CGFloat = 0
 
     /// 当前歌曲封面的主色背景（nil = 加载中/无封面，用浅色渐变兜底）
     @State private var bgColor: Color?
+    /// 进度条拖动中的预览位置（nil = 跟随真实播放进度，松手才 seek）
+    @State private var scrubFraction: Double? = nil
 
     var body: some View {
         GeometryReader { geo in
-            // 真实安全区（不可在外层加 ignoresSafeArea，否则会被清零导致控件被状态栏遮挡）
-            let safeTop = geo.safeAreaInsets.top
-            // 底部留白 = 透明导航栏内容高度(~63) + 底部安全区（home indicator），
-            // 保证进度条/时间等控件在任何机型上都不会被导航栏遮挡
-            let tabBarSpace = 70 + geo.safeAreaInsets.bottom
+            // hosting.safeAreaRegions=[]：这里 geo.safeAreaInsets 恒为 0，
+            // 顶部栏/底部控件的安全区一律用外部注入的真实值，
+            // 从根上避免 UIKit↔SwiftUI 桥接把安全区吞掉导致偏移失效。
+            let tabBarSpace = 70 + bottomInset
             // 封面加大约40%：几乎满宽，左外距很小
             let coverSize = max(geo.size.width - 28, 260)
             // 封面居中后的左外距（歌名/作者与之对齐）
@@ -138,7 +164,7 @@ struct PlayerCard: View {
                     topBar(onLight: onLight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
-                        .padding(.top, safeTop + 6)
+                        .padding(.top, topInset + 6)
 
                     // 1:1 正方形封面（小圆角，居中，左外距很小）；与顶部栏间距收小，整体上移
                     Spacer(minLength: 6)
@@ -163,18 +189,20 @@ struct PlayerCard: View {
 
                     Spacer(minLength: 12)
 
-                    // 拖动条 + 时间（细滑块：小拖头，不遮挡内容）
+                    // 多功能进度条：同一根条展示已播放段 + 已缓冲段，缓冲中拖头变加载动画；
+                    // 拖动时只预览位置，松手才执行 seek
                     VStack(spacing: 10) {
-                        ThinSlider(
-                            value: Binding(
-                                get: { player.progress },
-                                set: { player.seek(toFraction: $0) }
-                            ),
-                            tint: textPrimary(onLight: onLight)
+                        PlayerProgressBar(
+                            progress: player.progress,
+                            buffer: player.bufferProgress,
+                            isBuffering: player.isBuffering,
+                            tint: textPrimary(onLight: onLight),
+                            scrubFraction: $scrubFraction,
+                            onSeek: { fraction in player.seek(toFraction: fraction) }
                         )
 
                         HStack {
-                            Text(formatTime(player.currentTime))
+                            Text(formatTime((scrubFraction ?? player.progress) * player.duration))
                             Spacer()
                             Text(formatTime(player.duration))
                         }

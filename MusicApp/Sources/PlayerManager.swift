@@ -40,6 +40,10 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var playMode: PlayMode = .listLoop
     /// 首页播放页背景是否偏浅（供透明导航栏决定文字颜色）
     @Published var playerCardBackgroundLight: Bool = true
+    /// 已缓冲进度 0...1（取 currentItem.loadedTimeRanges 中包含当前播放点的一段）
+    @Published var bufferProgress: Double = 0
+    /// 是否正在缓冲（等待网络数据，用于进度条加载动画）
+    @Published var isBuffering: Bool = false
 
     private var pendingArtwork: UIImage?
     private var timeObserver: Any?
@@ -64,6 +68,14 @@ final class PlayerManager: NSObject, ObservableObject {
             if d.isFinite, d > 0 {
                 self.duration = d
                 self.progress = min(max(self.currentTime / d, 0), 1)
+            }
+            // 缓冲状态：播放点数据未到达时（卡顿/加载中）显示加载动画
+            self.isBuffering = (self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+            // 已缓冲进度：当前已加载区间的终点 / 总时长
+            if let item = self.player.currentItem, self.duration > 0,
+               let range = item.loadedTimeRanges.first?.timeRangeValue {
+                let bufferEnd = CMTimeGetSeconds(range.start) + CMTimeGetSeconds(range.duration)
+                self.bufferProgress = min(max(bufferEnd / self.duration, 0), 1)
             }
             self.updateNowPlaying()
         }
@@ -169,6 +181,8 @@ final class PlayerManager: NSObject, ObservableObject {
         duration = 0
         progress = 0
         currentTime = 0
+        bufferProgress = 0
+        isBuffering = true   // 新歌曲开始加载，立即展示缓冲动画
         pendingArtwork = nil
         updateNowPlaying()
         loadArtworkIfNeeded()
