@@ -178,13 +178,13 @@ struct PlayerCard: View {
                 .frame(maxWidth: .infinity)
             }
             .clipped()
+            // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
+            .preferredColorScheme(onLight ? .light : .dark)
         }
         .task(id: track.id) {
             await loadBackground()
         }
         .animation(.easeInOut(duration: 0.35), value: bgColor)
-        // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
-        .preferredColorScheme(onLight ? .light : .dark)
         .id(track.id)
     }
 
