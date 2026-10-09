@@ -162,16 +162,15 @@ struct PlayerCard: View {
 
                     Spacer(minLength: 12)
 
-                    // 拖动条 + 时间
+                    // 拖动条 + 时间（细滑块：小拖头，不遮挡内容）
                     VStack(spacing: 10) {
-                        Slider(
+                        ThinSlider(
                             value: Binding(
                                 get: { player.progress },
                                 set: { player.seek(toFraction: $0) }
                             ),
-                            in: 0...1
+                            tint: textPrimary(onLight: onLight)
                         )
-                        .tint(textPrimary(onLight: onLight))
 
                         HStack {
                             Text(formatTime(player.currentTime))

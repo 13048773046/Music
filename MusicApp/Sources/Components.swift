@@ -201,3 +201,44 @@ struct StatusPlaceholder: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+// MARK: - 细滑块（小尺寸拖头：轨道 3pt、滑块 10pt，点击/拖动均可）
+
+struct ThinSlider: View {
+    @Binding var value: Double
+    var tint: Color = .white
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let ratio = min(max(value, 0), 1)
+            let thumbSize: CGFloat = 10
+
+            ZStack(alignment: .leading) {
+                // 轨道
+                Capsule()
+                    .fill(tint.opacity(0.22))
+                    .frame(height: 3)
+                // 已播放段
+                Capsule()
+                    .fill(tint)
+                    .frame(width: max(0, width * ratio), height: 3)
+                // 小滑块
+                Circle()
+                    .fill(tint)
+                    .frame(width: thumbSize, height: thumbSize)
+                    .offset(x: max(0, min(width - thumbSize, width * ratio - thumbSize / 2)))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        let r = min(max(g.location.x / max(width, 1), 0), 1)
+                        value = r
+                    }
+            )
+        }
+        .frame(height: 26)
+    }
+}

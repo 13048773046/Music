@@ -139,12 +139,25 @@ struct AppTabBar: View {
                             .offset(x: player.isPlaying ? 0 : 1.5)
                     }
                 } else {
-                    AlbumArt(
-                        size: 44,
-                        title: player.current?.title ?? "音乐",
-                        coverURL: player.current?.coverURL,
-                        radius: 12
-                    )
+                    // 当前歌曲封面 + 暗色透明遮罩 + 播放状态小竖条
+                    ZStack {
+                        AlbumArt(
+                            size: 44,
+                            title: player.current?.title ?? "音乐",
+                            coverURL: player.current?.coverURL,
+                            radius: 12
+                        )
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.black.opacity(0.35))
+                        if player.isPlaying {
+                            EqualizerBars(color: .white)
+                        } else {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
                 }
             }
             .frame(maxWidth: .infinity)
