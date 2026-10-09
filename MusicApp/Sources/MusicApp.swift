@@ -30,7 +30,6 @@ struct MusicApp: App {
 struct MainTabView: View {
     @EnvironmentObject private var player: PlayerManager
     @State private var selection = 0
-    @State private var showPlayer = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -47,12 +46,10 @@ struct MainTabView: View {
         .tint(.purple)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if player.current != nil {
-                MiniPlayerView(showPlayer: $showPlayer)
+                MiniPlayerView(onOpenHome: {
+                    selection = 0
+                })
             }
-        }
-        .fullScreenCover(isPresented: $showPlayer) {
-            PlayerView()
-                .environmentObject(player)
         }
     }
 }

@@ -133,7 +133,7 @@ private struct DiscoverCard: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
-                AlbumArt(size: 150, title: track.title)
+                AlbumArt(size: 150, title: track.title, coverURL: track.coverURL)
                 Text(track.title)
                     .font(.subheadline)
                     .lineLimit(1)
@@ -163,7 +163,7 @@ private struct GridCard: View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .bottomTrailing) {
-                    AlbumArt(size: 160, title: track.title)
+                    AlbumArt(size: 160, title: track.title, coverURL: track.coverURL)
                         .frame(maxWidth: .infinity)
                     if isCurrent {
                         Image(systemName: "waveform")

@@ -9,13 +9,39 @@ enum LoadState: Equatable {
     case failed(String)
 }
 
-// MARK: - 封面占位
+// MARK: - 封面占位（支持真实封面图，无封面时用渐变占位）
 
 struct AlbumArt: View {
     let size: CGFloat
     let title: String
+    var coverURL: URL? = nil
 
     var body: some View {
+        Group {
+            if let coverURL {
+                AsyncImage(url: coverURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure:
+                        placeholder
+                    case .empty:
+                        placeholder
+                    @unknown default:
+                        placeholder
+                    }
+                }
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+    }
+
+    private var placeholder: some View {
         let palette = paletteFrom(title)
         ZStack {
             LinearGradient(
@@ -27,8 +53,6 @@ struct AlbumArt: View {
                 .font(.system(size: size * 0.36, weight: .semibold))
                 .foregroundColor(.white.opacity(0.92))
         }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
     }
 
     private func paletteFrom(_ text: String) -> (Color, Color) {

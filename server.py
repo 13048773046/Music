@@ -9,7 +9,7 @@ ROOT = "/www/wwwroot/music"
 FILES = os.path.join(ROOT, "files")
 DB = os.path.join(ROOT, "tracks.db")
 PORT = 8788
-MAX_UPLOAD = 50 * 1024 * 1024  # 50MB
+MAX_UPLOAD = 100 * 1024 * 1024  # 100MB
 
 os.makedirs(FILES, exist_ok=True)
 
@@ -19,6 +19,10 @@ def db():
     c.execute("""CREATE TABLE IF NOT EXISTS tracks(
         id TEXT PRIMARY KEY, title TEXT, artist TEXT, album TEXT,
         fname TEXT, size INTEGER, dur REAL, created REAL)""")
+    cols = [r[1] for r in c.execute("PRAGMA table_info(tracks)")]
+    if "cover" not in cols:
+        c.execute("ALTER TABLE tracks ADD COLUMN cover TEXT DEFAULT ''")
+        c.commit()
     return c
 
 
@@ -158,11 +162,38 @@ class H(BaseHTTPRequestHandler):
             return
         if u.path == "/api/tracks":
             c = db()
-            rows = c.execute("SELECT id,title,artist,album,fname,size,dur,created FROM tracks ORDER BY created DESC").fetchall()
+            rows = c.execute("SELECT id,title,artist,album,cover,fname,size,dur,created FROM tracks ORDER BY created DESC").fetchall()
             c.close()
             self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
-                              "fname": r[4], "size": r[5], "dur": r[6],
-                              "durText": _fmt_dur(r[6]), "created": r[7]} for r in rows])
+                              "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
+                              "durText": _fmt_dur(r[7]), "created": r[8]} for r in rows])
+            return
+        if u.path.startswith("/api/cover/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            row = c.execute("SELECT cover FROM tracks WHERE id=?", (tid,)).fetchone()
+            c.close()
+            if not row or not row[0]:
+                self._json(404, {"err": "no cover"})
+                return
+            fp = os.path.join(FILES, row[0])
+            if not os.path.exists(fp):
+                self._json(404, {"err": "cover missing"})
+                return
+            size = os.path.getsize(fp)
+            ctype = mimetypes.guess_type(fp)[0] or "image/jpeg"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with open(fp, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
             return
         if u.path.startswith("/api/stream/"):
             tid = u.path.rsplit("/", 1)[-1]
@@ -236,7 +267,7 @@ class H(BaseHTTPRequestHandler):
                 return
             data = self.rfile.read(length)
             parts = data.split(b"--" + boundary)
-            fields, filename, filedata = {}, None, None
+            fields, files = {}, {}
             for p in parts:
                 if b"Content-Disposition" not in p:
                     continue
@@ -250,13 +281,14 @@ class H(BaseHTTPRequestHandler):
                     fn = head.split('filename="')[1].split('"')[0]
                 body = body.rstrip(b"\r\n")
                 if fn:
-                    filename = fn
-                    filedata = body
+                    files[name] = (fn, body)
                 elif name:
                     fields[name] = body.decode("utf-8", "ignore")
-            if not filedata or not filename:
+            audio = files.get("file")
+            if not audio or not audio[0]:
                 self._json(400, {"err": "no file"})
                 return
+            filename, filedata = audio
             if len(filedata) > MAX_UPLOAD:
                 self._json(413, {"err": "too large"})
                 return
@@ -271,13 +303,25 @@ class H(BaseHTTPRequestHandler):
                 f.write(filedata)
             dur = audio_duration(fp)
             title = (fields.get("title") or os.path.splitext(filename)[0]).strip() or "未命名"
+            cover_fname = ""
+            cover = files.get("cover")
+            if cover and cover[0]:
+                cfn, cdata = cover
+                cext = os.path.splitext(cfn)[1].lower()
+                if cext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                    cext = ".jpg"
+                cover_fname = tid + "_cover" + cext
+                cpath = os.path.join(FILES, cover_fname)
+                with open(cpath, "wb") as f:
+                    f.write(cdata)
             c = db()
-            c.execute("INSERT INTO tracks(id,title,artist,album,fname,size,dur,created) VALUES(?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO tracks(id,title,artist,album,cover,fname,size,dur,created) VALUES(?,?,?,?,?,?,?,?,?)",
                       (tid, title, fields.get("artist", ""), fields.get("album", ""),
-                       stored, len(filedata), dur, time.time()))
+                       cover_fname, stored, len(filedata), dur, time.time()))
             c.commit()
             c.close()
-            self._json(200, {"id": tid, "title": title, "dur": dur, "durText": _fmt_dur(dur)})
+            self._json(200, {"id": tid, "title": title, "cover": cover_fname,
+                             "dur": dur, "durText": _fmt_dur(dur)})
         except Exception as e:
             self._json(500, {"err": "internal error: %s" % e})
 

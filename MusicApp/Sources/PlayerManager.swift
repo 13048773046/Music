@@ -14,6 +14,7 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
 
+    private var pendingArtwork: UIImage?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
 
@@ -107,7 +108,21 @@ final class PlayerManager: NSObject, ObservableObject {
         duration = 0
         progress = 0
         currentTime = 0
+        pendingArtwork = nil
         updateNowPlaying()
+        loadArtworkIfNeeded()
+    }
+
+    /// 异步加载歌曲封面用于锁屏展示（无封面则保持默认渐变封面）
+    private func loadArtworkIfNeeded() {
+        guard let url = current?.coverURL else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self, let data, let image = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                self.pendingArtwork = image
+                self.updateNowPlaying()
+            }
+        }.resume()
     }
 
     private func setupRemoteCommands() {
@@ -176,7 +191,9 @@ final class PlayerManager: NSObject, ObservableObject {
         if let album = current.album, !album.isEmpty {
             info[MPMediaItemPropertyAlbumTitle] = album
         }
-        info[MPMediaItemPropertyArtwork] = Self.makeArtwork()
+        info[MPMediaItemPropertyArtwork] = pendingArtwork.map {
+            MPMediaItemArtwork(boundsSize: $0.size) { _ in $0 }
+        } ?? Self.makeArtwork()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 

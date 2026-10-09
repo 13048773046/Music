@@ -17,7 +17,12 @@ enum API {
         base.appendingPathComponent("stream").appendingPathComponent(id)
     }
 
-    static func upload(data: Data, filename: String, title: String, artist: String, album: String) async throws {
+    static func coverURL(_ id: String) -> URL {
+        base.appendingPathComponent("cover").appendingPathComponent(id)
+    }
+
+    static func upload(data: Data, filename: String, title: String, artist: String, album: String,
+                       coverData: Data? = nil, coverFilename: String? = nil) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
 
@@ -26,20 +31,27 @@ enum API {
             body.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
             body.append(Data("\(value)\r\n".utf8))
         }
+        func filePart(_ name: String, _ fileName: String, _ contentType: String, _ fileData: Data) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(fileName)\"\r\n".utf8))
+            body.append(Data("Content-Type: \(contentType)\r\n\r\n".utf8))
+            body.append(fileData)
+            body.append(Data("\r\n".utf8))
+        }
+
         field("title", title)
         field("artist", artist)
         field("album", album)
-
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".utf8))
-        body.append(Data("Content-Type: audio/mpeg\r\n\r\n".utf8))
-        body.append(data)
-        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        filePart("file", filename, "audio/mpeg", data)
+        if let coverData, let coverFilename {
+            filePart("cover", coverFilename, "image/jpeg", coverData)
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
 
         var req = URLRequest(url: base.appendingPathComponent("upload"))
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 120
+        req.timeoutInterval = 180
         req.httpBody = body
         let (_, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {

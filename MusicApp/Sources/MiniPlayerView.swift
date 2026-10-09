@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MiniPlayerView: View {
     @EnvironmentObject private var player: PlayerManager
-    @Binding var showPlayer: Bool
+    var onOpenHome: () -> Void
 
     var body: some View {
         if let current = player.current {
@@ -12,7 +12,7 @@ struct MiniPlayerView: View {
                     .tint(.purple)
 
                 HStack(spacing: 12) {
-                    AlbumArt(size: 42, title: current.title)
+                    AlbumArt(size: 42, title: current.title, coverURL: current.coverURL)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(current.title)
@@ -40,7 +40,7 @@ struct MiniPlayerView: View {
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    showPlayer = true
+                    onOpenHome()
                 }
             }
             .background(.ultraThinMaterial)
