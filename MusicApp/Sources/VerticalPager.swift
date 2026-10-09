@@ -104,6 +104,9 @@ struct PlayerCard: View {
     let index: Int
     let total: Int
 
+    /// 当前歌曲封面的主色背景（nil = 加载中/无封面，用浅色渐变兜底）
+    @State private var bgColor: Color?
+
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
@@ -111,13 +114,15 @@ struct PlayerCard: View {
             let coverSize = max(geo.size.width - 28, 260)
             // 封面居中后的左外距（歌名/作者与之对齐）
             let sidePadding = (geo.size.width - coverSize) / 2
+            // 背景是否偏浅（决定文字用深色还是白色）
+            let onLight = bgColor.map { luminance(of: $0) > 0.55 } ?? true
 
             ZStack {
                 background
 
                 VStack(spacing: 0) {
                     // 顶部标题栏：App 名 + 播放模式
-                    topBar
+                    topBar(onLight: onLight)
                         .padding(.horizontal, 20)
                         .padding(.top, safeTop + 6)
 
@@ -130,12 +135,12 @@ struct PlayerCard: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(track.title)
                             .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(Theme.textPrimary)
+                            .foregroundColor(textPrimary(onLight: onLight))
                             .lineLimit(1)
 
                         Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
                             .font(.system(size: 15))
-                            .foregroundColor(Theme.textSecondary)
+                            .foregroundColor(textSecondary(onLight: onLight))
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -153,7 +158,7 @@ struct PlayerCard: View {
                             ),
                             in: 0...1
                         )
-                        .tint(Theme.accent)
+                        .tint(textPrimary(onLight: onLight))
 
                         HStack {
                             Text(formatTime(player.currentTime))
@@ -161,7 +166,7 @@ struct PlayerCard: View {
                             Text(formatTime(player.duration))
                         }
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundColor(Theme.textSecondary)
+                        .foregroundColor(textSecondary(onLight: onLight))
                     }
                     .padding(.horizontal, sidePadding)
 
@@ -172,31 +177,71 @@ struct PlayerCard: View {
             }
             .clipped()
         }
+        .task(id: track.id) {
+            await loadBackground()
+        }
+        .animation(.easeInOut(duration: 0.35), value: bgColor)
+        // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
+        .preferredColorScheme(onLight ? .light : .dark)
         .id(track.id)
     }
 
-    // MARK: - 背景：清新浅色渐变
+    // MARK: - 背景：封面主色纯色
 
+    @ViewBuilder
     private var background: some View {
-        LinearGradient(
-            colors: [Color(hex: 0xF2F9F6), Color(hex: 0xF7F3FA)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        if let bg = bgColor {
+            // 纯色：提取的封面主颜色
+            bg.ignoresSafeArea()
+        } else {
+            // 加载中/无封面：浅色渐变兜底
+            LinearGradient(
+                colors: [Color(hex: 0xF2F9F6), Color(hex: 0xF7F3FA)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        }
+    }
+
+    /// 异步提取当前歌曲封面主色
+    private func loadBackground() async {
+        bgColor = nil
+        guard let url = track.coverURL else { return }
+        let ui = await CoverPalette.color(for: track.id, from: url)
+        bgColor = Color(uiColor: ui)
+    }
+
+    // MARK: - 亮度与动态文字色
+
+    private func luminance(of color: Color) -> CGFloat {
+        let ui = UIColor(color)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    }
+
+    /// 主文字：浅背景用深色，深背景用白色
+    private func textPrimary(onLight: Bool) -> Color {
+        onLight ? Theme.textPrimary : .white
+    }
+
+    /// 次文字：浅背景用灰色，深背景用半透明白
+    private func textSecondary(onLight: Bool) -> Color {
+        onLight ? Theme.textSecondary : .white.opacity(0.78)
     }
 
     // MARK: - 顶部标题栏
 
-    private var topBar: some View {
+    private func topBar(onLight: Bool) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: 7) {
                 Image(systemName: "music.note")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(Theme.accent)
+                    .foregroundColor(onLight ? Theme.accent : .white)
                 Text("流萤音乐")
                     .font(.system(size: 17, weight: .bold))
-                    .foregroundColor(Theme.textPrimary)
+                    .foregroundColor(textPrimary(onLight: onLight))
             }
 
             Spacer()
@@ -212,10 +257,13 @@ struct PlayerCard: View {
                     Text(player.playMode.label)
                         .font(.system(size: 12, weight: .semibold))
                 }
-                .foregroundColor(Theme.textSecondary)
+                .foregroundColor(textSecondary(onLight: onLight))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .background(.white.opacity(0.85), in: Capsule())
+                .background(
+                    (onLight ? Color.white : Color.black.opacity(0.25)).opacity(0.7),
+                    in: Capsule()
+                )
             }
             .buttonStyle(.plain)
         }

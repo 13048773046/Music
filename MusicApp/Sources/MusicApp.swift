@@ -23,6 +23,8 @@ struct MusicApp: App {
                     }
                 }
             }
+            // 全局浅色外观：状态栏深色文字（深色封面背景的页面会局部覆盖）
+            .preferredColorScheme(.light)
         }
     }
 }
