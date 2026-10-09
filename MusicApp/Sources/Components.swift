@@ -44,7 +44,6 @@ struct AlbumArt: View {
             RoundedRectangle(cornerRadius: radius ?? size * 0.22, style: .continuous)
                 .stroke(Theme.cardBorder, lineWidth: 1)
         )
-        .shadow(color: Theme.cardShadow, radius: 10, x: 0, y: 5)
     }
 
     private var placeholder: some View {

@@ -124,13 +124,7 @@ struct DiscoverView: View {
             Spacer()
             ZStack {
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Theme.accent, Theme.sky],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                    .fill(Theme.accent)
                     .frame(width: 42, height: 42)
                 Image(systemName: "sparkles")
                     .font(.system(size: 18, weight: .semibold))
@@ -196,14 +190,7 @@ private struct RecommendCard: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(
-                            LinearGradient(
-                                colors: [Theme.accent, Theme.lilac],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            ),
-                            in: Capsule()
-                        )
+                        .background(Theme.accent, in: Capsule())
                         .padding(8)
                 }
 
@@ -262,9 +249,17 @@ private struct GridCard: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
-                ZStack(alignment: .bottomTrailing) {
-                    AlbumArt(size: 158, title: track.title, coverURL: track.coverURL, radius: 16)
-                        .frame(maxWidth: .infinity)
+                // 封面：随列宽自适应 1:1，干净无阴影
+                ZStack(alignment: .topTrailing) {
+                    AlbumArt(
+                        size: 200,
+                        title: track.title,
+                        coverURL: track.coverURL,
+                        radius: 12
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+
                     if isCurrent {
                         HStack(spacing: 3) {
                             if player.isPlaying {
@@ -275,16 +270,19 @@ private struct GridCard: View {
                                     .foregroundColor(.white)
                             }
                         }
-                        .padding(7)
+                        .padding(6)
                         .background(Theme.accent, in: Circle())
-                        .padding(8)
+                        .padding(6)
                     }
                 }
+                .aspectRatio(1, contentMode: .fit)
 
                 Text(track.title)
                     .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
                     .foregroundColor(Theme.textPrimary)
+                    .padding(.horizontal, 2)
+
                 HStack(spacing: 4) {
                     Text(track.artist ?? "未知歌手")
                         .font(.system(size: 12))
@@ -296,8 +294,10 @@ private struct GridCard: View {
                             .foregroundColor(Theme.textTertiary)
                     }
                 }
+                .padding(.horizontal, 2)
+                .padding(.bottom, 2)
             }
-            .softCard(radius: 20, padding: 10)
+            .softCard(radius: 16, padding: 8)
         }
         .buttonStyle(.plain)
     }

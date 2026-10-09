@@ -5,42 +5,18 @@ struct SplashView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(hex: 0xFAF8F5), Color(hex: 0xE2F5EE)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            // 装饰性柔和色块
-            Circle()
-                .fill(Theme.peach.opacity(0.25))
-                .frame(width: 300, height: 300)
-                .blur(radius: 60)
-                .offset(x: -140, y: -320)
-            Circle()
-                .fill(Theme.lilac.opacity(0.25))
-                .frame(width: 280, height: 280)
-                .blur(radius: 60)
-                .offset(x: 150, y: 340)
+            Theme.background.ignoresSafeArea()
 
             VStack(spacing: 22) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Theme.accent, Theme.lilac],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 112, height: 112)
-                        .shadow(color: Theme.accent.opacity(0.35), radius: 18, x: 0, y: 8)
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .fill(Theme.accent)
+                        .frame(width: 104, height: 104)
                     Image(systemName: "music.note")
-                        .font(.system(size: 54, weight: .semibold))
+                        .font(.system(size: 52, weight: .semibold))
                         .foregroundColor(.white)
                 }
-                .scaleEffect(appeared ? 1 : 0.8)
+                .scaleEffect(appeared ? 1 : 0.85)
                 .opacity(appeared ? 1 : 0)
 
                 VStack(spacing: 8) {

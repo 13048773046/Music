@@ -116,8 +116,8 @@ struct PlayerCard: View {
             let coverSize = max(geo.size.width - 28, 260)
             // 封面居中后的左外距（歌名/作者与之对齐）
             let sidePadding = (geo.size.width - coverSize) / 2
-            // 背景是否偏浅（决定文字用深色还是白色）
-            let onLight = bgColor.map { luminance(of: $0) > 0.55 } ?? true
+            // 背景是否偏浅（决定文字用深色还是白色）；无封面时按深色背景处理
+            let onLight = bgColor.map { luminance(of: $0) > 0.55 } ?? false
 
             ZStack {
                 background
@@ -196,9 +196,9 @@ struct PlayerCard: View {
             // 纯色：提取的封面主颜色
             bg.ignoresSafeArea()
         } else {
-            // 加载中/无封面：浅色渐变兜底
+            // 加载中/无封面：深色兜底
             LinearGradient(
-                colors: [Color(hex: 0xF2F9F6), Color(hex: 0xF7F3FA)],
+                colors: [Color(hex: 0x1C1C1F), Color(hex: 0x121214)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )

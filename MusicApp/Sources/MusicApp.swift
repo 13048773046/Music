@@ -23,8 +23,8 @@ struct MusicApp: App {
                     }
                 }
             }
-            // 全局浅色外观：状态栏深色文字（深色封面背景的页面会局部覆盖）
-            .preferredColorScheme(.light)
+            // 全局深色外观：状态栏白色文字（浅色封面背景的播放页会局部覆盖为浅色）
+            .preferredColorScheme(.dark)
         }
     }
 }
@@ -79,8 +79,11 @@ struct AppTabBar: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background {
-            // 沉浸式透明导航条
-            Rectangle().fill(.clear)
+            // 深色不透明导航条：遮挡下方内容，避免透出布局
+            Rectangle().fill(Theme.card.opacity(0.98))
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Theme.cardBorder).frame(height: 0.5)
+                }
         }
     }
 
@@ -120,7 +123,6 @@ struct AppTabBar: View {
                         Circle()
                             .fill(Theme.accent)
                             .frame(width: 46, height: 46)
-                            .shadow(color: Theme.accent.opacity(0.35), radius: 8, x: 0, y: 3)
                         Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 20))
                             .foregroundColor(.white)

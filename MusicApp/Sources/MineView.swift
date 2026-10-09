@@ -65,13 +65,13 @@ struct MineView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: - 用户卡片
+    // MARK: - 用户卡片（纯深色卡，无渐变无阴影）
 
     private var userCard: some View {
         HStack(spacing: 16) {
             ZStack {
                 Circle()
-                    .fill(.white.opacity(0.92))
+                    .fill(Theme.accentSoft)
                     .frame(width: 68, height: 68)
                 Image(systemName: "person.fill")
                     .font(.system(size: 30))
@@ -81,29 +81,26 @@ struct MineView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("音乐爱好者")
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.textPrimary)
                 Text("享受每一段旋律")
                     .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(Theme.textSecondary)
             }
 
             Spacer()
 
             Image(systemName: "music.note.list")
                 .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(Theme.textTertiary)
         }
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Theme.accent, Theme.lilac],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+                .fill(Theme.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Theme.cardBorder, lineWidth: 1)
                 )
-                .shadow(color: Theme.accent.opacity(0.3), radius: 14, x: 0, y: 8)
         )
     }
 
@@ -115,26 +112,26 @@ struct MineView: View {
                 icon: "music.note.list",
                 value: trackCount.map(String.init) ?? "--",
                 label: "歌曲总数",
-                gradient: Theme.heroGradient
+                iconColor: Theme.accent
             )
             statCard(
                 icon: "speaker.wave.2.fill",
                 value: player.current?.title ?? "无",
                 label: "正在播放",
-                gradient: Theme.peachGradient
+                iconColor: Theme.lilac
             )
         }
     }
 
-    private func statCard(icon: String, value: String, label: String, gradient: LinearGradient) -> some View {
+    private func statCard(icon: String, value: String, label: String, iconColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(gradient)
+                    .fill(iconColor.opacity(0.16))
                     .frame(width: 40, height: 40)
                 Image(systemName: icon)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(iconColor)
             }
             Text(value)
                 .font(.system(size: 15, weight: .bold))
