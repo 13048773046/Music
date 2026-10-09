@@ -105,14 +105,16 @@ struct ProfileEditView: View {
                 ZStack {
                     if let avatarImage {
                         Image(uiImage: avatarImage).resizable().scaledToFill()
-                    } else if let avURL = auth.currentUser?.avatarURL {
-                        CachedCoverImage(url: avURL, title: auth.currentUser?.name ?? "",
-                                         placeholder: Circle().fill(Theme.accentSoft))
                     } else {
-                        Circle().fill(Theme.accentSoft)
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 26))
-                            .foregroundColor(Theme.accent)
+                        CachedCoverImage(
+                            url: auth.currentUser?.avatarURL ?? URL(string: "about:blank")!,
+                            title: auth.currentUser?.name ?? "",
+                            placeholder:
+                                Circle().fill(Theme.accentSoft)
+                                    .overlay(Image(systemName: "person.fill")
+                                        .font(.system(size: 26))
+                                        .foregroundColor(Theme.accent))
+                        )
                     }
                 }
                 .frame(width: 76, height: 76)

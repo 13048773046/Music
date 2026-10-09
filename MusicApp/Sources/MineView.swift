@@ -98,17 +98,17 @@ struct MineView: View {
                 }
 
                 HStack(alignment: .center, spacing: 14) {
-                    // 头像
+                    // 头像：按 id 请求，后端无图时自动占位
                     ZStack {
-                        if let avURL = u?.avatarURL {
-                            CachedCoverImage(url: avURL, title: u?.name ?? "",
-                                             placeholder: Circle().fill(Theme.accentSoft))
-                        } else {
-                            Circle().fill(Theme.accentSoft)
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 28))
-                                .foregroundColor(Theme.accent)
-                        }
+                        CachedCoverImage(
+                            url: u?.avatarURL ?? URL(string: "about:blank")!,
+                            title: u?.name ?? "",
+                            placeholder:
+                                Circle().fill(Theme.accentSoft)
+                                    .overlay(Image(systemName: "person.fill")
+                                        .font(.system(size: 28))
+                                        .foregroundColor(Theme.accent))
+                        )
                     }
                     .frame(width: 76, height: 76)
                     .clipShape(Circle())
@@ -141,10 +141,6 @@ struct MineView: View {
                         .font(.system(size: 14))
                         .foregroundColor(Theme.textSecondary)
                 }
-                infoRow(icon: "at", label: "账号", value: u?.account ?? "--")
-                infoRow(icon: "network", label: "登录 IP", value: u?.ip?.isEmpty == false ? u!.ip! : "--")
-                infoRow(icon: "calendar", label: "注册时间",
-                        value: Self.dateString(u?.created ?? 0))
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)

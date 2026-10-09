@@ -15,9 +15,9 @@ struct User: Codable, Identifiable, Hashable {
     let ip: String?            // 最近登录 IP（后端自动获取）
     let created: Double?       // 注册时间戳
 
-    var avatarURL: URL? {
-        guard let avatar, !avatar.isEmpty else { return nil }
-        return API.avatarURL(id)
+    /// 头像/背景图 URL 一律按用户 id 请求；后端无图时返回 404，CachedCoverImage 自动占位
+    var avatarURL: URL {
+        API.avatarURL(id)
     }
 
     var backgroundURL: URL? {
