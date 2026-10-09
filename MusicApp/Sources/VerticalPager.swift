@@ -116,6 +116,7 @@ struct PlayerCard: View {
 
     var body: some View {
         GeometryReader { geo in
+            // 真实安全区（不可在外层加 ignoresSafeArea，否则会被清零导致控件被状态栏遮挡）
             let safeTop = geo.safeAreaInsets.top
             // 底部留白 = 透明导航栏内容高度(~63) + 底部安全区（home indicator），
             // 保证进度条/时间等控件在任何机型上都不会被导航栏遮挡
@@ -128,7 +129,9 @@ struct PlayerCard: View {
             let onLight = bgColor.map { luminance(of: $0) > 0.55 } ?? false
 
             ZStack {
+                // 背景：自身忽略安全区延伸到全屏（状态栏 / 底部小白条），不影响上方安全区计算
                 background
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 VStack(spacing: 0) {
                     // 顶部标题栏：App 名 + 播放模式
@@ -185,7 +188,6 @@ struct PlayerCard: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .clipped()
             // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
             .preferredColorScheme(onLight ? .light : .dark)
         }
@@ -194,8 +196,6 @@ struct PlayerCard: View {
         }
         .animation(.easeInOut(duration: 0.35), value: bgColor)
         .id(track.id)
-        // 让页面布局扩展到全屏：背景铺满状态栏区域与底部小白条区域
-        .ignoresSafeArea()
     }
 
     // MARK: - 背景：封面主色纯色
