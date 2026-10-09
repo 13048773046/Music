@@ -75,6 +75,35 @@ enum API {
         return try await submitUser(path: "login", boundary: boundary, body: body)
     }
 
+    /// 更新当前用户资料（可选替换头像/背景图）
+    static func updateProfile(account: String, name: String, gender: String, age: Int,
+                              signature: String,
+                              avatarData: Data?, backgroundData: Data?) async throws -> User {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        func field(_ n: String, _ v: String) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
+            body.append(Data("\(v)\r\n".utf8))
+        }
+        func filePart(_ n: String, _ v: Data) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n\r\n".utf8))
+            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(v)
+            body.append(Data("\r\n".utf8))
+        }
+        field("account", account)
+        field("name", name)
+        field("gender", gender)
+        field("age", String(age))
+        field("signature", signature)
+        if let avatarData { filePart("avatar", avatarData) }
+        if let backgroundData { filePart("background", backgroundData) }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        return try await submitUser(path: "profile/update", boundary: boundary, body: body)
+    }
+
     private static func submitUser(path: String, boundary: String, body: Data) async throws -> User {
         var req = URLRequest(url: base.appendingPathComponent(path))
         req.httpMethod = "POST"

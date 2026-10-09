@@ -8,6 +8,7 @@ struct MineView: View {
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
     @State private var showUploadSheet = false
+    @State private var showProfileEdit = false
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
@@ -63,6 +64,12 @@ struct MineView: View {
                 UploadSheet(fileURL: url) {
                     await loadCount()
                 }
+            }
+        }
+        .sheet(isPresented: $showProfileEdit) {
+            NavigationStack {
+                ProfileEditView()
+                    .environmentObject(auth)
             }
         }
         .tint(Theme.accent)
@@ -122,6 +129,7 @@ struct MineView: View {
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .stroke(Theme.cardBorder, lineWidth: 1))
+        .onTapGesture { showProfileEdit = true }
     }
 
     private func tag(_ text: String) -> some View {

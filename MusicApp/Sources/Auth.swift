@@ -98,6 +98,18 @@ final class AuthManager: ObservableObject {
         Keychain.delete(service: serviceName, account: accountName)
     }
 
+    /// 更新资料，成功后同步刷新本地登录态
+    func updateProfile(name: String, gender: String, age: Int, signature: String,
+                       avatarData: Data?, backgroundData: Data?) async throws {
+        guard let u = currentUser else { return }
+        let updated = try await API.updateProfile(account: u.account, name: name,
+                                                  gender: gender, age: age,
+                                                  signature: signature,
+                                                  avatarData: avatarData,
+                                                  backgroundData: backgroundData)
+        saveSession(updated)
+    }
+
     private func saveSession(_ user: User) {
         if let data = try? JSONEncoder().encode(user) {
             Keychain.save(data, service: serviceName, account: accountName)
