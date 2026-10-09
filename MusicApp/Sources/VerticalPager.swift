@@ -134,14 +134,15 @@ struct PlayerCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 VStack(spacing: 0) {
-                    // 顶部标题栏：App 名 + 播放模式
+                    // 顶部标题栏：App 名 + 播放模式（撑满整行：左 App 名 / 右模式按钮，对齐在状态栏下方）
                     topBar(onLight: onLight)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.top, safeTop + 6)
 
-                    Spacer(minLength: 12)
+                    // 1:1 正方形封面（小圆角，居中，左外距很小）；与顶部栏间距收小，整体上移
+                    Spacer(minLength: 6)
 
-                    // 1:1 正方形封面（小圆角，居中，左外距很小）
                     AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
 
                     // 歌曲名称 + 作者名称：左对齐，左外距与封面一致

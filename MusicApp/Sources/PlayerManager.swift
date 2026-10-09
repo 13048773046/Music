@@ -254,11 +254,12 @@ final class PlayerManager: NSObject, ObservableObject {
         }
         info[MPMediaItemPropertyArtwork] = pendingArtwork.map { image in
             MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-        } ?? Self.makeArtwork()
+        } ?? Self.fallbackArtwork
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
-    static func makeArtwork() -> MPMediaItemArtwork {
+    /// 无封面时的兜底锁屏封面：只生成一次并缓存，避免每 0.5s 进度刷新重复渲染
+    private static let fallbackArtwork: MPMediaItemArtwork = {
         let size = CGSize(width: 600, height: 600)
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { ctx in
@@ -284,5 +285,5 @@ final class PlayerManager: NSObject, ObservableObject {
             }
         }
         return MPMediaItemArtwork(boundsSize: size) { _ in image }
-    }
+    }()
 }

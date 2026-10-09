@@ -37,16 +37,19 @@ struct MainTabView: View {
         ZStack(alignment: .bottom) {
             Theme.background.ignoresSafeArea()
 
-            // 内容区：首页为全屏播放页，其余页面内容可从底部导航栏后滑过
+            // 内容区：三个页面常驻（只切换显隐），切回首页不再重新加载列表/音乐信息
             Group {
-                switch selection {
-                case 0:
+                ZStack {
                     DiscoverView()
-                case 1:
+                        .opacity(selection == 0 ? 1 : 0)
+                        .allowsHitTesting(selection == 0)
                     HomeView()
                         .ignoresSafeArea()
-                default:
+                        .opacity(selection == 1 ? 1 : 0)
+                        .allowsHitTesting(selection == 1)
                     MineView()
+                        .opacity(selection == 2 ? 1 : 0)
+                        .allowsHitTesting(selection == 2)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

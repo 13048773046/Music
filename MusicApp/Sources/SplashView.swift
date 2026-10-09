@@ -8,16 +8,14 @@ struct SplashView: View {
             Theme.background.ignoresSafeArea()
 
             VStack(spacing: 22) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .fill(Theme.accent)
-                        .frame(width: 104, height: 104)
-                    Image(systemName: "music.note")
-                        .font(.system(size: 52, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-                .scaleEffect(appeared ? 1 : 0.85)
-                .opacity(appeared ? 1 : 0)
+                // 启动器 Logo：与 App 图标一致的深黑灰 Logo
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 112, height: 112)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .scaleEffect(appeared ? 1 : 0.85)
+                    .opacity(appeared ? 1 : 0)
 
                 VStack(spacing: 8) {
                     Text("流萤音乐")

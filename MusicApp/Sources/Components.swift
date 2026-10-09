@@ -20,20 +20,7 @@ struct AlbumArt: View {
     var body: some View {
         Group {
             if let coverURL {
-                AsyncImage(url: coverURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        placeholder
-                    case .empty:
-                        placeholder
-                    @unknown default:
-                        placeholder
-                    }
-                }
+                CachedCoverImage(url: coverURL, title: title, placeholder: placeholder)
             } else {
                 placeholder
             }
@@ -66,6 +53,59 @@ struct AlbumArt: View {
             hash = (hash &* 31 &+ Int(scalar.value)) & 0x7fffffff
         }
         return Theme.placeholderPalettes[hash % Theme.placeholderPalettes.count]
+    }
+}
+
+// MARK: - 封面图内存缓存（避免重复下载/解码）
+
+final class CoverImageCache {
+    static let shared = CoverImageCache()
+    private let cache = NSCache<NSURL, UIImage>()
+
+    func image(for url: URL) -> UIImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    func store(_ image: UIImage, for url: URL) {
+        cache.setObject(image, forKey: url as NSURL)
+    }
+}
+
+/// 带内存缓存的封面图：首次下载后缓存，切页/列表重建不再重复请求
+struct CachedCoverImage<Placeholder: View>: View {
+    let url: URL
+    let title: String
+    let placeholder: Placeholder
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder
+                    .task { await load() }
+            }
+        }
+    }
+
+    private func load() async {
+        if let cached = CoverImageCache.shared.image(for: url) {
+            image = cached
+            return
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let img = UIImage(data: data) {
+                CoverImageCache.shared.store(img, for: url)
+                image = img
+            }
+        } catch {
+            // 下载失败保留占位图
+        }
     }
 }
 
