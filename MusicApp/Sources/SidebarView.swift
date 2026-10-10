@@ -51,7 +51,7 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
-        .padding(.top: 54)
+        .padding(.top, 54)
         .padding(.bottom, 24)
     }
 
