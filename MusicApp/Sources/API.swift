@@ -18,6 +18,21 @@ enum API {
         return try JSONDecoder().decode([Track].self, from: data)
     }
 
+    /// 搜索歌曲：按歌名/歌手模糊匹配
+    static func search(_ keyword: String) async throws -> [Track] {
+        var components = URLComponents(url: base.appendingPathComponent("search"),
+                                       resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "q", value: keyword)]
+        var req = URLRequest(url: components.url!)
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode([Track].self, from: data)
+    }
+
     static func streamURL(_ id: String) -> URL {
         base.appendingPathComponent("stream").appendingPathComponent(id)
     }

@@ -812,6 +812,43 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                   "isLiked": bool(r[16])} for r in rows])
                 return
 
+            # 搜索：按歌名/歌手模糊匹配
+            if u.path == "/api/search":
+                qs = urllib.parse.parse_qs(u.query)
+                keyword = (qs.get("q", [""])[0] or "").strip()
+                if not keyword:
+                    self._json(200, [])
+                    return
+                viewer_id = (qs.get("userId", [""])[0] or "").strip()
+                c = db()
+                tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if tok_uid:
+                    viewer_id = tok_uid
+                like = "%" + keyword + "%"
+                rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                                    t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                                    COALESCE(u.name,''),
+                                    (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                                    MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
+                                    FROM tracks t
+                                    LEFT JOIN users u ON u.id=t.user_id
+                                    LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
+                                    WHERE t.title LIKE ? OR t.artist LIKE ?
+                                    GROUP BY t.id
+                                    ORDER BY t.play_count DESC
+                                    LIMIT 50""", (viewer_id, like, like)).fetchall()
+                c.close()
+                self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                                  "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
+                                  "durText": _fmt_dur(r[7]), "created": r[8],
+                                  "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                                  "shareCount": r[11] or 0,
+                                  "userId": r[12] or "", "userName": r[14] or "",
+                                  "hasLyric": bool(r[13]),
+                                  "commentCount": r[15] or 0,
+                                  "isLiked": bool(r[16])} for r in rows])
+                return
+
             if u.path.startswith("/api/cover/"):
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()

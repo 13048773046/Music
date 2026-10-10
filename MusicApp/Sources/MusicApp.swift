@@ -132,16 +132,12 @@ struct MainTabView: View {
 
 // MARK: - 全局顶部栏（与底部 TabBar 平级，悬浮在内容区上方）
 
-/// 顶部栏：左侧 App 名（点击打开侧边栏）+ 右侧播放模式切换。
+/// 顶部栏：左侧汉堡菜单（打开侧边栏）+ 右侧搜索图标。
 /// 首页时颜色随封面主色亮度动态变化；其他页面固定深色。
 struct GlobalTopBar: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var library: Library
-
-    /// 当前是否在播放页（selection==1）
-    private var onHome: Bool {
-        library.tracks.isEmpty ? false : true  // 简化：播放页始终是首页
-    }
+    @State private var showSearch = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -162,23 +158,21 @@ struct GlobalTopBar: View {
             Spacer()
 
             Button {
-                withAnimation(.easeInOut(duration: 0.25)) { player.cyclePlayMode() }
+                showSearch = true
             } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: player.playMode.symbol)
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(player.playMode.label)
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundColor(textSecondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(
-                    Color.black.opacity(0.25),
-                    in: Capsule()
-                )
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(textPrimary)
+                    .padding(10)
+                    .background(Color.black.opacity(0.25), in: Circle())
             }
             .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showSearch) {
+            SearchView()
+                .environmentObject(player)
+                .environmentObject(library)
+                .environmentObject(AuthManager.shared)
         }
     }
 
