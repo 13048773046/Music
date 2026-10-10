@@ -22,6 +22,21 @@ enum API {
         base.appendingPathComponent("stream").appendingPathComponent(id)
     }
 
+    /// 获取带签名时效的播放 URL（防链接泄露/盗链）：
+    /// 先向 /api/stream-url/{id} 签发短效签名；接口不可用（老服务）时回退普通 URL
+    static func signedStreamURL(for id: String) async -> URL {
+        let signURL = base.appendingPathComponent("stream-url").appendingPathComponent(id)
+        if let (data, _) = try? await URLSession.shared.data(from: signURL),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let exp = obj["exp"] as? Int, let sig = obj["sig"] as? String {
+            var comps = URLComponents(url: streamURL(id), resolvingAgainstBaseURL: false)
+            comps?.queryItems = [URLQueryItem(name: "exp", value: String(exp)),
+                                 URLQueryItem(name: "sig", value: sig)]
+            if let signed = comps?.url { return signed }
+        }
+        return streamURL(id)
+    }
+
     // MARK: - 鉴权请求基础设施（Bearer Token + 401 统一处理）
 
     /// 为请求附加当前登录用户的 Bearer Token（旧会话无 token 时不附加，依赖后端兼容模式）

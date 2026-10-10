@@ -80,6 +80,7 @@ def start_server(root, port, strict=False):
     env = {**os.environ, "MUSIC_ROOT": root, "MUSIC_PORT": str(port)}
     if strict:
         env["MUSIC_AUTH_STRICT"] = "1"
+        env["MUSIC_SIGN_STRICT"] = "1"
     p = subprocess.Popen(["python3", SERVER], env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(20):
@@ -217,6 +218,22 @@ def run_all(port, root, strict_port, strict_root):
     s, body, hdrs = req("GET", f"/api/stream/{tid}")
     check("全量 200", s == 200 and len(body) > 100, f"s={s}")
 
+    print("== 11.5 流签名 URL ==")
+    s, body, _ = req("GET", f"/api/stream-url/{tid}")
+    sign = json.loads(body)
+    check("stream-url 200 返回 sig/exp", s == 200 and sign.get("sig") and sign.get("exp"), body[:100])
+    s, body, _ = req("GET", f"/api/stream/{tid}?exp={sign['exp']}&sig={sign['sig']}",
+                     headers={"Range": "bytes=0-9"})
+    check("带签名 206", s == 206 and len(body) == 10, f"s={s}")
+    s, body, _ = req("GET", f"/api/stream/{tid}?exp={int(time.time())-120}&sig={sign['sig']}")
+    check("过期签名 403", s == 403, f"s={s}")
+    s, body, _ = req("GET", f"/api/stream/{tid}?exp={sign['exp']}&sig=deadbeefdeadbeefdeadbeefdeadbeef")
+    check("错误签名 403", s == 403, f"s={s}")
+    s, body, _ = req("GET", f"/api/stream/{tid}")
+    check("兼容模式无签名 200", s == 200, f"s={s}")
+    s, body, _ = req("GET", "/api/stream-url/not_exist_id")
+    check("stream-url 不存在歌曲 404", s == 404, f"s={s}")
+
     print("== 12. 路径穿越 ==")
     s, body, _ = req("GET", "/api/stream/..%2F..%2Fetc%2Fpasswd")
     check("路径穿越 404", s == 404, f"s={s}")
@@ -283,6 +300,12 @@ def run_all(port, root, strict_port, strict_root):
     check("严格模式：伪装 userId 点赞 401", s == 401, f"s={s}")
     s, body, _ = req_s("GET", "/api/tracks")
     check("严格模式：tracks 免鉴权可读", s == 200, f"s={s}")
+    s, body, _ = req_s("GET", f"/api/stream/{strict_tid}")
+    check("严格模式：无签名流 403", s == 403, f"s={s}")
+    s, body, _ = req_s("GET", f"/api/stream-url/{strict_tid}")
+    ss = json.loads(body)
+    s, body, _ = req_s("GET", f"/api/stream/{strict_tid}?exp={ss['exp']}&sig={ss['sig']}")
+    check("严格模式：带签名流 200", s == 200, f"s={s}")
 
     print("== 16. 图片魔数校验 ==")
     body, ct = multipart({"account": "img_user", "password": "secret123", "name": "图"},

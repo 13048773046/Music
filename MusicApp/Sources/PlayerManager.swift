@@ -209,33 +209,8 @@ final class PlayerManager: NSObject, ObservableObject {
 
     private func playCurrent() {
         guard let current = current else { return }
-        let url = API.streamURL(current.id)
         usingEngine = (selectedEQ == "3D 环绕")
-
-        if usingEngine {
-            enginePlayer.stop()
-            enginePlayer.onProgress = { [weak self] cur, dur in
-                guard let self = self else { return }
-                self.currentTime = cur
-                self.duration = dur
-                self.progress = dur > 0 ? min(cur / dur, 1) : 0
-                self.updateNowPlaying()
-            }
-            enginePlayer.onCompletion = { [weak self] in
-                self?.next()
-            }
-            enginePlayer.onLoadingChanged = { [weak self] loading in
-                self?.isBuffering = loading
-                if !loading { self?.bufferProgress = 1 }
-            }
-            enginePlayer.load(url: url, mode: .surround3D)
-            player.pause()
-        } else {
-            enginePlayer.stop()
-            player.replaceCurrentItem(with: AVPlayerItem(url: url))
-            player.play()
-        }
-
+        // 状态立即重置，UI 先反馈（避免切歌后旧状态残留）
         isPlaying = true
         duration = 0
         progress = 0
@@ -244,7 +219,39 @@ final class PlayerManager: NSObject, ObservableObject {
         isBuffering = true
         loadFailed = false
         pendingArtwork = nil
-        updateNowPlaying()
+
+        Task {
+            // 优先获取签名时效播放 URL（防链接泄露/盗链），失败自动回退普通 URL
+            let url = await API.signedStreamURL(for: current.id)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self = self, self.current?.id == current.id else { return }
+                if self.usingEngine {
+                    self.enginePlayer.stop()
+                    self.enginePlayer.onProgress = { [weak self] cur, dur in
+                        guard let self = self else { return }
+                        self.currentTime = cur
+                        self.duration = dur
+                        self.progress = dur > 0 ? min(cur / dur, 1) : 0
+                        self.updateNowPlaying()
+                    }
+                    self.enginePlayer.onCompletion = { [weak self] in
+                        self?.next()
+                    }
+                    self.enginePlayer.onLoadingChanged = { [weak self] loading in
+                        self?.isBuffering = loading
+                        if !loading { self?.bufferProgress = 1 }
+                    }
+                    self.enginePlayer.load(url: url, mode: .surround3D)
+                    self.player.pause()
+                } else {
+                    self.enginePlayer.stop()
+                    self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
+                    self.player.play()
+                }
+                self.updateNowPlaying()
+            }
+        }
         loadArtworkIfNeeded()
         Task { await API.reportPlay(current.id) }
     }

@@ -54,6 +54,24 @@ LEGACY_ITER = 120000                  # 旧哈希迭代次数（自动迁移）
 AUTH_STRICT = os.environ.get("MUSIC_AUTH_STRICT", "0") == "1"
 DEBUG = os.environ.get("MUSIC_DEBUG", "0") == "1"
 SOCKET_TIMEOUT = 60
+STREAM_SIGN_TTL = 1800                # 签名流 URL 有效期 30 分钟（防链接泄露/盗链）
+SIGN_STRICT = os.environ.get("MUSIC_SIGN_STRICT", "0") == "1"  # 1 时仅接受签名流请求
+
+# 流签名密钥：优先环境变量 MUSIC_SIGN_SECRET，否则读取/生成持久化密钥（重启不失效）
+SIGN_SECRET = os.environ.get("MUSIC_SIGN_SECRET", "")
+if not SIGN_SECRET:
+    _secret_file = os.path.join(ROOT, ".sign_secret")
+    try:
+        if os.path.exists(_secret_file):
+            _s = open(_secret_file, encoding="utf-8").read().strip()
+            if _s:
+                SIGN_SECRET = _s
+        if not SIGN_SECRET:
+            SIGN_SECRET = secrets.token_hex(32)
+            with open(_secret_file, "w", encoding="utf-8") as f:
+                f.write(SIGN_SECRET)
+    except OSError:
+        SIGN_SECRET = secrets.token_hex(32)
 
 os.makedirs(FILES, exist_ok=True)
 
@@ -232,6 +250,7 @@ RATE_LIMITS = {
     "login":     (10, 60),
     "register":  (5, 60),
     "upload":    (30, 3600),  # 上传 30 次/小时
+    "stream":    (300, 60),   # 流请求（含签名签发）300 次/分
 }
 
 
@@ -242,6 +261,25 @@ def rate_key(handler, name, extra=""):
 def rate_limit(handler, name, extra=""):
     limit, window = RATE_LIMITS[name]
     return RATE.allow(rate_key(handler, name, extra), limit, window)
+
+
+# ---------------- 流媒体签名 URL ----------------
+
+def sign_stream(tid, exp):
+    """HMAC-SHA256 签名：防链接被篡改/伪造，配合时效防永久盗链。"""
+    return hmac.new(SIGN_SECRET.encode(), f"{tid}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def verify_stream(tid, exp_s, sig):
+    """校验流请求签名。返回 True 放行 / False 拒绝。"""
+    if not exp_s.isdigit():
+        return False
+    exp = int(exp_s)
+    if exp < int(time.time()) - 60:      # 允许 60s 时钟偏差，过期即拒绝
+        return False
+    if not sig or len(sig) != 32:
+        return False
+    return hmac.compare_digest(sig, sign_stream(tid, exp))
 
 
 # ---------------- 文件安全 ----------------
@@ -532,6 +570,17 @@ class H(BaseHTTPRequestHandler):
         try:
             u = urllib.parse.urlparse(self.path)
             if u.path.startswith("/api/stream/"):
+                # 与 GET 一致的签名校验
+                q = urllib.parse.parse_qs(u.query)
+                exp_s = (q.get("exp") or [""])[0]
+                sig = (q.get("sig") or [""])[0]
+                if exp_s or sig:
+                    if not verify_stream(u.path.rsplit("/", 1)[-1], exp_s, sig):
+                        self._err(403, "stream link expired or invalid")
+                        return
+                elif SIGN_STRICT:
+                    self._err(403, "stream link expired or invalid")
+                    return
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 row = c.execute("SELECT fname FROM tracks WHERE id=?", (tid,)).fetchone()
@@ -663,7 +712,37 @@ class H(BaseHTTPRequestHandler):
                                   "content": r[3], "created": r[4]} for r in rows])
                 return
 
+            # 流签名签发：GET /api/stream-url/{id} → {"sig","exp"}，前端拼接到流 URL
+            if u.path.startswith("/api/stream-url/"):
+                if not rate_limit(self, "stream"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                tid = u.path.rsplit("/", 1)[-1]
+                c = db()
+                exists = c.execute("SELECT 1 FROM tracks WHERE id=?", (tid,)).fetchone()
+                c.close()
+                if not exists:
+                    self._err(404, "not found")
+                    return
+                exp = int(time.time()) + STREAM_SIGN_TTL
+                self._json(200, {"sig": sign_stream(tid, exp), "exp": exp})
+                return
+
             if u.path.startswith("/api/stream/"):
+                # 签名校验：带签名参数必须通过；无签名在 SIGN_STRICT=1 时拒绝（默认兼容旧客户端）
+                q = urllib.parse.parse_qs(u.query)
+                exp_s = (q.get("exp") or [""])[0]
+                sig = (q.get("sig") or [""])[0]
+                if exp_s or sig:
+                    if not verify_stream(u.path.rsplit("/", 1)[-1], exp_s, sig):
+                        self._err(403, "stream link expired or invalid")
+                        return
+                elif SIGN_STRICT:
+                    self._err(403, "stream link expired or invalid")
+                    return
+                if not rate_limit(self, "stream"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 row = c.execute("SELECT fname FROM tracks WHERE id=?", (tid,)).fetchone()
