@@ -225,7 +225,8 @@ final class PlayerManager: NSObject, ObservableObject {
             let url = await API.signedStreamURL(for: current.id)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self = self, self.current?.id == current.id else { return }
+                // 切歌后旧任务迟到响应直接丢弃，防止覆盖新歌状态
+                guard self.current?.id == current.id else { return }
                 if self.usingEngine {
                     self.enginePlayer.stop()
                     self.enginePlayer.onProgress = { [weak self] cur, dur in
