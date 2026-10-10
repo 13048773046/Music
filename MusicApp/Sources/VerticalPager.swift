@@ -261,6 +261,8 @@ struct PlayerCard: View {
     @State private var lyricLines: [KRCLine] = []
     /// 音效选择弹窗
     @State private var showEQ = false
+    /// 左侧抽屉侧边栏是否打开
+    @State private var sidebarOpen = false
 
     init(track: Track, index: Int, total: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
@@ -405,9 +407,40 @@ struct PlayerCard: View {
                     Spacer(minLength: tabBarSpace)
                 }
                 .frame(maxWidth: .infinity)
+
+                // MARK: - 左侧抽屉侧边栏（遮罩 + 抽屉层）
+                if sidebarOpen {
+                    Color.black.opacity(0.5)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = false }
+                        }
+                        .transition(.opacity)
+                    SidebarView(
+                        onClose: {
+                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = false }
+                        },
+                        onLiked: {
+                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = false }
+                        }
+                    )
+                    .transition(.move(edge: .leading))
+                    .ignoresSafeArea()
+                }
             }
             // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
             .preferredColorScheme(onLight ? .light : .dark)
+            // 左边缘右滑打开侧边栏
+            .gesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { v in
+                        guard !sidebarOpen else { return }
+                        // 从屏幕左边缘 25pt 内开始，向右滑超过 60pt → 打开
+                        if v.startLocation.x < 25 && v.translation.width > 60 {
+                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = true }
+                        }
+                    }
+            )
         }
         .task(id: track.id) {
             await loadBackground()
@@ -538,14 +571,19 @@ struct PlayerCard: View {
 
     private func topBar(onLight: Bool) -> some View {
         HStack(spacing: 10) {
-            HStack(spacing: 7) {
-                Image(systemName: "music.note")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(onLight ? Theme.accent : .white)
-                Text("流萤音乐")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundColor(textPrimary(onLight: onLight))
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = true }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(onLight ? Theme.accent : .white)
+                    Text("流萤音乐")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(textPrimary(onLight: onLight))
+                }
             }
+            .buttonStyle(.plain)
 
             Spacer()
 
