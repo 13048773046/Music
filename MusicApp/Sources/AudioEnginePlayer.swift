@@ -88,8 +88,9 @@ final class AudioEnginePlayer {
         delayHigh.delayTime = 0.012  // 高频略偏右
         delayHigh.feedback = 0
         delayHigh.wetDryMix = 50
-        // 不用混响，保持干声立体
-        reverb.wetDryMix = 0
+        // 小房间自然反射（不是大厅环绕感）：近场音响在房间里的听感
+        reverb.loadFactoryPreset(.smallRoom)
+        reverb.wetDryMix = 12
 
         // 分频声像
         mixLow.outputVolume = 0.9
@@ -256,12 +257,12 @@ final class AudioEnginePlayer {
             mixHigh.outputVolume = 0
             reverb.wetDryMix = 0
         case .surround3D:
-            // 3D 立体：直通关，分频链开，不用混响
+            // 3D 立体：直通关，分频链开，小房间自然反射
             directMix.outputVolume = 0
             mixLow.outputVolume = 0.9
             mixMid.outputVolume = 1.0
             mixHigh.outputVolume = 0.9
-            reverb.wetDryMix = 0
+            reverb.wetDryMix = 12
         }
     }
 
