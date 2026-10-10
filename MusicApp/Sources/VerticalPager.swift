@@ -222,7 +222,6 @@ struct PlayerCard: View {
     @State private var lyricLines: [KRCLine] = []
     /// 音效选择弹窗
     @State private var showEQ = false
-    @State private var selectedEQ = "原音"
 
     init(track: Track, index: Int, total: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
@@ -288,7 +287,7 @@ struct PlayerCard: View {
                         Button {
                             showEQ = true
                         } label: {
-                            Text(selectedEQ)
+                            Text(player.selectedEQ)
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(textPrimary(onLight: onLight).opacity(0.85))
                                 .lineLimit(1)
@@ -394,7 +393,7 @@ struct PlayerCard: View {
             ShareSheet(url: u)
         }
         .sheet(isPresented: $showEQ) {
-            EQBSheet(selected: $selectedEQ)
+            EQBSheet(selected: $player.selectedEQ)
                 .presentationDetents([.medium])
         }
     }

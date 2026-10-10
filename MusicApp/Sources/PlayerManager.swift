@@ -44,6 +44,8 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var bufferProgress: Double = 0
     /// 是否正在缓冲（等待网络数据，用于进度条加载动画）
     @Published var isBuffering: Bool = false
+    /// 全局音效选择（切歌不重置）
+    @Published var selectedEQ: String = "原音"
 
     private var pendingArtwork: UIImage?
     private var timeObserver: Any?
