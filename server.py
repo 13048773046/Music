@@ -22,6 +22,8 @@ def db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(tracks)")]
     if "cover" not in cols:
         c.execute("ALTER TABLE tracks ADD COLUMN cover TEXT DEFAULT ''")
+    if "lrc" not in cols:
+        c.execute("ALTER TABLE tracks ADD COLUMN lrc TEXT DEFAULT ''")
     c.execute("""CREATE TABLE IF NOT EXISTS users(
         id TEXT PRIMARY KEY, account TEXT UNIQUE, password_hash TEXT,
         name TEXT, avatar TEXT, created REAL)""")
@@ -274,7 +276,7 @@ class H(BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(u.query)
             viewer_id = (qs.get("userId", [""])[0] or "").strip()
             rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
-                                t.play_count,t.like_count,t.share_count,t.user_id,
+                                t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
                                 COALESCE(u.name,''),
                                 (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
                                 MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
@@ -289,9 +291,10 @@ class H(BaseHTTPRequestHandler):
                               "durText": _fmt_dur(r[7]), "created": r[8],
                               "playCount": r[9] or 0, "likeCount": r[10] or 0,
                               "shareCount": r[11] or 0,
-                              "userId": r[12] or "", "userName": r[13] or "",
-                              "commentCount": r[14] or 0,
-                              "isLiked": bool(r[15])} for r in rows])
+                              "userId": r[12] or "", "userName": r[14] or "",
+                              "hasLyric": bool(r[13]),
+                              "commentCount": r[15] or 0,
+                              "isLiked": bool(r[16])} for r in rows])
             return
         if u.path.startswith("/api/cover/"):
             tid = u.path.rsplit("/", 1)[-1]
@@ -306,6 +309,27 @@ class H(BaseHTTPRequestHandler):
                 self._json(404, {"err": "cover missing"})
                 return
             self._serve_file(fp)
+            return
+        if u.path.startswith("/api/lyric/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            row = c.execute("SELECT lrc FROM tracks WHERE id=?", (tid,)).fetchone()
+            c.close()
+            if not row or not row[0]:
+                self._json(404, {"err": "no lyric"})
+                return
+            fp = os.path.join(FILES, row[0])
+            if not os.path.exists(fp):
+                self._json(404, {"err": "lyric missing"})
+                return
+            with open(fp, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if u.path.startswith("/api/avatar/"):
             uid = u.path.rsplit("/", 1)[-1]
@@ -732,12 +756,22 @@ class H(BaseHTTPRequestHandler):
                 cpath = os.path.join(FILES, cover_fname)
                 with open(cpath, "wb") as f:
                     f.write(cdata)
+            lrc_fname = ""
+            lrc_file = files.get("lrc")
+            if lrc_file and lrc_file[0]:
+                _, ldata = lrc_file
+                if len(ldata) > 512 * 1024:
+                    ldata = ldata[:512 * 1024]
+                lrc_fname = tid + ".lrc"
+                lpath = os.path.join(FILES, lrc_fname)
+                with open(lpath, "wb") as f:
+                    f.write(ldata)
             c = db()
             uploader_id = (fields.get("userId") or "").strip()
-            c.execute("""INSERT INTO tracks(id,title,artist,album,cover,fname,size,dur,created,user_id)
-                         VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            c.execute("""INSERT INTO tracks(id,title,artist,album,cover,lrc,fname,size,dur,created,user_id)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                       (tid, title, fields.get("artist", ""), fields.get("album", ""),
-                       cover_fname, stored, len(filedata), dur, time.time(), uploader_id))
+                       cover_fname, lrc_fname, stored, len(filedata), dur, time.time(), uploader_id))
             c.commit()
             c.close()
             self._json(200, {"id": tid, "title": title, "cover": cover_fname,

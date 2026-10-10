@@ -16,11 +16,17 @@ struct Track: Codable, Identifiable, Hashable {
     let commentCount: Int?
     let userId: String?
     let userName: String?
+    let hasLyric: Bool?
     var isLiked: Bool?
 
     var coverURL: URL? {
         guard let cover, !cover.isEmpty else { return nil }
         return API.coverURL(id)
+    }
+
+    var lyricURL: URL? {
+        guard hasLyric == true else { return nil }
+        return API.lyricURL(id)
     }
 
     /// 作者名：优先用上传者昵称，其次 artist 字段

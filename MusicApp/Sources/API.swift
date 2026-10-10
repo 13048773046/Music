@@ -83,6 +83,18 @@ enum API {
         base.appendingPathComponent("cover").appendingPathComponent(id)
     }
 
+    static func lyricURL(_ id: String) -> URL {
+        base.appendingPathComponent("lyric").appendingPathComponent(id)
+    }
+
+    static func fetchLyric(_ id: String) async throws -> String {
+        let (data, resp) = try await URLSession.shared.data(from: lyricURL(id))
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     static func avatarURL(_ id: String) -> URL {
         base.appendingPathComponent("avatar").appendingPathComponent(id)
     }
