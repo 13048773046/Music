@@ -195,6 +195,19 @@ def audio_duration(path):
         return _dur_wav(path)
     if ext == ".mp3":
         return _dur_mp3(path)
+    # m4a / aac / flac / ogg 用 mutagen 解析
+    try:
+        if ext in (".m4a", ".aac"):
+            from mutagen.mp4 import MP4
+            return MP4(path).info.length
+        if ext == ".flac":
+            from mutagen.flac import FLAC
+            return FLAC(path).info.length
+        if ext == ".ogg":
+            from mutagen.oggvorbis import OggVorbis
+            return OggVorbis(path).info.length
+    except Exception:
+        pass
     return 0.0
 
 
