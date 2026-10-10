@@ -200,7 +200,8 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（逐字高亮：唱过的字白色，未到的字灰色）
+// MARK: - 单行歌词（卡拉OK式逐字高亮）
+// 已唱完的字全白；正在唱的字从左扫到右（渐变填充）；未到的字灰色。
 
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
@@ -216,17 +217,37 @@ private struct LyricRowView: View, Equatable {
 
     var body: some View {
         HStack(spacing: 0) {
-            // 逐字着色：每个字根据 KRC 时间戳判断是否已开始播放。
-            // 没有 mask / GeometryReader，Text 从 leading 自然排列，左边距由外层 padding 控制。
             ForEach(line.words) { w in
-                let played = currentTime >= w.start
-                Text(w.text)
-                    .foregroundColor(played ? .white : tint.opacity(baseOpacity))
+                wordView(w)
             }
         }
         .font(.system(size: 20, weight: .medium))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .scaleEffect(scale, anchor: .leading)
+    }
+
+    @ViewBuilder
+    private func wordView(_ w: KRWord) -> some View {
+        if currentTime >= w.end {
+            // 已唱完：全白
+            Text(w.text).foregroundColor(.white)
+        } else if currentTime >= w.start {
+            // 正在唱：灰底 + 白字从左扫到右
+            let span = max(w.end - w.start, 0.001)
+            let p = min(max((currentTime - w.start) / span, 0), 1)
+            ZStack(alignment: .leading) {
+                Text(w.text).foregroundColor(tint.opacity(baseOpacity))
+                Text(w.text).foregroundColor(.white)
+                    .mask(alignment: .leading) {
+                        GeometryReader { g in
+                            Rectangle().frame(width: g.size.width * p)
+                        }
+                    }
+            }
+        } else {
+            // 未到：灰
+            Text(w.text).foregroundColor(tint.opacity(baseOpacity))
+        }
     }
 }
