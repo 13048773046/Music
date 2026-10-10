@@ -198,10 +198,11 @@ struct PlayerCard: View {
 
                     // 歌曲名称 + 作者名称：左对齐，左外距与封面一致
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(track.title)
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(textPrimary(onLight: onLight))
-                            .lineLimit(1)
+                        MarqueeText(
+                            text: track.title,
+                            font: .system(size: 24, weight: .bold),
+                            color: textPrimary(onLight: onLight)
+                        )
 
                         Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
                             .font(.system(size: 15))

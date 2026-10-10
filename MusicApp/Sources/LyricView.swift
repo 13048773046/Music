@@ -98,28 +98,28 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 /// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
 ///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
 ///
-/// 性能：行视图 Equatable 局部刷新（仅填充行随进度重绘）；二分定位当前行（O(log n)）；
-/// 每帧仅一次 AVPlayer 时间查询；填充 mask 走 SwiftUI 字形纹理缓存 + GPU 矩形裁剪，
-/// 不用 drawingGroup（否则 fillRatio 每帧变化会触发整张离屏纹理重栅格化，反而卡）。
+/// 性能：行视图 Equatable 局部刷新；二分定位当前行（O(log n)）；每帧仅一次 AVPlayer 时间查询；
+/// 逐字着色：每个 KRWord 独立判断是否已开始播放，已播白色、未播灰色，
+/// 无 mask / GeometryReader / drawingGroup，字形一次性栅格化，最流畅。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
     let progress: Double
     let tint: Color
 
-    // 固定排版尺寸（字号 20 行高约 24，间距 8）
-    private static let rowHeight: CGFloat = 24
+    // 固定排版尺寸（字号 20 行高约 26，间距 8）
+    private static let rowHeight: CGFloat = 26
     private static let rowGap: CGFloat = 8
     private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
-    private static let viewHeight: CGFloat = rowHeight * 2 + rowGap + 4
+    // 三行完整高度：当前句 + 下一句 + 再下一句，避免第三行被互动按钮挡住
+    private static let viewHeight: CGFloat = rowHeight * 3 + rowGap * 2
 
     /// 当前渲染的三行内容锚点（滚动动画期间不更新，动画结束后更新并复位位移）
     @State private var anchor: Int = 0
     @State private var offsetY: CGFloat = 0
     @State private var isScrolling = false
 
-    /// 播放跟随：**每帧直接实时查询 AVPlayer 当前时间**（毫秒级，非 0.5s 阶梯缓存值），
-    /// 填充进度逐帧连续推进；拖动 scrub 预览时用外部进度
+    /// 播放跟随：每帧直接实时查询 AVPlayer 当前时间（毫秒级），逐字高亮逐帧推进
     private var displayProgress: Double {
         let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
         let safe = now.isFinite ? now : 0
@@ -148,15 +148,6 @@ struct LyricPreview: View {
         return out
     }
 
-    /// 当前句（第一行）的整句填充进度 0...1：按整句时间线性推进，从左到右平滑填满
-    private func fillRatio(at p: Double) -> Double {
-        guard anchor < lines.count else { return 0 }
-        let line = lines[anchor]
-        let span = line.end - line.start
-        guard span > 0 else { return 0 }
-        return min(max((p - line.start) / span, 0), 1)
-    }
-
     /// 滚动进度 0...1（滚动动画期间随 offsetY 逐帧插值，同步驱动下一句放大）
     private var scrollProgress: Double {
         guard Self.step > 0 else { return 0 }
@@ -164,22 +155,18 @@ struct LyricPreview: View {
     }
 
     var body: some View {
-        // 屏幕刷新率逐帧驱动（60/120fps）；填充层为遮罩矩形（文字纹理只渲染一次，只动矩形），
-        // 帧率高且开销小。每帧只查一次 AVPlayer 时间，复用给当前行定位与填充进度。
         TimelineView(.animation) { _ in
             let p = displayProgress
             VStack(spacing: Self.rowGap) {
-                // 直接按 index 取行（最多 3 行），避免每帧 enumerated 重建数组；
-                // id 用稳定 index，SwiftUI 能识别未变化的行并跳过重绘
                 ForEach(0..<visibleLines.count, id: \.self) { idx in
                     let line = visibleLines[idx]
-                    // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
-                    // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
+                    // 第 0 行 = 当前句（逐字高亮）；第 1 行（下一句）放大进度绑定滚动进度；
+                    // 第 2 行（再下一句）恒为小字灰色。非当前行 currentTime 传 -1 → 全部字灰色。
                     let scale = idx == 0 ? 1.0
                         : (idx == 1 ? 0.8 + 0.2 * scrollProgress : 0.8)
                     LyricRowView(
                         line: line,
-                        fillRatio: idx == 0 ? fillRatio(at: p) : 0,
+                        currentTime: idx == 0 ? p : -1,
                         scale: scale,
                         tint: tint
                     )
@@ -188,7 +175,7 @@ struct LyricPreview: View {
             .offset(y: offsetY)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: Self.viewHeight)
+        .frame(height: Self.viewHeight, alignment: .top)
         .clipped()
         .onChange(of: currentIndex) { newIdx in
             scrollIfNeeded(to: newIdx)
@@ -212,15 +199,15 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 遮罩矩形平滑填充 + 滚动同步字号过渡）
+// MARK: - 单行歌词（逐字高亮：唱过的字白色，未到的字灰色）
 
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
-    let scale: Double       // 0.8...1.0：下一句（视觉16pt）在滚动期间同步放大到 20pt
+    /// 当前播放秒数；-1 = 非当前行，所有字灰色
+    let currentTime: Double
+    let scale: Double       // 0.8...1.0：下一句在滚动期间同步放大到 20pt
     let tint: Color
 
-    /// 底色透明度：随放大同步从 0.4 过渡到 0.5
     private var baseOpacity: Double {
         let t = (scale - 0.8) / 0.2
         return 0.4 + 0.1 * min(max(t, 0), 1)
@@ -228,28 +215,16 @@ private struct LyricRowView: View, Equatable {
 
     var body: some View {
         HStack(spacing: 0) {
-            ZStack(alignment: .leading) {
-                // 灰底层：整句未填充部分
-                Text(line.text)
-                    .foregroundColor(tint.opacity(baseOpacity))
-                // 白填充层：用 mask 矩形裁剪文字纹理。
-                // 关键：不要加 drawingGroup —— fillRatio 每帧变化时 drawingGroup 会强制
-                // 每帧重新光栅化整张离屏纹理（包括两层 Text），把 GPU 裁剪退化回 CPU 文字渲染，
-                // 是填满动画卡顿的主因。SwiftUI 自带的 Text mask 走字形纹理缓存 + GPU 裁剪，
-                // 静态文字只栅格化一次，每帧只动裁剪矩形。
-                Text(line.text)
-                    .foregroundColor(.white)
-                    .mask(alignment: .leading) {
-                        GeometryReader { g in
-                            Rectangle()
-                                .frame(width: g.size.width * fillRatio)
-                        }
-                    }
+            // 逐字着色：每个字根据 KRC 时间戳判断是否已开始播放。
+            // 没有 mask / GeometryReader，Text 从 leading 自然排列，左边距由外层 padding 控制。
+            ForEach(line.words) { w in
+                let played = currentTime >= w.start
+                Text(w.text)
+                    .foregroundColor(played ? .white : tint.opacity(baseOpacity))
             }
-            .font(.system(size: 20, weight: .medium))
-            .lineLimit(1)
-            Spacer(minLength: 0)
         }
+        .font(.system(size: 20, weight: .medium))
+        .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .scaleEffect(scale, anchor: .leading)
     }

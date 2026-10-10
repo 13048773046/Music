@@ -342,3 +342,69 @@ private struct BufferSpinner: View {
             }
     }
 }
+
+// MARK: - 跑马灯文字（长标题自动水平无缝滚动，短标题静止）
+
+struct MarqueeText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    /// 滚动速度（pt/秒）
+    var speed: CGFloat = 50
+    /// 每次滚动前停顿秒数
+    var pause: TimeInterval = 1.2
+
+    @State private var textWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    /// 文字实际宽度超出容器宽度才滚动
+    private var overflow: Bool { textWidth > containerWidth + 4 && containerWidth > 0 }
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: 50) {
+                Text(text).font(font).foregroundColor(color).fixedSize()
+                if overflow {
+                    Text(text).font(font).foregroundColor(color).fixedSize()
+                }
+            }
+            .background(
+                GeometryReader { tgeo in
+                    Color.clear.onAppear {
+                        // 两份文字总宽减间距再除 2 = 单份宽度
+                        let total = tgeo.size.width
+                        textWidth = overflow ? (total - 50) / 2 : total
+                        containerWidth = geo.size.width
+                    }
+                }
+            )
+            .offset(x: offset)
+            .onAppear { start(container: geo.size.width) }
+            .onChange(of: text) { _ in restart(container: geo.size.width) }
+        }
+        .frame(height: 30)
+        .clipped()
+    }
+
+    private func start(container: CGFloat) {
+        containerWidth = container
+        // 等一帧拿到 textWidth（background onAppear 可能晚于主 onAppear）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard overflow else { return }
+            let distance = textWidth + 50
+            withAnimation(
+                .linear(duration: Double(distance / speed))
+                .delay(pause)
+                .repeatForever(autoreverses: false)
+            ) {
+                offset = -distance
+            }
+        }
+    }
+
+    private func restart(container: CGFloat) {
+        offset = 0
+        start(container: container)
+    }
+}
