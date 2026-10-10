@@ -261,8 +261,6 @@ struct PlayerCard: View {
     @State private var lyricLines: [KRCLine] = []
     /// 音效选择弹窗
     @State private var showEQ = false
-    /// 左侧抽屉侧边栏是否打开
-    @State private var sidebarOpen = false
 
     init(track: Track, index: Int, total: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
@@ -300,14 +298,9 @@ struct PlayerCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 VStack(spacing: 0) {
-                    // 顶部标题栏：App 名 + 播放模式（撑满整行：左 App 名 / 右模式按钮，对齐在状态栏下方）
-                    topBar(onLight: onLight)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                        .padding(.top, topInset + 6)
-
-                    // 1:1 正方形封面（小圆角，居中，左外距很小）；与顶部栏间距收小，整体上移
-                    Spacer(minLength: 6)
+                    // 顶部标题栏已移到 MainTabView 全局层级（与底部 TabBar 平级），
+                    // 这里直接从封面开始（顶部留白由全局 TopBar 占位）
+                    Spacer(minLength: 6 + topInset + 50)
 
                     // 封面区域（1:1 正方形，小圆角，居中）
                     AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
@@ -408,39 +401,9 @@ struct PlayerCard: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                // MARK: - 左侧抽屉侧边栏（遮罩 + 抽屉层）
-                if sidebarOpen {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = false }
-                        }
-                        .transition(.opacity)
-                    SidebarView(
-                        onClose: {
-                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = false }
-                        },
-                        onLiked: {
-                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = false }
-                        }
-                    )
-                    .transition(.move(edge: .leading))
-                    .ignoresSafeArea()
-                }
             }
             // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
             .preferredColorScheme(onLight ? .light : .dark)
-            // 左边缘右滑打开侧边栏
-            .gesture(
-                DragGesture(minimumDistance: 20)
-                    .onEnded { v in
-                        guard !sidebarOpen else { return }
-                        // 从屏幕左边缘 25pt 内开始，向右滑超过 60pt → 打开
-                        if v.startLocation.x < 25 && v.translation.width > 60 {
-                            withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = true }
-                        }
-                    }
-            )
         }
         .task(id: track.id) {
             await loadBackground()

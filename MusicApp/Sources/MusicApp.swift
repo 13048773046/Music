@@ -42,32 +42,141 @@ struct MusicApp: App {
 
 /// 页面索引：0=发现音乐 1=首页播放页 2=我的
 struct MainTabView: View {
+    @EnvironmentObject private var player: PlayerManager
     @State private var selection = 1
 
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            Theme.background.ignoresSafeArea()
+    /// 侧边栏宽度（约屏宽 85%）
+    private let panelWidth = UIScreen.main.bounds.width * 0.85
 
-            // 内容区：三个页面常驻（只切换显隐），切回首页不再重新加载列表/音乐信息
-            Group {
-                ZStack {
-                    DiscoverView()
-                        .opacity(selection == 0 ? 1 : 0)
-                        .allowsHitTesting(selection == 0)
-                    HomeView()
-                        .ignoresSafeArea()
-                        .opacity(selection == 1 ? 1 : 0)
-                        .allowsHitTesting(selection == 1)
-                    MineView()
-                        .opacity(selection == 2 ? 1 : 0)
-                        .allowsHitTesting(selection == 2)
+    var body: some View {
+        ZStack {
+            // 侧边栏：盖在最上层，从左侧滑入
+            if player.sidebarOpen {
+                SidebarView(
+                    onClose: {
+                        withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
+                    },
+                    onLiked: {
+                        withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
+                    }
+                )
+                .transition(.move(edge: .leading))
+                .zIndex(1)
+            }
+
+            // 主界面（内容区 + 顶部栏 + TabBar），打开侧边栏时整体向右推
+            ZStack(alignment: .bottom) {
+                Theme.background.ignoresSafeArea()
+
+                // 内容区：三个页面常驻
+                Group {
+                    ZStack {
+                        DiscoverView()
+                            .opacity(selection == 0 ? 1 : 0)
+                            .allowsHitTesting(selection == 0)
+                        HomeView()
+                            .ignoresSafeArea()
+                            .opacity(selection == 1 ? 1 : 0)
+                            .allowsHitTesting(selection == 1)
+                        MineView()
+                            .opacity(selection == 2 ? 1 : 0)
+                            .allowsHitTesting(selection == 2)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // 全局顶部栏（与底部 TabBar 平级，悬浮在内容区上方）
+                GlobalTopBar()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .alignmentGuide(.top) { d in d[.top] }
+                    .frame(maxHeight: .infinity, alignment: .top)
+
+                AppTabBar(selection: $selection)
+            }
+            .offset(x: player.sidebarOpen ? panelWidth : 0)
+            // 侧边栏打开时压暗主界面（遮罩效果）
+            .overlay {
+                if player.sidebarOpen {
+                    Color.black.opacity(0.4)
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
+                        }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // 清新浅色悬浮 TabBar：发现音乐 | 播放控制 | 我的
-            AppTabBar(selection: $selection)
+            // 左边缘右滑打开侧边栏（全局手势）
+            .gesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { v in
+                        guard !player.sidebarOpen else { return }
+                        if v.startLocation.x < 25 && v.translation.width > 60 {
+                            withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
+                        }
+                    }
+            )
         }
+    }
+}
+
+// MARK: - 全局顶部栏（与底部 TabBar 平级，悬浮在内容区上方）
+
+/// 顶部栏：左侧 App 名（点击打开侧边栏）+ 右侧播放模式切换。
+/// 首页时颜色随封面主色亮度动态变化；其他页面固定深色。
+struct GlobalTopBar: View {
+    @EnvironmentObject private var player: PlayerManager
+    @EnvironmentObject private var library: Library
+
+    /// 当前是否在播放页（selection==1）
+    private var onHome: Bool {
+        library.tracks.isEmpty ? false : true  // 简化：播放页始终是首页
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(textPrimary.opacity(0.9))
+                    Text("流萤音乐")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(textPrimary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) { player.cyclePlayMode() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: player.playMode.symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(player.playMode.label)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(textSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Color.black.opacity(0.25),
+                    in: Capsule()
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // 首页时根据封面亮度切色；其他页固定白色
+    private var textPrimary: Color {
+        player.playerCardBackgroundLight ? Color(red: 0.93, green: 0.93, blue: 0.93) : .white
+    }
+    private var textSecondary: Color {
+        .white.opacity(0.78)
     }
 }
 

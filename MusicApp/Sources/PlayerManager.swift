@@ -52,6 +52,8 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var loadFailed: Bool = false
     /// 全局音效选择（切歌不重置）
     @Published var selectedEQ: String = "原音"
+    /// 全局左侧抽屉侧边栏开关（放在 PlayerManager 里因为它是跨页面全局状态）
+    @Published var sidebarOpen: Bool = false
 
     private var pendingArtwork: UIImage?
     /// 已构建好的锁屏 artwork 对象（切歌时重建一次，进度刷新不再重复创建，降低 0.1s 刷新开销）
