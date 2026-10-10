@@ -87,20 +87,16 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
-/// 只显示「当前播放的一句 + 下一句」的滚动歌词，KRC 整句从左到右平滑填充。
+/// 只显示「当前播放的一句 + 下一句」的滚动歌词：
+/// - **丝滑填充**：`TimelineView(.animation)` 按屏幕刷新率（60/120fps）逐帧驱动填充进度，
+///   遮罩宽度每帧推进，白色从左到右平滑填满整句，无定时器跳变；
+/// - **字号过渡**：当前句 18pt，下一句用 `scaleEffect(0.78)` 呈现为约 14pt 视觉大小
+///   （布局行高保持统一，滚动步长固定）；下一句滚到当前句位置时 0.3s 平滑放大，无跳变；
+/// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
+///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，
+///   下一句→当前句时同一视图实例保留，字号过渡动画自然触发。
 ///
-/// 滚动实现（修复切换跳变）：
-/// 内部按「当前句 + 下一句 + 再下一句」三行渲染，视口只露出两行；
-/// 切句时整个三行容器向上滑动一个行块高度（0.25s 动画），滑动结束后内容换新并复位位移——
-/// 滑动结束帧与复位帧的视口内容逐像素一致，因此过渡完全连续、无跳变。
-///
-/// 填充实现：当前句用双层 Text + 左侧裁剪遮罩，遮罩宽度 = 句子宽度 × 字内时间进度，
-/// 0.05s 时钟驱动 + linear 动画补间，白色从左边缘平滑填满至句尾。
-///
-/// 性能设计：
-/// 1. 二分定位当前行（O(log n)）；
-/// 2. 行视图 Equatable 局部刷新：仅第一行随填充进度重绘，其余行零重算；
-/// 3. 独立 0.05s 轻量时钟（`.task` 自动生命周期），不触碰 PlayerManager 全局 0.5s 观察者。
+/// 性能：行视图 Equatable 局部刷新（仅第一行随填充进度重绘）；二分定位当前行（O(log n)）。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
@@ -113,16 +109,15 @@ struct LyricPreview: View {
     private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
     private static let viewHeight: CGFloat = rowHeight * 2 + rowGap + 4
 
-    @State private var liveProgress: Double = 0
     /// 当前渲染的三行内容锚点（滚动动画期间不更新，动画结束后更新并复位位移）
     @State private var anchor: Int = 0
     @State private var offsetY: CGFloat = 0
     @State private var isScrolling = false
 
-    /// 播放跟随：外部进度与本地时钟相差 <0.6s 视为正常播放，用 0.05s 粒度本地值平滑填充；
-    /// 差异大（拖动 scrub 预览）则优先外部值。
+    /// 播放跟随：正常播放用实时播放时间（逐帧精确、丝滑）；拖动 scrub 预览时用外部进度
     private var displayProgress: Double {
-        abs(progress - liveProgress) < 0.6 ? liveProgress : progress
+        let now = PlayerManager.shared.currentTime
+        return abs(progress - now) < 0.6 ? now : progress
     }
 
     /// 当前行索引（-1 = 尚未到第一行歌词）
@@ -156,33 +151,26 @@ struct LyricPreview: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            VStack(spacing: Self.rowGap) {
-                ForEach(Array(visibleLines.enumerated()), id: \.offset) { idx, line in
-                    KRCWordLineView(
-                        line: line,
-                        fillRatio: idx == 0 ? fillRatio : 0,
-                        tint: tint
-                    )
-                    .id("row-\(anchor + idx)")
+        TimelineView(.animation) { _ in
+            GeometryReader { geo in
+                VStack(spacing: Self.rowGap) {
+                    ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
+                        LyricRowView(
+                            line: line,
+                            fillRatio: idx == 0 ? fillRatio : 0,
+                            isCurrent: idx == 0,
+                            tint: tint
+                        )
+                    }
                 }
+                .offset(y: offsetY)
+                .frame(width: geo.size.width, alignment: .leading)
             }
-            .offset(y: offsetY)
-            .frame(width: geo.size.width, alignment: .leading)
         }
         .frame(height: Self.viewHeight)
         .clipped()
-        .animation(.linear(duration: 0.05), value: fillRatio)
         .onChange(of: currentIndex) { newIdx in
             scrollIfNeeded(to: newIdx)
-        }
-        // 0.05s 轻量进度时钟：视图出现时启动、消失时由 SwiftUI 自动取消
-        .task {
-            liveProgress = PlayerManager.shared.currentTime
-            while !Task.isCancelled {
-                liveProgress = PlayerManager.shared.currentTime
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
         }
     }
 
@@ -203,18 +191,19 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 整句从左到右平滑填充）
+// MARK: - 单行歌词（左对齐 + 平滑填充 + 当前/下一句字号过渡）
 
-private struct KRCWordLineView: View, Equatable {
+private struct LyricRowView: View, Equatable {
     let line: KRCLine
     let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
+    let isCurrent: Bool     // 是否当前句（决定字号与底色调）
     let tint: Color
 
     var body: some View {
         ZStack(alignment: .leading) {
             // 底色：整句灰色（未填充部分）
             Text(line.text)
-                .foregroundColor(tint.opacity(0.4))
+                .foregroundColor(tint.opacity(isCurrent ? 0.5 : 0.4))
             // 填充层：白色，遮罩宽度随时间从左向右推进 → 平滑填满效果
             Text(line.text)
                 .foregroundColor(.white)
@@ -229,5 +218,9 @@ private struct KRCWordLineView: View, Equatable {
         .font(.system(size: 18, weight: .medium))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
+        // 字号过渡：下一句视觉约 14pt，滚到当前句位置后 0.3s 平滑放大到 18pt
+        // （scaleEffect 不改变布局行高，滚动步长保持稳定）
+        .scaleEffect(isCurrent ? 1.0 : 0.78, anchor: .leading)
+        .animation(.easeInOut(duration: 0.3), value: isCurrent)
     }
 }
