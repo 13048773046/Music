@@ -325,20 +325,21 @@ struct PlayerProgressBar: View {
 }
 
 /// 缓冲加载动画：一条短白线在轨道上从左快速扫到右，循环往复（不确定进度）
+/// 高度限到 3pt，与轨道线重合，不浮在进度条空白区。
 private struct LoadingSweep: View {
     let tint: Color
-    /// 段起始位置 0...1（-0.2 表示从轨道左外侧进入）
-    @State private var phase: CGFloat = -0.2
+    /// 段起始位置 0...1（-0.25 表示从轨道左外侧进入）
+    @State private var phase: CGFloat = -0.25
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            let segmentW = w * 0.28
             Capsule()
                 .fill(tint)
-                .frame(width: segmentW, height: 3)
+                .frame(width: w * 0.25, height: 3)
                 .offset(x: phase * w)
         }
+        .frame(height: 3)   // 关键：限高 3pt，ZStack 垂直居中后正好压在轨道线上
         .onAppear {
             withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
                 phase = 1.0
