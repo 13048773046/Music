@@ -177,7 +177,7 @@ private struct DoubleTapCapture: UIViewRepresentable {
         context.coordinator.onDoubleTap = onDoubleTap
     }
 
-    static func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject {
         var onDoubleTap: ((CGPoint) -> Void)?
