@@ -149,26 +149,41 @@ private struct EQBSheet: View {
     @Binding var selected: String
     @Environment(\.dismiss) private var dismiss
 
+    private let columns = [GridItem(.flexible(), spacing: 12),
+                           GridItem(.flexible(), spacing: 12)]
+
     var body: some View {
         NavigationStack {
-            List(eqOptions) { opt in
-                Button {
-                    selected = opt.name
-                    dismiss()
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: opt.icon)
-                            .frame(width: 28)
-                            .foregroundColor(.secondary)
-                        Text(opt.name)
-                        Spacer()
-                        if selected == opt.name {
-                            Image(systemName: "checkmark")
-                                .foregroundColor(.accentColor)
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(eqOptions) { opt in
+                        Button {
+                            selected = opt.name
+                            dismiss()
+                        } label: {
+                            VStack(spacing: 8) {
+                                Image(systemName: opt.icon)
+                                    .font(.system(size: 22))
+                                Text(opt.name)
+                                    .font(.system(size: 14, weight: .medium))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 18)
+                            .background(
+                                selected == opt.name
+                                    ? Color.accentColor.opacity(0.15)
+                                    : Color.secondary.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(selected == opt.name ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                            )
+                            .foregroundColor(selected == opt.name ? Color.accentColor : .primary)
                         }
                     }
                 }
-                .foregroundColor(.primary)
+                .padding(16)
             }
             .navigationTitle("音效")
             .navigationBarTitleDisplayMode(.inline)
@@ -276,14 +291,18 @@ struct PlayerCard: View {
                             Text(selectedEQ)
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(textPrimary(onLight: onLight).opacity(0.85))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(
                                     (onLight ? Color.black.opacity(0.08) : Color.white.opacity(0.15)),
-                                    in: Capsule()
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 )
-                                .contentShape(Capsule())
+                                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
+                        .fixedSize()
+                        .layoutPriority(2)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, sidePadding)
