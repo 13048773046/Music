@@ -81,16 +81,15 @@ final class AudioEnginePlayer {
             band.bandwidth = 0.5
             band.gain = 0
         }
-        // 左右微延迟制造相位差空间感
-        delayLow.delayTime = 0.018   // 左声道略慢
-        delayLow.feedback = 15
-        delayLow.wetDryMix = 40
-        delayHigh.delayTime = 0.012  // 右声道
-        delayHigh.feedback = 12
-        delayHigh.wetDryMix = 35
-        // 混响
-        reverb.loadFactoryPreset(.mediumHall)
-        reverb.wetDryMix = 35
+        // 左右微延迟制造相位差立体感（不要混响/回声）
+        delayLow.delayTime = 0.018   // 低频略偏左
+        delayLow.feedback = 0
+        delayLow.wetDryMix = 50
+        delayHigh.delayTime = 0.012  // 高频略偏右
+        delayHigh.feedback = 0
+        delayHigh.wetDryMix = 50
+        // 不用混响，保持干声立体
+        reverb.wetDryMix = 0
 
         // 分频声像
         mixLow.outputVolume = 0.9
@@ -257,12 +256,12 @@ final class AudioEnginePlayer {
             mixHigh.outputVolume = 0
             reverb.wetDryMix = 0
         case .surround3D:
-            // 3D：直通关，分频链开
+            // 3D 立体：直通关，分频链开，不用混响
             directMix.outputVolume = 0
             mixLow.outputVolume = 0.9
             mixMid.outputVolume = 1.0
             mixHigh.outputVolume = 0.9
-            reverb.wetDryMix = 35
+            reverb.wetDryMix = 0
         }
     }
 
