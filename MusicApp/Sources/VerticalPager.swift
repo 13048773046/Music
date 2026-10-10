@@ -532,46 +532,6 @@ struct PlayerCard: View {
 
     // MARK: - 顶部标题栏
 
-    private func topBar(onLight: Bool) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.3)) { sidebarOpen = true }
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "music.note")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(onLight ? Theme.accent : .white)
-                    Text("流萤音乐")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(textPrimary(onLight: onLight))
-                }
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    player.cyclePlayMode()
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: player.playMode.symbol)
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(player.playMode.label)
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundColor(textSecondary(onLight: onLight))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(
-                    (onLight ? Color.white : Color.black.opacity(0.25)).opacity(0.7),
-                    in: Capsule()
-                )
-            }
-            .buttonStyle(.plain)
-        }
-    }
 }
 
 // MARK: - 高频播放状态隔离组件（性能关键）
