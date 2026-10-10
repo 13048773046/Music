@@ -54,6 +54,8 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var selectedEQ: String = "原音"
 
     private var pendingArtwork: UIImage?
+    /// 已构建好的锁屏 artwork 对象（切歌时重建一次，进度刷新不再重复创建，降低 0.1s 刷新开销）
+    private var currentArtwork: MPMediaItemArtwork?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var failObserver: NSObjectProtocol?
@@ -133,12 +135,10 @@ final class PlayerManager: NSObject, ObservableObject {
     func toggle() {
         guard current != nil else { return }
         if isPlaying {
-            if usingEngine { enginePlayer.pause() } else { player.pause() }
+            pausePlayback()
         } else {
-            if usingEngine { enginePlayer.play() } else { player.play() }
+            resumePlayback()
         }
-        isPlaying.toggle()
-        updateNowPlaying()
     }
 
     func next() {
@@ -219,6 +219,7 @@ final class PlayerManager: NSObject, ObservableObject {
         isBuffering = true
         loadFailed = false
         pendingArtwork = nil
+        currentArtwork = nil
 
         Task {
             // 优先获取签名时效播放 URL（防链接泄露/盗链），失败自动回退普通 URL
@@ -257,13 +258,17 @@ final class PlayerManager: NSObject, ObservableObject {
         Task { await API.reportPlay(current.id) }
     }
 
-    /// 异步加载歌曲封面用于锁屏展示（无封面则保持默认渐变封面）
+    /// 异步加载歌曲封面用于锁屏展示（无封面则保持默认渐变封面）。
+    /// 下载完成时一次性构建 MPMediaItemArtwork 缓存起来，避免 0.1s 进度刷新反复创建。
     private func loadArtworkIfNeeded() {
         guard let url = current?.coverURL else { return }
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let self, let data, let image = UIImage(data: data) else { return }
             DispatchQueue.main.async {
+                // 切歌后旧封面迟到：丢弃，防止旧封面盖到新歌上
+                guard self.current?.coverURL == url else { return }
                 self.pendingArtwork = image
+                self.currentArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 self.updateNowPlaying()
             }
         }.resume()
@@ -323,26 +328,37 @@ final class PlayerManager: NSObject, ObservableObject {
                 // 被打断（如微信发语音）：UI 显示暂停状态
                 self.isPlaying = false
             } else if typeValue == AVAudioSession.InterruptionType.ended.rawValue {
-                // 打断结束：系统允许恢复时重新激活会话并继续播放
+                // 打断结束：系统允许恢复时重新激活会话并继续播放。
+                // 必须按当前实际播放器恢复：3D 环绕走 enginePlayer，原音走 AVPlayer。
+                // 之前无条件 player.play() 会导致 3D 模式下两个播放器同时输出同一首歌，
+                // 音量叠加翻倍、声音错乱（时大时小的直接来源）。
                 guard let option = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
                 if AVAudioSession.InterruptionOptions(rawValue: option).contains(.shouldResume) {
                     try? AVAudioSession.sharedInstance().setActive(true)
-                    self.player.play()
-                    self.isPlaying = true
-                    self.updateNowPlaying()
+                    self.resumePlayback()
                 }
             }
         }
     }
 
+    /// 恢复播放：按当前播放器分派（3D 环绕 → enginePlayer；原音 → AVPlayer）。
+    /// 锁屏/通知栏/来电恢复都走这里，避免双播放器同播导致音量叠加。
     private func resumePlayback() {
-        player.play()
+        if usingEngine {
+            enginePlayer.play()
+        } else {
+            player.play()
+        }
         isPlaying = true
         updateNowPlaying()
     }
 
     private func pausePlayback() {
-        player.pause()
+        if usingEngine {
+            enginePlayer.pause()
+        } else {
+            player.pause()
+        }
         isPlaying = false
         updateNowPlaying()
     }
@@ -363,9 +379,7 @@ final class PlayerManager: NSObject, ObservableObject {
         if let album = current.album, !album.isEmpty {
             info[MPMediaItemPropertyAlbumTitle] = album
         }
-        info[MPMediaItemPropertyArtwork] = pendingArtwork.map { image in
-            MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-        } ?? Self.fallbackArtwork
+        info[MPMediaItemPropertyArtwork] = currentArtwork ?? Self.fallbackArtwork
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 

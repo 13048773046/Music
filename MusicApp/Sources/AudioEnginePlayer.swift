@@ -47,6 +47,9 @@ final class AudioEnginePlayer {
     private var pausedFrame: AVAudioFramePosition = 0
     private var isConfigured = false
     private var progressTimer: Timer?
+    /// 当前下载任务与目标 URL：快速切歌时取消旧任务、丢弃旧回调，防止旧歌覆盖新歌
+    private var currentTask: URLSessionDownloadTask?
+    private var pendingURL: URL?
 
     /// 进度回调（每秒约 10 次）
     var onProgress: ((Double, Double) -> Void)?   // (currentSeconds, durationSeconds)
@@ -145,13 +148,17 @@ final class AudioEnginePlayer {
     func load(url: URL, mode: Mode) {
         stop()
         onLoadingChanged?(true)
+        pendingURL = url
 
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .returnCacheDataElseLoad
         let session = URLSession(configuration: config)
 
-        session.downloadTask(with: url) { [weak self] tempURL, _, error in
+        let task = session.downloadTask(with: url) { [weak self] tempURL, _, error in
             guard let self = self else { return }
+            // 切歌后旧任务迟到响应：直接丢弃，防止旧歌覆盖新歌的音频/状态
+            guard self.pendingURL == url else { return }
+            self.pendingURL = nil
             if let error = error {
                 print("[AudioEngine] download error: \(error)")
                 DispatchQueue.main.async { self.onLoadingChanged?(false) }
@@ -185,7 +192,9 @@ final class AudioEnginePlayer {
                 print("[AudioEngine] load error: \(error)")
                 DispatchQueue.main.async { self.onLoadingChanged?(false) }
             }
-        }.resume()
+        }
+        currentTask = task
+        task.resume()
     }
 
     private func schedule(from frame: AVAudioFramePosition) {
@@ -223,6 +232,9 @@ final class AudioEnginePlayer {
     }
 
     func stop() {
+        currentTask?.cancel()
+        currentTask = nil
+        pendingURL = nil
         playerNode.stop()
         isPlaying = false
         pausedFrame = 0
