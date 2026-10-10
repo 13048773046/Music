@@ -298,15 +298,14 @@ struct PlayerProgressBar: View {
                     .fill(tint)
                     .frame(width: pointX(shown, width: width), height: 3)
 
-                // 拖头：缓冲中显示旋转加载动画，否则是小圆点
-                Group {
-                    if isBuffering, scrubFraction == nil {
-                        BufferSpinner(tint: tint).frame(width: 20, height: 20)
-                    } else {
-                        Circle().fill(tint).frame(width: 10, height: 10)
-                    }
+                // 缓冲中：一条白线在轨道上从左快速扫到右循环（不确定进度动画）
+                if isBuffering, scrubFraction == nil {
+                    LoadingSweep(tint: tint)
                 }
-                .offset(x: pointX(shown, width: width) - (isBuffering && scrubFraction == nil ? 10 : 5))
+
+                // 拖头：缓冲中也保持小圆点（不再转圈）
+                Circle().fill(tint).frame(width: 10, height: 10)
+                    .offset(x: pointX(shown, width: width) - 5)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -325,21 +324,26 @@ struct PlayerProgressBar: View {
     }
 }
 
-/// 缓冲加载动画：3/4 圆弧持续旋转
-private struct BufferSpinner: View {
+/// 缓冲加载动画：一条短白线在轨道上从左快速扫到右，循环往复（不确定进度）
+private struct LoadingSweep: View {
     let tint: Color
-    @State private var rotate = false
+    /// 段起始位置 0...1（-0.2 表示从轨道左外侧进入）
+    @State private var phase: CGFloat = -0.2
 
     var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.75)
-            .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-            .rotationEffect(.degrees(rotate ? 360 : 0))
-            .onAppear {
-                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
-                    rotate = true
-                }
+        GeometryReader { geo in
+            let w = geo.size.width
+            let segmentW = w * 0.28
+            Capsule()
+                .fill(tint)
+                .frame(width: segmentW, height: 3)
+                .offset(x: phase * w)
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
+                phase = 1.0
             }
+        }
     }
 }
 
