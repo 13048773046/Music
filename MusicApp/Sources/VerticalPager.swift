@@ -210,7 +210,9 @@ struct PlayerCard: View {
                     .padding(.horizontal, sidePadding)
                     .padding(.top, 26)
 
-                    // 互动操作行：点赞 / 评论 / 分享（放在歌名下方、进度条上方；左对齐，数量角标）
+                    Spacer(minLength: 12)
+
+                    // 互动操作行：点赞 / 评论 / 分享（紧贴进度条上方；左对齐，数量角标）
                     HStack(spacing: 30) {
                         actionButton(
                             icon: "heart.fill",
@@ -232,10 +234,8 @@ struct PlayerCard: View {
                         ) { Task { await share() } }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 18)
-
-                    Spacer(minLength: 12)
+                    .padding(.horizontal, sidePadding)
+                    .padding(.bottom, 10)
 
                     // 多功能进度条：同一根条展示已播放段 + 已缓冲段，缓冲中拖头变加载动画；
                     // 拖动时只预览位置，松手才执行 seek
@@ -283,7 +283,7 @@ struct PlayerCard: View {
 
     // MARK: - 互动按钮（点赞 / 评论 / 分享）
 
-    /// 实心圆润图标 + 数量角标（显示在图标右上角，0 或无数量时不显示角标）
+    /// 实心圆润图标 + 数量角标（显示在图标右上角，0 或无数量时不显示角标）；frame 自适应图标大小
     private func actionButton(icon: String, tint: Color, count: Int?,
                               onLight: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -299,8 +299,6 @@ struct PlayerCard: View {
                         .fixedSize()
                 }
             }
-            .padding(.vertical, 6)
-            .padding(.trailing, 4)
         }
         .buttonStyle(.plain)
     }
