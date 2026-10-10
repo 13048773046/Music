@@ -111,8 +111,9 @@ struct LyricPreview: View {
     private static let rowHeight: CGFloat = 26
     private static let rowGap: CGFloat = 8
     private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
-    // 三行完整高度：当前句 + 下一句 + 再下一句，避免第三行被互动按钮挡住
-    private static let viewHeight: CGFloat = rowHeight * 3 + rowGap * 2
+    // 视口只露两行：当前句 + 下一句。第三行（预备行）在 frame 外被 clipped，
+    // 在页面上自然被点赞/评论/分享按钮挡住，滚动时从下方滑上来接替下一句。
+    private static let viewHeight: CGFloat = rowHeight * 2 + rowGap
 
     /// 当前渲染的三行内容锚点（滚动动画期间不更新，动画结束后更新并复位位移）
     @State private var anchor: Int = 0
