@@ -30,6 +30,10 @@ final class PlayerManager: NSObject, ObservableObject {
     static let shared = PlayerManager()
 
     let player = AVPlayer()
+    /// 3D 环绕音效实时引擎
+    private let enginePlayer = AudioEnginePlayer()
+    /// 当前是否在用引擎播放（3D 模式）
+    private var usingEngine = false
 
     @Published var queue: [Track] = []
     @Published var currentIndex: Int = -1
@@ -92,6 +96,12 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
+    /// 切换音效后重新加载当前歌曲以应用新音效
+    func reloadCurrent() {
+        guard current != nil else { return }
+        playCurrent()
+    }
+
     var current: Track? {
         guard queue.indices.contains(currentIndex) else { return nil }
         return queue[currentIndex]
@@ -110,9 +120,9 @@ final class PlayerManager: NSObject, ObservableObject {
     func toggle() {
         guard current != nil else { return }
         if isPlaying {
-            player.pause()
+            if usingEngine { enginePlayer.pause() } else { player.pause() }
         } else {
-            player.play()
+            if usingEngine { enginePlayer.play() } else { player.play() }
         }
         isPlaying.toggle()
         updateNowPlaying()
@@ -166,30 +176,62 @@ final class PlayerManager: NSObject, ObservableObject {
 
     func seek(toFraction fraction: Double) {
         guard duration > 0 else { return }
-        let target = CMTime(seconds: fraction * duration, preferredTimescale: 600)
-        player.seek(to: target)
+        if usingEngine {
+            enginePlayer.seek(toSeconds: fraction * duration)
+        } else {
+            let target = CMTime(seconds: fraction * duration, preferredTimescale: 600)
+            player.seek(to: target)
+        }
     }
 
     func seek(toSeconds seconds: Double) {
-        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+        if usingEngine {
+            enginePlayer.seek(toSeconds: seconds)
+        } else {
+            player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+        }
     }
 
     // MARK: - Private
 
     private func playCurrent() {
         guard let current = current else { return }
-        player.replaceCurrentItem(with: AVPlayerItem(url: API.streamURL(current.id)))
-        player.play()
+        let url = API.streamURL(current.id)
+        usingEngine = (selectedEQ == "3D 环绕")
+
+        if usingEngine {
+            enginePlayer.stop()
+            enginePlayer.onProgress = { [weak self] cur, dur in
+                guard let self = self else { return }
+                self.currentTime = cur
+                self.duration = dur
+                self.progress = dur > 0 ? min(cur / dur, 1) : 0
+                self.updateNowPlaying()
+            }
+            enginePlayer.onCompletion = { [weak self] in
+                self?.next()
+            }
+            enginePlayer.onLoadingChanged = { [weak self] loading in
+                self?.isBuffering = loading
+                if !loading { self?.bufferProgress = 1 }
+            }
+            enginePlayer.load(url: url, mode: .surround3D)
+            player.pause()
+        } else {
+            enginePlayer.stop()
+            player.replaceCurrentItem(with: AVPlayerItem(url: url))
+            player.play()
+        }
+
         isPlaying = true
         duration = 0
         progress = 0
         currentTime = 0
         bufferProgress = 0
-        isBuffering = true   // 新歌曲开始加载，立即展示缓冲动画
+        isBuffering = true
         pendingArtwork = nil
         updateNowPlaying()
         loadArtworkIfNeeded()
-        // 上报播放量
         Task { await API.reportPlay(current.id) }
     }
 

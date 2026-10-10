@@ -396,6 +396,10 @@ struct PlayerCard: View {
             EQBSheet(selected: $player.selectedEQ)
                 .presentationDetents([.medium])
         }
+        .onChange(of: player.selectedEQ) { _ in
+            // 切换音效后重新加载当前歌曲
+            player.reloadCurrent()
+        }
     }
 
     // MARK: - 互动按钮（点赞 / 评论 / 分享）
