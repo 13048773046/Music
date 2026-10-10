@@ -99,7 +99,8 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 ///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
 ///
 /// 性能：行视图 Equatable 局部刷新（仅填充行随进度重绘）；二分定位当前行（O(log n)）；
-/// 每帧仅一次 AVPlayer 时间查询；行内容 drawingGroup 预合成纹理，滚动缩放走 GPU 变换。
+/// 每帧仅一次 AVPlayer 时间查询；填充 mask 走 SwiftUI 字形纹理缓存 + GPU 矩形裁剪，
+/// 不用 drawingGroup（否则 fillRatio 每帧变化会触发整张离屏纹理重栅格化，反而卡）。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
@@ -168,7 +169,10 @@ struct LyricPreview: View {
         TimelineView(.animation) { _ in
             let p = displayProgress
             VStack(spacing: Self.rowGap) {
-                ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
+                // 直接按 index 取行（最多 3 行），避免每帧 enumerated 重建数组；
+                // id 用稳定 index，SwiftUI 能识别未变化的行并跳过重绘
+                ForEach(0..<visibleLines.count, id: \.self) { idx in
+                    let line = visibleLines[idx]
                     // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
                     // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
                     let scale = idx == 0 ? 1.0
@@ -228,8 +232,11 @@ private struct LyricRowView: View, Equatable {
                 // 灰底层：整句未填充部分
                 Text(line.text)
                     .foregroundColor(tint.opacity(baseOpacity))
-                // 白填充层：文字纹理只渲染一次，遮罩矩形宽度随进度伸展 → 从左到右填满。
-                // 每帧只动矩形（GPU合成），不重绘文字，60fps 流畅不卡
+                // 白填充层：用 mask 矩形裁剪文字纹理。
+                // 关键：不要加 drawingGroup —— fillRatio 每帧变化时 drawingGroup 会强制
+                // 每帧重新光栅化整张离屏纹理（包括两层 Text），把 GPU 裁剪退化回 CPU 文字渲染，
+                // 是填满动画卡顿的主因。SwiftUI 自带的 Text mask 走字形纹理缓存 + GPU 裁剪，
+                // 静态文字只栅格化一次，每帧只动裁剪矩形。
                 Text(line.text)
                     .foregroundColor(.white)
                     .mask(alignment: .leading) {
@@ -244,9 +251,6 @@ private struct LyricRowView: View, Equatable {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // 行内容（含当前填充状态）合成一次离屏纹理；滚动放大的 scaleEffect 变换走 GPU，
-        // 避免动画期间每帧重新栅格化文字 → 切句滚动/放大更顺滑
-        .drawingGroup()
         .scaleEffect(scale, anchor: .leading)
     }
 }
