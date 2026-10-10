@@ -11,26 +11,7 @@ DB = os.path.join(ROOT, "tracks.db")
 PORT = 8788
 MAX_UPLOAD = 100 * 1024 * 1024
 
-# 随机歌单缓存：一次打乱后在 TTL 内保持同一顺序，
-# 避免每次请求都重新随机导致 App 端队列乱跳。
-_shuffle_ids = None
-_shuffle_ts = 0.0
-_SHUFFLE_TTL = 1800  # 30 分钟后重新打乱一次
-
 os.makedirs(FILES, exist_ok=True)
-
-
-def _shuffled_order(c):
-    """返回一份在 TTL 内稳定的歌曲 id 随机顺序列表。"""
-    global _shuffle_ids, _shuffle_ts
-    import time as _t
-    now = _t.time()
-    if _shuffle_ids is None or (now - _shuffle_ts) > _SHUFFLE_TTL:
-        _shuffle_ids = [r[0] for r in c.execute("SELECT id FROM tracks")]
-        import random as _r
-        _r.shuffle(_shuffle_ids)
-        _shuffle_ts = now
-    return _shuffle_ids
 
 
 def db():
@@ -302,10 +283,9 @@ class H(BaseHTTPRequestHandler):
                                 FROM tracks t
                                 LEFT JOIN users u ON u.id=t.user_id
                                 LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
-                                GROUP BY t.id""", (viewer_id,)).fetchall()
-            # 按服务端缓存的随机顺序重排（TTL 内稳定，不每次重洗）
-            order = {tid: i for i, tid in enumerate(_shuffled_order(c))}
-            rows = sorted(rows, key=lambda r: order.get(r[0], 1 << 30))
+                                GROUP BY t.id
+                                ORDER BY RANDOM()
+                                LIMIT 10""", (viewer_id,)).fetchall()
             c.close()
             self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
                               "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
