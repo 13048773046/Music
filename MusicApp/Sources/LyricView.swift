@@ -89,9 +89,9 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
 /// 只显示「当前播放的一句 + 下一句」的滚动歌词：
-/// - **整句从左到右平滑填满**：`TimelineView(.animation)` 按屏幕刷新率逐帧驱动整句填充进度，
-///   白色字用**宽度裁剪**（`frame(width: 进度×整句宽, alignment: .leading).clipped()`）覆盖在灰字上——
-///   只更新裁剪宽度一个属性，文字不重光栅化、无 mask/渐变渲染，逐帧伸展绝对平滑不闪；
+/// - **整句从左到右平滑填满**：`TimelineView(.animation)` 按屏幕刷新率逐帧驱动填充进度，
+///   填充用**单个 Text + 线性渐变前景**实现——渐变 stops 的边界位置 = 时间进度，
+///   进度每帧直接实时查询 AVPlayer（毫秒级），白色从左到右连续平滑填满整句；
 /// - **滚动与字号同步过渡**：下一句用 `scaleEffect` 呈现约 14pt，**放大进度直接绑定滚动
 ///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 18pt，
 ///   滚动结束即放大到位，复位后无缝衔接为当前句，无先后之分、无跳变；
@@ -205,21 +205,13 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 整句平滑填充 + 滚动同步字号过渡）
+// MARK: - 单行歌词（左对齐 + 渐变填充 + 滚动同步字号过渡）
 
-/// 整句卡拉OK填充：白色 Text 以「进度 × 整句宽度」为裁剪宽度，左对齐覆盖在灰色 Text 上，
-/// 宽度随 TimelineView 逐帧伸展 → 白色从左到右**连续平滑填满整句**。
-/// 只更新裁剪宽度一个属性，文字本身不重光栅化、无渐变/mask 渲染，逐帧伸展不闪烁。
-private struct LyricRowView: View {
+private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    /// 0...1：整句填充进度（非当前行恒为 0 → 整句灰）
-    let fillRatio: Double
-    /// 0.78...1.0：下一句在滚动期间同步放大
-    let scale: Double
+    let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
+    let scale: Double       // 0.78...1.0：下一句在滚动期间同步放大
     let tint: Color
-
-    /// 整句宽度（等于灰色文字宽度，ZStack 由文字撑开，稳定不变）
-    @State private var textWidth: CGFloat = 0
 
     /// 底色透明度：随放大同步从 0.4 过渡到 0.5
     private var baseOpacity: Double {
@@ -227,39 +219,31 @@ private struct LyricRowView: View {
         return 0.4 + 0.1 * min(max(t, 0), 1)
     }
 
+    /// 填充渐变：左侧白、右侧灰，边界位置 = fillRatio（相对文字宽度，从左到右填满）
+    private var fillGradient: LinearGradient {
+        let r = min(max(fillRatio, 0), 1)
+        return LinearGradient(
+            stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: r),
+                .init(color: tint.opacity(baseOpacity), location: min(r + 0.001, 1)),
+                .init(color: tint.opacity(baseOpacity), location: 1)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            ZStack(alignment: .leading) {
-                // 灰底层：整句未填充部分
-                Text(line.text)
-                    .foregroundColor(tint.opacity(baseOpacity))
-                // 白填充层：裁剪宽度 = 进度×整句宽，从左到右平滑填满
-                Text(line.text)
-                    .foregroundColor(.white)
-                    .frame(width: textWidth * fillRatio, alignment: .leading)
-                    .clipped()
-            }
-            .font(.system(size: 18, weight: .medium))
-            .lineLimit(1)
-            // 背景测量一次整句宽度（ZStack 尺寸稳定；过滤 0 值防个别帧布局抖动把宽度冲成 0）
-            .background(GeometryReader { geo in
-                Color.clear
-                    .onAppear { if geo.size.width > 0 { textWidth = geo.size.width } }
-                    .onChange(of: geo.size.width) { w in if w > 0 { textWidth = w } }
-            })
-            .scaleEffect(scale, anchor: .leading)
+            // Text 按内容宽度布局（渐变横跨文字本身），Spacer 实现整行左对齐
+            Text(line.text)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(fillGradient)
+                .lineLimit(1)
+                .scaleEffect(scale, anchor: .leading)
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
-    }
-}
-
-// @State 阻止自动合成，手动实现 Equatable（比较除内部状态外的渲染参数）
-extension LyricRowView: Equatable {
-    static func == (lhs: LyricRowView, rhs: LyricRowView) -> Bool {
-        lhs.line == rhs.line
-            && lhs.fillRatio == rhs.fillRatio
-            && lhs.scale == rhs.scale
-            && lhs.tint == rhs.tint
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
