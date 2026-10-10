@@ -6,12 +6,12 @@ struct KRWord: Equatable, Identifiable {
     let id = UUID()
     let text: String
     let start: Double  // 秒
-    let end: Double    // 秒
+    var end: Double    // 秒（LRC 兼容时需要按下一行开始时间修正）
 }
 
 struct KRCLine: Equatable, Identifiable {
     let id = UUID()
-    let words: [KRWord]
+    var words: [KRWord]
     let start: Double
     let end: Double
 
@@ -94,8 +94,8 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 /// 2. **局部刷新**：行视图为 `Equatable` 值类型，仅当 `isCurrent / activeWordIndex` 变化时 SwiftUI 才重建该行，
 ///    非当前行完全不依赖进度，零重算；
 /// 3. **懒加载**：`LazyVStack` 只实例化可见行，长歌词不常驻全部视图；
-/// 4. **单 Text 渲染**：每行用 `AttributedString` 逐字着色，一行只有一个 Text 节点，避免每字一个视图；
-/// 5. **独立轻量时钟**：歌词页激活时才启动 0.1s Timer 驱动本地 `liveProgress`，
+/// 4. **单行少量节点**：每行仅 ~10 个字节点，且只有当前行的字会随进度重绘；
+/// 5. **独立轻量时钟**：歌词页激活时才运行 0.1s 进度循环（`.task` 自动管理生命周期），
 ///    不触碰 PlayerManager 的全局 0.5s 观察者，避免锁屏/进度条等无关视图被连带刷新。
 struct LyricView: View {
     let lines: [KRCLine]
@@ -104,7 +104,6 @@ struct LyricView: View {
     let tint: Color
 
     @State private var liveProgress: Double = 0
-    @State private var timer: Timer?
 
     /// 播放跟随：外部进度与本地时钟相差 <0.6s 视为正常播放，用 0.1s 粒度本地值平滑逐字高亮；
     /// 差异大（拖动 scrub 预览）则优先外部值。
@@ -161,26 +160,15 @@ struct LyricView: View {
                 }
             }
         }
-        .onAppear(perform: startTimer)
-        .onDisappear(perform: stopTimer)
-    }
-
-    // MARK: - 0.1s 轻量进度时钟（仅歌词页激活期间运行）
-
-    private func startTimer() {
-        guard timer == nil else { return }
-        liveProgress = PlayerManager.shared.currentTime
-        let t = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.liveProgress = PlayerManager.shared.currentTime
+        // 0.1s 轻量进度时钟：视图出现时启动、消失时由 SwiftUI 自动取消，
+        // 无 Timer/闭包持有，天然避免循环引用与泄漏。
+        .task {
+            liveProgress = PlayerManager.shared.currentTime
+            while !Task.isCancelled {
+                liveProgress = PlayerManager.shared.currentTime
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
-        // .common 模式：拖动歌词/滚动时不暂停，保证逐字高亮连续
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
     }
 }
 
@@ -193,23 +181,16 @@ private struct KRCWordLineView: View, Equatable {
     let tint: Color
 
     var body: some View {
-        Text(attributedText)
-            .font(.system(size: 16))
-            .multilineTextAlignment(.center)
-            .lineLimit(nil)
-            .frame(maxWidth: .infinity)
-    }
-
-    /// 逐字 AttributedString：每字独立前景色，一行仅一个 Text 节点
-    private var attributedText: AttributedString {
-        var out = AttributedString()
-        for (i, w) in line.words.enumerated() {
-            var run = AttributedString(w.text)
-            run.foregroundColor = wordColor(i)
-            out += run
+        HStack(spacing: 0) {
+            ForEach(line.words.indices, id: \.self) { i in
+                Text(line.words[i].text)
+                    .foregroundColor(wordColor(i))
+            }
         }
-        if out.isEmpty { out = AttributedString(" ") }
-        return out
+        .font(.system(size: 16))
+        .multilineTextAlignment(.center)
+        .lineLimit(nil)
+        .frame(maxWidth: .infinity)
     }
 
     private func wordColor(_ i: Int) -> Color {
