@@ -194,6 +194,8 @@ def run_all(port, root, strict_port, strict_root):
     body, ct = multipart({"title": "匿名"}, {"file": ("song.wav", wav_data, "audio/wav")})
     s, body, _ = req("POST", "/api/upload", body, {"Content-Type": ct})
     check("匿名上传 401", s == 401, body[:100])
+    s, body, _ = req("POST", "/api/upload")
+    check("空 body 上传 400", s == 400, f"s={s} {body[:100]}")
 
     print("== 10. 歌曲列表 ==")
     s, body, _ = req("GET", "/api/tracks", headers=AUTH)

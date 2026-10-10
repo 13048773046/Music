@@ -1099,8 +1099,11 @@ class H(BaseHTTPRequestHandler):
                 self._err(429, "上传过于频繁，请稍后再试")
                 return
             try:
-                if length <= 0 or length > MAX_UPLOAD + 1024 * 1024:
+                if length > MAX_UPLOAD + 1024 * 1024:
                     self._err(413, "too large")
+                    return
+                if length <= 0:
+                    self._err(400, "empty body")
                     return
                 fields, files = self._parse_multipart(length)
                 if fields is None:
