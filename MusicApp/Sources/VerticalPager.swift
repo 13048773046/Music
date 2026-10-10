@@ -210,6 +210,31 @@ struct PlayerCard: View {
                     .padding(.horizontal, sidePadding)
                     .padding(.top, 26)
 
+                    // 互动操作行：点赞 / 评论 / 分享（放在歌名下方、进度条上方；左对齐，数量角标）
+                    HStack(spacing: 30) {
+                        actionButton(
+                            icon: "heart.fill",
+                            tint: liked ? .red : textPrimary(onLight: onLight),
+                            count: likeCount,
+                            onLight: onLight
+                        ) { Task { await toggleLike() } }
+                        actionButton(
+                            icon: "message.fill",
+                            tint: textPrimary(onLight: onLight),
+                            count: commentCount,
+                            onLight: onLight
+                        ) { showComments = true }
+                        actionButton(
+                            icon: "paperplane.fill",
+                            tint: textPrimary(onLight: onLight),
+                            count: shareCount,
+                            onLight: onLight
+                        ) { Task { await share() } }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+
                     Spacer(minLength: 12)
 
                     // 多功能进度条：同一根条展示已播放段 + 已缓冲段，缓冲中拖头变加载动画；
@@ -233,31 +258,6 @@ struct PlayerCard: View {
                         .foregroundColor(textSecondary(onLight: onLight))
                     }
                     .padding(.horizontal, sidePadding)
-
-                    // 互动操作行：点赞 / 评论 / 分享（全实心圆润图标，左对齐，数量在图标右上角角标）
-                    HStack(spacing: 30) {
-                        actionButton(
-                            icon: "heart.fill",
-                            tint: liked ? .red : textPrimary(onLight: onLight),
-                            count: likeCount,
-                            onLight: onLight
-                        ) { Task { await toggleLike() } }
-                        actionButton(
-                            icon: "message.fill",
-                            tint: textPrimary(onLight: onLight),
-                            count: commentCount,
-                            onLight: onLight
-                        ) { showComments = true }
-                        actionButton(
-                            icon: "paperplane.fill",
-                            tint: textPrimary(onLight: onLight),
-                            count: shareCount,
-                            onLight: onLight
-                        ) { Task { await share() } }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 14)
 
                     // 底部留白（TabBar 空间，自适应导航栏高度与底部安全区）
                     Spacer(minLength: tabBarSpace)
