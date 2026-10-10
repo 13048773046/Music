@@ -363,6 +363,8 @@ struct MarqueeText: View {
     var speed: CGFloat = 50
     /// 每次滚动前停顿秒数
     var pause: TimeInterval = 1.2
+    /// 是否允许滚动：非当前播放页传 false，离屏页不再跑 repeatForever 动画，减少卡顿
+    var active: Bool = true
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
@@ -392,6 +394,14 @@ struct MarqueeText: View {
             .offset(x: offset)
             .onAppear { start(container: geo.size.width) }
             .onChange(of: text) { _ in restart(container: geo.size.width) }
+            .onChange(of: active) { newValue in
+                if newValue {
+                    restart(container: containerWidth)
+                } else {
+                    // 非当前页：停止滚动并归位，避免离屏动画持续消耗
+                    withAnimation(nil) { offset = 0 }
+                }
+            }
         }
         .frame(height: 30)
         .clipped()
@@ -399,9 +409,10 @@ struct MarqueeText: View {
 
     private func start(container: CGFloat) {
         containerWidth = container
+        guard active else { return }
         // 等一帧拿到 textWidth（background onAppear 可能晚于主 onAppear）
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            guard overflow else { return }
+            guard active, overflow else { return }
             let distance = textWidth + 50
             withAnimation(
                 .linear(duration: Double(distance / speed))

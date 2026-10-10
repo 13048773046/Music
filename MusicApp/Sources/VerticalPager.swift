@@ -287,6 +287,10 @@ struct PlayerCard: View {
             let sidePadding = (geo.size.width - coverSize) / 2
             // 背景是否偏浅（决定文字用深色还是白色）；无封面时按深色背景处理
             let onLight = bgColor.map { luminance(of: $0) > 0.55 } ?? false
+            // 是否为当前播放页（低频：仅切歌时变化）。
+            // 高频播放状态（进度/缓冲/时间）只在当前页渲染，离屏页不订阅，
+            // 避免歌曲加载多了以后每次 0.1s 进度刷新触发全部页面重算导致卡顿。
+            let isCurrent = player.currentIndex == index
 
             ZStack {
                 // 背景：自身忽略安全区延伸到全屏（状态栏 / 底部小白条），不影响上方安全区计算
@@ -312,7 +316,8 @@ struct PlayerCard: View {
                             MarqueeText(
                                 text: track.title,
                                 font: .system(size: 24, weight: .bold),
-                                color: textPrimary(onLight: onLight)
+                                color: textPrimary(onLight: onLight),
+                                active: isCurrent
                             )
 
                             Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
@@ -346,14 +351,16 @@ struct PlayerCard: View {
                     .padding(.horizontal, sidePadding)
                     .padding(.top, 26)
 
-                    // 歌词预览：当前句（逐字填充）+ 下一句，两句滚动播放（歌名下方、互动行上方）
-                    if !lyricLines.isEmpty {
-                        LyricPreview(lines: lyricLines,
-                                     progress: (scrubFraction ?? player.progress) * player.duration,
-                                     tint: textPrimary(onLight: onLight))
-                            .padding(.horizontal, sidePadding)
-                            .padding(.top, 10)
-                    }
+                    // 歌词预览：当前句（逐字填充）+ 下一句，两句滚动播放。
+                    // 高频进度状态隔离：仅当前播放页实时渲染，非当前页固定占位保持布局稳定。
+                    LiveLyricView(
+                        lines: lyricLines,
+                        scrubFraction: $scrubFraction,
+                        tint: textPrimary(onLight: onLight),
+                        isCurrent: isCurrent
+                    )
+                    .padding(.horizontal, sidePadding)
+                    .padding(.top, 10)
 
                     Spacer(minLength: 12)
 
@@ -383,46 +390,15 @@ struct PlayerCard: View {
                     .padding(.bottom, 10)
 
                     // 多功能进度条：同一根条展示已播放段 + 已缓冲段，缓冲中拖头变加载动画；
-                    // 拖动时只预览位置，松手才执行 seek
-                    VStack(spacing: 10) {
-                        // 音频加载失败：显示重试入口（网络中断/资源损坏时避免静默卡死）
-                        if player.loadFailed {
-                            Button {
-                                player.reloadCurrent()
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
-                                        .font(.system(size: 13, weight: .semibold))
-                                    Text("加载失败，点此重试")
-                                        .font(.system(size: 13, weight: .medium))
-                                }
-                                .foregroundColor(textSecondary(onLight: onLight))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 7)
-                                .background(
-                                    (onLight ? Color.black.opacity(0.06) : Color.white.opacity(0.14)),
-                                    in: Capsule()
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        PlayerProgressBar(
-                            progress: player.progress,
-                            buffer: player.bufferProgress,
-                            isBuffering: player.isBuffering,
-                            tint: textPrimary(onLight: onLight),
-                            scrubFraction: $scrubFraction,
-                            onSeek: { fraction in player.seek(toFraction: fraction) }
-                        )
-
-                        HStack {
-                            Text(formatTime((scrubFraction ?? player.progress) * player.duration))
-                            Spacer()
-                            Text(formatTime(player.duration))
-                        }
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundColor(textSecondary(onLight: onLight))
-                    }
+                    // 拖动时只预览位置，松手才执行 seek。
+                    // 高频状态隔离：进度/缓冲/时间/加载失败仅在当前播放页读取，离屏页静态占位。
+                    LiveProgressView(
+                        scrubFraction: $scrubFraction,
+                        tint: textPrimary(onLight: onLight),
+                        secondaryTint: textSecondary(onLight: onLight),
+                        isCurrent: isCurrent,
+                        onLight: onLight
+                    )
                     .padding(.horizontal, sidePadding)
 
                     // 底部留白（TabBar 空间，自适应导航栏高度与底部安全区）
@@ -593,6 +569,114 @@ struct PlayerCard: View {
                 )
             }
             .buttonStyle(.plain)
+        }
+    }
+}
+
+// MARK: - 高频播放状态隔离组件（性能关键）
+
+/// 歌词实时预览：只在「当前播放页」渲染并读取播放器高频进度状态。
+/// 播放器每 0.1s 更新一次进度，若所有已加载页都读取这些状态，
+/// 歌曲加载多了以后每次刷新都要重算全部页面，是首页卡顿掉帧的根源。
+/// 这里把高频读取收敛到单个子视图：非当前页不渲染（占位保持布局），
+/// 进度刷新只会重算当前页的这一个组件。
+private struct LiveLyricView: View {
+    @EnvironmentObject private var player: PlayerManager
+    let lines: [KRCLine]
+    @Binding var scrubFraction: Double?
+    let tint: Color
+    let isCurrent: Bool
+
+    var body: some View {
+        if isCurrent {
+            if !lines.isEmpty {
+                LyricPreview(
+                    lines: lines,
+                    progress: (scrubFraction ?? player.progress) * player.duration,
+                    tint: tint
+                )
+            }
+        } else if !lines.isEmpty {
+            // 非当前页：固定占位保持布局稳定（LyricPreview 视口高度 = 26*2 + 8）
+            Color.clear.frame(height: 60)
+        }
+    }
+}
+
+/// 进度条 + 时间 + 加载失败重试：只在「当前播放页」读取播放器高频状态。
+/// 结构上分成两层：外层只依赖低频的 isCurrent（切歌才变化），
+/// 内层 RealProgressView 才读取 player.progress / buffer / isBuffering / loadFailed / duration。
+/// 非当前页时内层不在视图树中，0.1s 的进度刷新不会触达离屏页。
+private struct LiveProgressView: View {
+    @EnvironmentObject private var player: PlayerManager
+    @Binding var scrubFraction: Double?
+    let tint: Color
+    let secondaryTint: Color
+    let isCurrent: Bool
+    let onLight: Bool
+
+    var body: some View {
+        if isCurrent {
+            RealProgressView(scrubFraction: $scrubFraction,
+                             tint: tint,
+                             secondaryTint: secondaryTint,
+                             onLight: onLight)
+        } else {
+            // 非当前页：固定高度占位（进度条 26 + 间距 10 + 时间行约 15），切页布局不跳动
+            VStack(spacing: 10) {
+                Color.clear.frame(height: 26)
+                Color.clear.frame(height: 15)
+            }
+        }
+    }
+}
+
+private struct RealProgressView: View {
+    @EnvironmentObject private var player: PlayerManager
+    @Binding var scrubFraction: Double?
+    let tint: Color
+    let secondaryTint: Color
+    let onLight: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            // 音频加载失败：显示重试入口（网络中断/资源损坏时避免静默卡死）
+            if player.loadFailed {
+                Button {
+                    player.reloadCurrent()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("加载失败，点此重试")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundColor(secondaryTint)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        (onLight ? Color.black.opacity(0.06) : Color.white.opacity(0.14)),
+                        in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            PlayerProgressBar(
+                progress: player.progress,
+                buffer: player.bufferProgress,
+                isBuffering: player.isBuffering,
+                tint: tint,
+                scrubFraction: $scrubFraction,
+                onSeek: { fraction in player.seek(toFraction: fraction) }
+            )
+
+            HStack {
+                Text(formatTime((scrubFraction ?? player.progress) * player.duration))
+                Spacer()
+                Text(formatTime(player.duration))
+            }
+            .font(.system(size: 12, weight: .medium).monospacedDigit())
+            .foregroundColor(secondaryTint)
         }
     }
 }
