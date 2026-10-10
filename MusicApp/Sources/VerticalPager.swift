@@ -255,6 +255,7 @@ struct PlayerCard: View {
                             onLight: onLight
                         ) { Task { await share() } }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
 
