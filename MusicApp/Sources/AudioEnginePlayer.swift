@@ -199,7 +199,6 @@ final class AudioEnginePlayer {
             at: nil
         ) { [weak self] _ in
             guard let self = self, self.isPlaying else { return }
-            // 播放完毕
             DispatchQueue.main.async {
                 self.onCompletion?()
             }
@@ -270,14 +269,14 @@ final class AudioEnginePlayer {
 
     private func currentFrame() -> AVAudioFramePosition {
         guard isPlaying, let nodeTime = playerNode.lastRenderTime,
-              nodeTime.isValid else {
+              nodeTime.isSampleTimeValid else {
             return pausedFrame
         }
-        let playerTime = playerNode.playerTime(forNodeTime: nodeTime)
-        guard let pt = playerTime, pt.isValidTime else {
+        guard let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
+              playerTime.isPlaying else {
             return pausedFrame
         }
-        return startedFrame + pt.sampleTime
+        return startedFrame + playerTime.sampleTime
     }
 
     func currentSeconds() -> Double {
