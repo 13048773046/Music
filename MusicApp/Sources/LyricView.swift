@@ -87,23 +87,37 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
-/// 只显示「当前播放的一句 + 下一句」的滚动歌词，支持 KRC 逐字从左到右平滑填充。
+/// 只显示「当前播放的一句 + 下一句」的滚动歌词，KRC 整句从左到右平滑填充。
 ///
-/// 性能设计（高刷新率逐字填充场景）：
-/// 1. **二分定位**：每次刷新只做行级二分（O(log n)）+ 当前行内线性扫字；
-/// 2. **局部刷新**：行视图为 `Equatable` 值类型，仅当前句（及填充进度）变化才重建，
-///    下一句是静态 Text，零重算；
-/// 3. **独立轻量时钟**：仅本组件激活时运行 0.05s 进度循环（`.task` 自动管理生命周期），
-///    不触碰 PlayerManager 全局 0.5s 观察者；
-/// 4. **平滑填充**：正唱字颜色按字内进度线性插值（暗→亮），配合 0.05s linear 动画补间，
-///    视觉上从左到右连续填满；换字时以短动画平滑过渡，无跳变。
+/// 滚动实现（修复切换跳变）：
+/// 内部按「当前句 + 下一句 + 再下一句」三行渲染，视口只露出两行；
+/// 切句时整个三行容器向上滑动一个行块高度（0.25s 动画），滑动结束后内容换新并复位位移——
+/// 滑动结束帧与复位帧的视口内容逐像素一致，因此过渡完全连续、无跳变。
+///
+/// 填充实现：当前句用双层 Text + 左侧裁剪遮罩，遮罩宽度 = 句子宽度 × 字内时间进度，
+/// 0.05s 时钟驱动 + linear 动画补间，白色从左边缘平滑填满至句尾。
+///
+/// 性能设计：
+/// 1. 二分定位当前行（O(log n)）；
+/// 2. 行视图 Equatable 局部刷新：仅第一行随填充进度重绘，其余行零重算；
+/// 3. 独立 0.05s 轻量时钟（`.task` 自动生命周期），不触碰 PlayerManager 全局 0.5s 观察者。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
     let progress: Double
     let tint: Color
 
+    // 固定排版尺寸（字号 18 行高约 22，间距 8）
+    private static let rowHeight: CGFloat = 22
+    private static let rowGap: CGFloat = 8
+    private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
+    private static let viewHeight: CGFloat = rowHeight * 2 + rowGap + 4
+
     @State private var liveProgress: Double = 0
+    /// 当前渲染的三行内容锚点（滚动动画期间不更新，动画结束后更新并复位位移）
+    @State private var anchor: Int = 0
+    @State private var offsetY: CGFloat = 0
+    @State private var isScrolling = false
 
     /// 播放跟随：外部进度与本地时钟相差 <0.6s 视为正常播放，用 0.05s 粒度本地值平滑填充；
     /// 差异大（拖动 scrub 预览）则优先外部值。
@@ -122,90 +136,46 @@ struct LyricPreview: View {
         return lo - 1
     }
 
-    private var currentLine: KRCLine? {
-        let idx = currentIndex
-        guard idx >= 0, idx < lines.count else { return nil }
-        return lines[idx]
-    }
-
-    private var nextLine: KRCLine? {
-        let idx = currentIndex
-        guard idx >= 0, idx + 1 < lines.count else { return nil }
-        return lines[idx + 1]
-    }
-
-    /// 切换动画锚点：未到第一句时锚定第 0 句，保证滚动区稳定
-    private var anchorIndex: Int { currentIndex >= 0 ? currentIndex : 0 }
-
-    /// 当前行内正在唱的字索引；-1 = 已唱完（间隙）
-    private var activeWordIndex: Int {
-        guard let line = currentLine, !line.words.isEmpty else { return -1 }
-        for i in line.words.indices where line.words[i].start <= displayProgress && displayProgress < line.words[i].end {
-            return i
+    /// 渲染的三行：anchor 起的三句（不足则少）
+    private var visibleLines: [KRCLine] {
+        guard !lines.isEmpty else { return [] }
+        var out: [KRCLine] = []
+        for i in anchor..<min(anchor + 3, lines.count) {
+            out.append(lines[i])
         }
-        return displayProgress >= (line.words.last?.end ?? 0) ? -1 : 0
+        return out
     }
 
-    /// 正唱字的填充进度 0...1（字内时间占比）
-    private var wordProgress: Double {
-        guard let line = currentLine else { return 0 }
-        for w in line.words where w.start <= displayProgress && displayProgress < w.end {
-            let t = (displayProgress - w.start) / max(w.end - w.start, 0.001)
-            return min(max(t, 0), 1)
-        }
-        // 无正唱字：已唱完视为填充完成，未开始视为 0
-        return displayProgress >= (line.words.last?.end ?? 0) ? 1 : 0
+    /// 第一行（当前句）的填充进度 0...1：按整句时间线性推进，从左到右平滑填满
+    private var fillRatio: Double {
+        guard anchor < lines.count else { return 0 }
+        let line = lines[anchor]
+        let span = line.end - line.start
+        guard span > 0 else { return 0 }
+        return min(max((displayProgress - line.start) / span, 0), 1)
     }
 
     var body: some View {
-        VStack(spacing: 9) {
-            // 当前句：逐字填充高亮
-            Group {
-                if let line = currentLine {
-                    KRCWordLineView(line: line,
-                                    isCurrent: true,
-                                    activeWordIndex: activeWordIndex,
-                                    wordProgress: wordProgress,
-                                    tint: tint)
-                } else if !lines.isEmpty {
-                    // 未到第一句：显示第一句（未开始状态）
-                    KRCWordLineView(line: lines[0],
-                                    isCurrent: true,
-                                    activeWordIndex: -1,
-                                    wordProgress: 0,
-                                    tint: tint)
+        GeometryReader { geo in
+            VStack(spacing: Self.rowGap) {
+                ForEach(Array(visibleLines.enumerated()), id: \.offset) { idx, line in
+                    KRCWordLineView(
+                        line: line,
+                        fillRatio: idx == 0 ? fillRatio : 0,
+                        tint: tint
+                    )
+                    .id("row-\(anchor + idx)")
                 }
             }
-            .id("cur-\(anchorIndex)")
-            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
-                                    removal: .move(edge: .top).combined(with: .opacity)))
-
-            // 下一句：静态弱化
-            Group {
-                if let line = nextLine {
-                    Text(line.text)
-                        .font(.system(size: 13))
-                        .foregroundColor(tint.opacity(0.45))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                } else if lines.count > 1, currentIndex < 0 {
-                    Text(lines[1].text)
-                        .font(.system(size: 13))
-                        .foregroundColor(tint.opacity(0.45))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            .id("next-\(anchorIndex)")
-            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
-                                    removal: .move(edge: .top).combined(with: .opacity)))
+            .offset(y: offsetY)
+            .frame(width: geo.size.width, alignment: .leading)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 54, alignment: .center)
+        .frame(height: Self.viewHeight)
         .clipped()
-        .animation(.easeInOut(duration: 0.3), value: anchorIndex)
+        .animation(.linear(duration: 0.05), value: fillRatio)
+        .onChange(of: currentIndex) { newIdx in
+            scrollIfNeeded(to: newIdx)
+        }
         // 0.05s 轻量进度时钟：视图出现时启动、消失时由 SwiftUI 自动取消
         .task {
             liveProgress = PlayerManager.shared.currentTime
@@ -215,55 +185,49 @@ struct LyricPreview: View {
             }
         }
     }
+
+    /// 切句滚动：先整体上滑一个行块，动画结束后换内容并复位（连续无跳变）
+    private func scrollIfNeeded(to newIdx: Int) {
+        let target = newIdx < 0 ? 0 : newIdx
+        guard target != anchor, !isScrolling, !lines.isEmpty else { return }
+        isScrolling = true
+        withAnimation(.easeInOut(duration: 0.25)) {
+            offsetY = -Self.step
+        }
+        // 动画结束后换内容 + 无动画复位（结束帧与复位帧视口内容一致）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.27) {
+            anchor = target
+            offsetY = 0
+            isScrolling = false
+        }
+    }
 }
 
-// MARK: - 单行歌词（逐字从左到右平滑填充）
+// MARK: - 单行歌词（左对齐 + 整句从左到右平滑填充）
 
 private struct KRCWordLineView: View, Equatable {
     let line: KRCLine
-    let isCurrent: Bool
-    let activeWordIndex: Int
-    let wordProgress: Double   // 0...1：正唱字填充进度
+    let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
     let tint: Color
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(line.words.indices, id: \.self) { i in
-                Text(line.words[i].text)
-                    .foregroundColor(wordColor(i))
-                    // 字内填充：随 wordProgress 平滑补间（从左到右连续填满）
-                    .animation(.linear(duration: 0.05), value: wordProgress)
-                    // 换字瞬间：颜色平滑过渡，无跳变
-                    .animation(.linear(duration: 0.08), value: activeWordIndex)
-            }
+        ZStack(alignment: .leading) {
+            // 底色：整句灰色（未填充部分）
+            Text(line.text)
+                .foregroundColor(tint.opacity(0.4))
+            // 填充层：白色，遮罩宽度随时间从左向右推进 → 平滑填满效果
+            Text(line.text)
+                .foregroundColor(.white)
+                .mask(alignment: .leading) {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: geo.size.width * fillRatio)
+                    }
+                }
         }
-        .font(.system(size: 17, weight: .medium))
-        .multilineTextAlignment(.center)
+        .font(.system(size: 18, weight: .medium))
         .lineLimit(1)
-        .frame(maxWidth: .infinity)
-    }
-
-    private func wordColor(_ i: Int) -> Color {
-        guard isCurrent else { return tint.opacity(0.4) }   // 非当前行：统一弱化
-        if activeWordIndex < 0 { return tint.opacity(0.85) } // 已唱完（间隙）：整行已唱
-        if i < activeWordIndex { return tint.opacity(0.85) } // 已唱
-        if i == activeWordIndex {                            // 正在唱：暗→亮平滑填充
-            return lerpColor(tint.opacity(0.4), .white, wordProgress)
-        }
-        return tint.opacity(0.4)                             // 未唱
-    }
-
-    /// 颜色线性插值（UIColor 分量），用于逐字填充动画
-    private func lerpColor(_ a: Color, _ b: Color, _ t: Double) -> Color {
-        let ua = UIColor(a), ub = UIColor(b)
-        var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
-        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
-        ua.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
-        ub.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
-        let k = CGFloat(min(max(t, 0), 1))
-        return Color(UIColor(red: ar + (br - ar) * k,
-                             green: ag + (bg - ag) * k,
-                             blue: ab + (bb - ab) * k,
-                             alpha: aa + (ba - aa) * k))
+        .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
     }
 }
