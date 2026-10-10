@@ -152,7 +152,7 @@ struct PlayerCard: View {
     @State private var shareURL: URL?
     /// 歌词显示切换（点击封面切换）
     @State private var showLyrics = false
-    @State private var lyricLines: [LyricLine] = []
+    @State private var lyricLines: [KRCLine] = []
 
     init(track: Track, index: Int, total: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
@@ -290,7 +290,7 @@ struct PlayerCard: View {
             lyricLines = []
             if track.hasLyric == true {
                 if let text = try? await API.fetchLyric(track.id) {
-                    lyricLines = parseLRC(text)
+                    lyricLines = parseLyrics(text)
                 }
             }
         }
