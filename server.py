@@ -35,6 +35,7 @@ import socket
 import struct
 import urllib.parse
 import threading
+from html import escape as html_escape
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -56,6 +57,7 @@ DEBUG = os.environ.get("MUSIC_DEBUG", "0") == "1"
 SOCKET_TIMEOUT = 60
 STREAM_SIGN_TTL = 1800                # 签名流 URL 有效期 30 分钟（防链接泄露/盗链）
 SIGN_STRICT = os.environ.get("MUSIC_SIGN_STRICT", "0") == "1"  # 1 时仅接受签名流请求
+PUBLIC_BASE = os.environ.get("MUSIC_PUBLIC_URL", "https://www.dbmt999.asia/music").rstrip("/")
 
 # 流签名密钥：优先环境变量 MUSIC_SIGN_SECRET，否则读取/生成持久化密钥（重启不失效）
 SIGN_SECRET = os.environ.get("MUSIC_SIGN_SECRET", "")
@@ -128,6 +130,9 @@ def db():
     c.execute("DELETE FROM tokens WHERE expires < ?", (time.time(),))
     c.execute("""CREATE TABLE IF NOT EXISTS share_tokens(
         token TEXT PRIMARY KEY, track_id TEXT, created REAL)""")
+    scols = [r[1] for r in c.execute("PRAGMA table_info(share_tokens)")]
+    if "short_code" not in scols:
+        c.execute("ALTER TABLE share_tokens ADD COLUMN short_code TEXT DEFAULT ''")
     c.commit()
     return c
 
@@ -283,6 +288,14 @@ def verify_stream(tid, exp_s, sig):
     if not sig or len(sig) != 32:
         return False
     return hmac.compare_digest(sig, sign_stream(tid, exp))
+
+
+_B62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def gen_short_code(n=8):
+    """生成 n 位 base62 随机短码（汽水风格短链，如 iXbwY55P）。"""
+    return "".join(secrets.choice(_B62) for _ in range(n))
 
 
 # ---------------- 文件安全 ----------------
@@ -486,11 +499,26 @@ class H(BaseHTTPRequestHandler):
         log.error("internal error: %s %s", self.path, e, exc_info=DEBUG)
         self._err(500, "服务器内部错误" if not DEBUG else "internal error: %s" % e)
 
-    def _share_page(self, title, author, tid, cover):
+    def _share_page(self, title, author, tid, cover, short_code=""):
         """分享 H5 页面：深黑灰极简单曲页（封面/歌名/作者 + 播放暂停/进度条）。
-        播放走服务端签名流 URL（隐藏真实流地址），页面不暴露明文音频链接。"""
+        播放走服务端签名流 URL（隐藏真实流地址），页面不暴露明文音频链接。
+        含社交卡片预览（OG 标签，微信/QQ/Telegram 读取）与短链跳转入口。"""
         tid_js = json.dumps(tid, ensure_ascii=False)
         cover_js = json.dumps(cover or "", ensure_ascii=False)
+        og_title = "《%s》@流萤音乐" % (title or "")
+        og_image = ("%s/api/cover/%s" % (PUBLIC_BASE, tid)) if cover else ""
+        og_url = ("https://%s/s/%s/" % (urllib.parse.urlsplit(PUBLIC_BASE).netloc, short_code)) if short_code else ""
+        meta_og = (
+            '<meta property="og:title" content="%s">\n'
+            '<meta property="og:type" content="website">\n'
+            '<meta property="og:site_name" content="流萤音乐">\n'
+            '<meta property="og:description" content="%s - 流萤音乐">\n'
+            '%s'
+            '<meta name="twitter:card" content="summary_large_image">'
+        ) % (html_escape(og_title), html_escape(author or ""),
+             '<meta property="og:image" content="%s">\n' % og_image if og_image else "")
+        if og_url:
+            meta_og += '\n<meta property="og:url" content="%s">' % og_url
         html = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -498,6 +526,7 @@ class H(BaseHTTPRequestHandler):
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0b0d">
 <title>流萤音乐</title>
+""" + meta_og + """
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{background:#0b0b0d;color:#f5f5f5;font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif}
@@ -865,33 +894,57 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 self._json(200, {"sig": sign_stream(tid, exp), "exp": exp})
                 return
 
-            # 分享 token 签发：GET /api/share-url/{id} → {"token"}（一首歌固定 token，链接隐藏歌曲 ID）
+            # 分享 token 签发：GET /api/share-url/{id} → {"token","code"}（一首歌固定，链接隐藏歌曲 ID）
             if u.path.startswith("/api/share-url/"):
                 if not rate_limit(self, "share_url"):
                     self._err(429, "请求过于频繁，请稍后再试")
                     return
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
-                row = c.execute("SELECT token FROM share_tokens WHERE track_id=?", (tid,)).fetchone()
+                row = c.execute("SELECT token, short_code FROM share_tokens WHERE track_id=?", (tid,)).fetchone()
                 if not row:
                     row = c.execute("SELECT 1 FROM tracks WHERE id=?", (tid,)).fetchone()
                     if not row:
                         c.close()
                         self._err(404, "not found")
                         return
-                    for _ in range(3):
+                    for _ in range(5):
                         tok = secrets.token_hex(6)          # 12 位随机，不可反推歌曲 ID
+                        code = gen_short_code()             # 8 位短码（汽水风格短链）
                         try:
-                            c.execute("INSERT INTO share_tokens(token, track_id, created) VALUES(?,?,?)",
-                                      (tok, tid, time.time()))
+                            c.execute("INSERT INTO share_tokens(token, track_id, created, short_code) VALUES(?,?,?,?)",
+                                      (tok, tid, time.time(), code))
                             c.commit()
-                            row = (tok,)
+                            row = (tok, code)
                             break
                         except sqlite3.IntegrityError:
                             continue
-                token = row[0]
+                elif not row[1]:
+                    code = gen_short_code()
+                    c.execute("UPDATE share_tokens SET short_code=? WHERE token=?", (code, row[0]))
+                    c.commit()
+                    row = (row[0], code)
+                token, code = row
                 c.close()
-                self._json(200, {"token": token})
+                self._json(200, {"token": token, "code": code})
+                return
+
+            # 短链：GET /s/{code}/ → 302 跳转落地页（汽水音乐风格，nginx /s/ 反代）
+            if u.path.startswith("/s/"):
+                if not rate_limit(self, "share_url"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                code = u.path.strip("/").rsplit("/", 1)[-1]
+                c = db()
+                row = c.execute("SELECT token FROM share_tokens WHERE short_code=?", (code,)).fetchone()
+                c.close()
+                if not row:
+                    self._err(404, "not found")
+                    return
+                self.send_response(302)
+                self.send_header("Location", "/music/api/share/%s" % row[0])
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
                 return
 
             # 分享 H5 页面：GET /api/share/{token} → 深黑灰极简单曲页（封面/歌名/作者 + 播放暂停/进度条）
@@ -901,12 +954,12 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                     return
                 token = u.path.rsplit("/", 1)[-1]
                 c = db()
-                row = c.execute("SELECT track_id FROM share_tokens WHERE token=?", (token,)).fetchone()
+                row = c.execute("SELECT track_id, short_code FROM share_tokens WHERE token=?", (token,)).fetchone()
                 if not row:
                     c.close()
                     self._err(404, "not found")
                     return
-                tid = row[0]
+                tid, short_code = row
                 tr = c.execute("""SELECT id, title, artist, cover, lrc, user_id,
                                   COALESCE((SELECT name FROM users WHERE id=tracks.user_id), '')
                                   FROM tracks WHERE id=?""", (tid,)).fetchone()
@@ -916,7 +969,7 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                     return
                 _, title, artist, cover, _lrc, _uid, uname = tr
                 author = uname or artist or "未知歌手"
-                page = self._share_page(title, author, tid, cover)
+                page = self._share_page(title, author, tid, cover, short_code)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(page)))

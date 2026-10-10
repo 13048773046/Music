@@ -37,13 +37,14 @@ enum API {
         return streamURL(id)
     }
 
-    /// 隐藏式分享链接：H5 分享页（随机 token，不暴露歌曲 ID 与流地址）；失败返回 nil
+    /// 隐藏式分享短链（汽水风格）：https://域名/s/{8位短码}/ → H5 分享页；失败返回 nil
     static func shareLink(for id: String) async -> String? {
         let url = base.appendingPathComponent("share-url").appendingPathComponent(id)
         if let (data, _) = try? await URLSession.shared.data(from: url),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let token = obj["token"] as? String, !token.isEmpty {
-            return base.appendingPathComponent("share").appendingPathComponent(token).absoluteString
+           let code = obj["code"] as? String, !code.isEmpty,
+           let host = base.host() {
+            return "https://\(host)/s/\(code)/"
         }
         return nil
     }

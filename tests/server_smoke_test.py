@@ -52,6 +52,22 @@ def make_req(base):
     return req
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def req_no_redirect(base, method, path, headers=None):
+    """不跟随重定向的请求（用于验证 302 及其 Location）。"""
+    r = urllib.request.Request(base + path, headers=headers or {}, method=method)
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        resp = opener.open(r, timeout=10)
+        return resp.status, resp.read(), dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
 def multipart(fields, files):
     boundary = "----testboundaryXyZ"
     body = b""
@@ -313,17 +329,24 @@ def run_all(port, root, strict_port, strict_root):
     s, body, _ = req("POST", "/api/register", body, {"Content-Type": ct})
     check("伪图片头像注册 400", s == 400, f"s={s} {body[:100]}")
 
-    print("== 16.5 分享 H5 页面 ==")
+    print("== 16.5 分享 H5 页面（汽水风格短链 + OG 卡片）==")
     s, body, _ = req("GET", f"/api/share-url/{tid}")
     st = json.loads(body)
-    check("share-url 200 返回 token", s == 200 and st.get("token"), body[:100])
+    check("share-url 200 返回 token+code", s == 200 and st.get("token") and st.get("code"), body[:100])
+    check("短码为 8 位 base62", len(st.get("code", "")) == 8 and st["code"].isalnum(), st.get("code"))
     s2, body2, _ = req("GET", f"/api/share-url/{tid}")
-    check("share-url 幂等（同一首歌同 token）", json.loads(body2).get("token") == st.get("token"))
+    st2 = json.loads(body2)
+    check("share-url 幂等（同 token 同 code）", st2.get("token") == st.get("token") and st2.get("code") == st.get("code"))
+    s, body, hdrs = req_no_redirect(BASE, "GET", f"/s/{st['code']}/")
+    check("短链 302 跳转落地页", s == 302 and "/music/api/share/" in hdrs.get("Location", ""), f"s={s} loc={hdrs.get('Location')}")
     s, page, hdrs = req("GET", f"/api/share/{st['token']}")
     html = page.decode("utf-8", "ignore")
     check("share 页面 200 text/html", s == 200 and "text/html" in hdrs.get("Content-Type", ""), f"s={s} ct={hdrs.get('Content-Type')}")
-    check("share 页面含歌名", "测试歌曲" in html, html[:200])
-    check("share 页面含播放器", "playbtn" in html and "stream-url" in html)
+    check("OG 卡片 og:title 为《歌名》@流萤音乐", "og:title" in html and "《测试歌曲》@流萤音乐" in html, html[:300])
+    check("OG 卡片 og:site_name 流萤音乐", 'og:site_name" content="流萤音乐"' in html)
+    check("分享页含播放器", "playbtn" in html and "stream-url" in html)
+    s, body, _ = req("GET", "/s/badcode1/")
+    check("短链无效 code 404", s == 404, f"s={s}")
     s, body, _ = req("GET", "/api/share/bad_token_123")
     check("share 无效 token 404", s == 404, f"s={s}")
 

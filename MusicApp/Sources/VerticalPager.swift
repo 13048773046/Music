@@ -494,14 +494,14 @@ struct PlayerCard: View {
     }
 
     private func share() async {
-        // 分享文案：歌名@流萤音乐 链接（链接为隐藏式 H5 分享页，不暴露歌曲 ID）
+        // 分享文案：《歌名》@流萤音乐 短链（汽水音乐风格，短链跳转 H5 分享页）
         let link = await API.shareLink(for: track.id)
         let updated = await API.reportShare(track.id)
         if updated > 0 { shareCount = updated }   // 接口失败时保留本地计数，不被 0 覆盖
         if let link {
-            shareItem = SharePayload(text: "\(track.title)@流萤音乐 \(link)")
+            shareItem = SharePayload(text: "《\(track.title)》@流萤音乐 \(link)")
         } else {
-            shareItem = SharePayload(text: "\(track.title)@流萤音乐")
+            shareItem = SharePayload(text: "《\(track.title)》@流萤音乐")
         }
     }
 
