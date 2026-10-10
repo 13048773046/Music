@@ -89,11 +89,11 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
 /// 只显示「当前播放的一句 + 下一句」的滚动歌词：
-/// - **整句从左到右平滑填满**：`TimelineView(.animation)` 按屏幕刷新率逐帧驱动填充进度，
+/// - **整句从左到右平滑填满**：`TimelineView(.periodic)` **每 100ms** 驱动一次填充进度，
 ///   填充用**单个 Text + 线性渐变前景**实现——渐变 stops 的边界位置 = 时间进度，
-///   进度每帧直接实时查询 AVPlayer（毫秒级），白色从左到右连续平滑填满整句；
-/// - **滚动与字号同步过渡**：下一句用 `scaleEffect` 呈现约 14pt，**放大进度直接绑定滚动
-///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 18pt，
+///   每次更新直接实时查询 AVPlayer（毫秒级），白色从左到右连续填满整句，开销小不卡；
+/// - **滚动与字号同步过渡**：下一句用 `scaleEffect(0.8)` 呈现 16pt，**放大进度直接绑定滚动
+///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 20pt，
 ///   滚动结束即放大到位，复位后无缝衔接为当前句，无先后之分、无跳变；
 /// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
 ///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
@@ -105,8 +105,8 @@ struct LyricPreview: View {
     let progress: Double
     let tint: Color
 
-    // 固定排版尺寸（字号 18 行高约 22，间距 8）
-    private static let rowHeight: CGFloat = 22
+    // 固定排版尺寸（字号 20 行高约 24，间距 8）
+    private static let rowHeight: CGFloat = 24
     private static let rowGap: CGFloat = 8
     private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
     private static let viewHeight: CGFloat = rowHeight * 2 + rowGap + 4
@@ -116,8 +116,8 @@ struct LyricPreview: View {
     @State private var offsetY: CGFloat = 0
     @State private var isScrolling = false
 
-    /// 播放跟随：**每帧直接实时查询 AVPlayer 当前时间**（毫秒级，非 0.5s 阶梯缓存值），
-    /// 保证填充进度逐帧连续推进 → 整句平滑填满不跳变；拖动 scrub 预览时用外部进度
+    /// 播放跟随：**每 100ms 直接实时查询 AVPlayer 当前时间**（毫秒级，非 0.5s 阶梯缓存值），
+    /// 填充进度按 100ms 推进、开销小不卡；拖动 scrub 预览时用外部进度
     private var displayProgress: Double {
         let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
         let safe = now.isFinite ? now : 0
@@ -161,14 +161,15 @@ struct LyricPreview: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { _ in
+        // 每 100ms 驱动一次（替代逐帧），填充/进度推进开销小、不卡顿
+        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
             GeometryReader { geo in
                 VStack(spacing: Self.rowGap) {
                     ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
-                        // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
+                        // 第 0 行恒为当前句（100ms 整句填充）；第 1 行（下一句）放大进度绑定
                         // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
                         let scale = idx == 0 ? 1.0
-                            : (idx == 1 ? 0.78 + 0.22 * scrollProgress : 0.78)
+                            : (idx == 1 ? 0.8 + 0.2 * scrollProgress : 0.8)
                         LyricRowView(
                             line: line,
                             fillRatio: idx == 0 ? fillRatio : 0,
@@ -210,12 +211,12 @@ struct LyricPreview: View {
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
     let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
-    let scale: Double       // 0.78...1.0：下一句在滚动期间同步放大
+    let scale: Double       // 0.8...1.0：下一句（视觉16pt）在滚动期间同步放大到 20pt
     let tint: Color
 
     /// 底色透明度：随放大同步从 0.4 过渡到 0.5
     private var baseOpacity: Double {
-        let t = (scale - 0.78) / 0.22
+        let t = (scale - 0.8) / 0.2
         return 0.4 + 0.1 * min(max(t, 0), 1)
     }
 
@@ -238,7 +239,7 @@ private struct LyricRowView: View, Equatable {
         HStack(spacing: 0) {
             // Text 按内容宽度布局（渐变横跨文字本身），Spacer 实现整行左对齐
             Text(line.text)
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(fillGradient)
                 .lineLimit(1)
                 .scaleEffect(scale, anchor: .leading)
