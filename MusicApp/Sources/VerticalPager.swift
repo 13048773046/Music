@@ -257,7 +257,7 @@ struct PlayerCard: View {
     @State private var shareCount: Int
     @State private var commentCount: Int
     @State private var showComments = false
-    @State private var shareURL: URL?
+    @State private var shareItem: SharePayload?
     @State private var lyricLines: [KRCLine] = []
     /// 音效选择弹窗
     @State private var showEQ = false
@@ -449,8 +449,8 @@ struct PlayerCard: View {
             CommentSheet(track: track)
                 .environmentObject(auth)
         }
-        .sheet(item: $shareURL) { u in
-            ShareSheet(url: u)
+        .sheet(item: $shareItem) { p in
+            ShareSheet(text: p.text)
         }
         .sheet(isPresented: $showEQ) {
             EQBSheet(selected: $player.selectedEQ)
@@ -494,9 +494,15 @@ struct PlayerCard: View {
     }
 
     private func share() async {
+        // 分享文案：歌名@流萤音乐 链接（链接为隐藏式 H5 分享页，不暴露歌曲 ID）
+        let link = await API.shareLink(for: track.id)
         let updated = await API.reportShare(track.id)
         if updated > 0 { shareCount = updated }   // 接口失败时保留本地计数，不被 0 覆盖
-        shareURL = API.streamURL(track.id)
+        if let link {
+            shareItem = SharePayload(text: "\(track.title)@流萤音乐 \(link)")
+        } else {
+            shareItem = SharePayload(text: "\(track.title)@流萤音乐")
+        }
     }
 
     // MARK: - 背景：封面主色纯色

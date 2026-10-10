@@ -313,6 +313,20 @@ def run_all(port, root, strict_port, strict_root):
     s, body, _ = req("POST", "/api/register", body, {"Content-Type": ct})
     check("伪图片头像注册 400", s == 400, f"s={s} {body[:100]}")
 
+    print("== 16.5 分享 H5 页面 ==")
+    s, body, _ = req("GET", f"/api/share-url/{tid}")
+    st = json.loads(body)
+    check("share-url 200 返回 token", s == 200 and st.get("token"), body[:100])
+    s2, body2, _ = req("GET", f"/api/share-url/{tid}")
+    check("share-url 幂等（同一首歌同 token）", json.loads(body2).get("token") == st.get("token"))
+    s, page, hdrs = req("GET", f"/api/share/{st['token']}")
+    html = page.decode("utf-8", "ignore")
+    check("share 页面 200 text/html", s == 200 and "text/html" in hdrs.get("Content-Type", ""), f"s={s} ct={hdrs.get('Content-Type')}")
+    check("share 页面含歌名", "测试歌曲" in html, html[:200])
+    check("share 页面含播放器", "playbtn" in html and "stream-url" in html)
+    s, body, _ = req("GET", "/api/share/bad_token_123")
+    check("share 无效 token 404", s == 404, f"s={s}")
+
     print("== 17. 限流（登录连续 12 次）==")
     codes = []
     for i in range(12):

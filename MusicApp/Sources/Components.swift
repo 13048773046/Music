@@ -197,14 +197,19 @@ struct TrackRow: View {
     }
 }
 
-/// 系统分享 sheet 桥接
-extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
+/// 系统分享 sheet 桥接（分享文本内容）
 struct ShareSheet: UIViewControllerRepresentable {
-    let url: URL
+    let text: String
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url.absoluteString], applicationActivities: nil)
+        UIActivityViewController(activityItems: [text], applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+/// 分享载荷：歌曲名@流萤音乐 + 隐藏式分享链接
+struct SharePayload: Identifiable {
+    let id = UUID()
+    let text: String
 }
 
 // MARK: - 通用时间格式化

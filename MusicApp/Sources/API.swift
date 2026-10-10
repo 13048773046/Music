@@ -37,6 +37,17 @@ enum API {
         return streamURL(id)
     }
 
+    /// 隐藏式分享链接：H5 分享页（随机 token，不暴露歌曲 ID 与流地址）；失败返回 nil
+    static func shareLink(for id: String) async -> String? {
+        let url = base.appendingPathComponent("share-url").appendingPathComponent(id)
+        if let (data, _) = try? await URLSession.shared.data(from: url),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let token = obj["token"] as? String, !token.isEmpty {
+            return base.appendingPathComponent("share").appendingPathComponent(token).absoluteString
+        }
+        return nil
+    }
+
     // MARK: - 鉴权请求基础设施（Bearer Token + 401 统一处理）
 
     /// 为请求附加当前登录用户的 Bearer Token（旧会话无 token 时不附加，依赖后端兼容模式）

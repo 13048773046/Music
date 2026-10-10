@@ -126,6 +126,8 @@ def db():
         token TEXT PRIMARY KEY, user_id TEXT, created REAL, expires REAL)""")
     # 顺手清理过期 token（每次建连时轻量执行）
     c.execute("DELETE FROM tokens WHERE expires < ?", (time.time(),))
+    c.execute("""CREATE TABLE IF NOT EXISTS share_tokens(
+        token TEXT PRIMARY KEY, track_id TEXT, created REAL)""")
     c.commit()
     return c
 
@@ -251,6 +253,7 @@ RATE_LIMITS = {
     "register":  (5, 60),
     "upload":    (30, 3600),  # 上传 30 次/小时
     "stream":    (300, 60),   # 流请求（含签名签发）300 次/分
+    "share_url": (60, 60),    # 分享 token 签发/分享页 60 次/分
 }
 
 
@@ -482,6 +485,140 @@ class H(BaseHTTPRequestHandler):
     def _internal_error(self, e):
         log.error("internal error: %s %s", self.path, e, exc_info=DEBUG)
         self._err(500, "服务器内部错误" if not DEBUG else "internal error: %s" % e)
+
+    def _share_page(self, title, author, tid, cover):
+        """分享 H5 页面：深黑灰极简单曲页（封面/歌名/作者 + 播放暂停/进度条）。
+        播放走服务端签名流 URL（隐藏真实流地址），页面不暴露明文音频链接。"""
+        tid_js = json.dumps(tid, ensure_ascii=False)
+        cover_js = json.dumps(cover or "", ensure_ascii=False)
+        html = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
+<title>流萤音乐</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{background:#0b0b0d;color:#f5f5f5;font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif}
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+padding:28px calc(28px + env(safe-area-inset-left)) calc(40px + env(safe-area-inset-bottom)) calc(28px + env(safe-area-inset-right))}
+.brand{font-size:12px;letter-spacing:2px;color:#6e6e73;margin-bottom:30px}
+.brand b{color:#f5f5f5;font-weight:600}
+.cover{width:min(70vw,300px);aspect-ratio:1/1;border-radius:16px;background:#17171a;overflow:hidden}
+.cover img{width:100%;height:100%;object-fit:cover;display:block}
+.title{margin-top:26px;font-size:20px;font-weight:700;text-align:center;max-width:82vw;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.artist{margin-top:9px;font-size:14px;color:#8e8e93;text-align:center;max-width:82vw;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.player{margin-top:34px;width:min(80vw,330px)}
+.prow{display:flex;align-items:center;gap:10px}
+.time{font-size:12px;color:#6e6e73;font-variant-numeric:tabular-nums;min-width:36px}
+input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;
+background:linear-gradient(to right,#f5f5f5 var(--p,0%),#2c2c2e var(--p,0%));outline:none;touch-action:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+background:#f5f5f5;border:none}
+.bwrap{display:flex;justify-content:center;margin-top:22px}
+.playbtn{width:64px;height:64px;border-radius:50%;background:#f5f5f5;border:none;cursor:pointer;
+display:flex;align-items:center;justify-content:center;transition:opacity .15s}
+.playbtn:active{opacity:.7}
+.playbtn svg{width:24px;height:24px;fill:#0b0b0d;display:block}
+.err{display:none;margin-top:18px;font-size:13px;color:#ff453a;text-align:center;max-width:80vw}
+</style>
+</head>
+<body>
+<div class="brand">&#9835; <b>流萤音乐</b></div>
+<div class="cover"><img id="cov" alt=""></div>
+<div class="title" id="ttl"></div>
+<div class="artist" id="art"></div>
+<div class="player">
+  <div class="prow">
+    <span class="time" id="cur">0:00</span>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <span class="time" id="dur">-:--</span>
+  </div>
+  <div class="bwrap">
+    <button class="playbtn" id="pb" aria-label="播放">
+      <svg id="pico" viewBox="0 0 24 24"><polygon points="7,4 20,12 7,20"/></svg>
+    </button>
+  </div>
+  <div class="err" id="err"></div>
+</div>
+<script>
+(function(){
+  var TRACK_ID = __TID__;
+  var COVER = __COVER__;
+  var api = location.origin + location.pathname.split('/api/share/')[0] + '/api';
+  var ttl = document.getElementById('ttl'), art = document.getElementById('art');
+  var cov = document.getElementById('cov'), pb = document.getElementById('pb');
+  var pico = document.getElementById('pico'), seek = document.getElementById('seek');
+  var curEl = document.getElementById('cur'), durEl = document.getElementById('dur');
+  var errEl = document.getElementById('err');
+  var audio = new Audio(), playing = false, loaded = false;
+
+  ttl.textContent = __TITLE__;
+  art.textContent = __AUTHOR__;
+  if (COVER) { cov.src = api + '/cover/' + TRACK_ID; }
+  else { cov.remove(); }
+
+  function fmt(s){ s = Math.max(0, Math.floor(s || 0)); var m = Math.floor(s/60); var ss = s%60;
+    return m + ':' + (ss < 10 ? '0' : '') + ss; }
+  function setIcon(play){ pico.innerHTML = play
+    ? '<polygon points="7,4 20,12 7,20"/>'
+    : '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+    pb.setAttribute('aria-label', play ? '播放' : '暂停'); }
+  function showErr(m){ errEl.textContent = m; errEl.style.display = 'block'; }
+  function hideErr(){ errEl.style.display = 'none'; }
+  function paint(){ var d = audio.duration || 0; var c = audio.currentTime || 0;
+    var p = d > 0 ? (c/d*1000) : 0; seek.value = p;
+    seek.style.setProperty('--p', (d > 0 ? c/d*100 : 0) + '%');
+    curEl.textContent = fmt(c); durEl.textContent = d > 0 ? fmt(d) : '-:--'; }
+
+  function loadStream(){
+    return fetch(api + '/stream-url/' + TRACK_ID)
+      .then(function(r){ if(!r.ok){ throw new Error('bad'); } return r.json(); })
+      .then(function(j){ audio.src = api + '/stream/' + TRACK_ID + '?exp=' + j.exp + '&sig=' + j.sig; loaded = true; })
+      .catch(function(){ showErr('加载失败，请稍后重试'); throw new Error('load'); });
+  }
+
+  pb.addEventListener('click', function(){
+    if (playing) { audio.pause(); setIcon(true); playing = false; return; }
+    hideErr();
+    var start = loaded ? Promise.resolve() : loadStream();
+    start.then(function(){ return audio.play(); })
+      .then(function(){ playing = true; setIcon(false); })
+      .catch(function(e){ if (e && e.message !== 'load') { showErr('无法播放，请检查网络后重试'); setIcon(true); playing = false; } });
+  });
+
+  audio.addEventListener('timeupdate', paint);
+  audio.addEventListener('durationchange', paint);
+  audio.addEventListener('loadedmetadata', paint);
+  audio.addEventListener('ended', function(){ setIcon(true); playing = false; paint(); });
+  audio.addEventListener('error', function(){ setIcon(true); playing = false; showErr('播放出错，请重试'); });
+
+  var dragging = false;
+  seek.addEventListener('input', function(){
+    dragging = true;
+    var d = audio.duration || 0;
+    var p = Number(seek.value);
+    seek.style.setProperty('--p', (d > 0 ? p/10 : 0) + '%');
+    curEl.textContent = d > 0 ? fmt(p/1000*d) : fmt(0);
+  });
+  seek.addEventListener('change', function(){
+    var d = audio.duration || 0;
+    if (d > 0) { audio.currentTime = Number(seek.value)/1000*d; }
+    dragging = false; paint();
+  });
+  audio.addEventListener('play', function(){ playing = true; setIcon(false); });
+  audio.addEventListener('pause', function(){ if (dragging) return; playing = false; setIcon(true); });
+})();
+</script>
+</body>
+</html>"""
+        return (html.replace("__TID__", tid_js)
+                    .replace("__COVER__", cover_js)
+                    .replace("__TITLE__", json.dumps(title or "", ensure_ascii=False))
+                    .replace("__AUTHOR__", json.dumps(author or "", ensure_ascii=False))).encode()
 
     def _serve_file(self, fp, cacheable=True):
         size = os.path.getsize(fp)
@@ -726,6 +863,67 @@ class H(BaseHTTPRequestHandler):
                     return
                 exp = int(time.time()) + STREAM_SIGN_TTL
                 self._json(200, {"sig": sign_stream(tid, exp), "exp": exp})
+                return
+
+            # 分享 token 签发：GET /api/share-url/{id} → {"token"}（一首歌固定 token，链接隐藏歌曲 ID）
+            if u.path.startswith("/api/share-url/"):
+                if not rate_limit(self, "share_url"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                tid = u.path.rsplit("/", 1)[-1]
+                c = db()
+                row = c.execute("SELECT token FROM share_tokens WHERE track_id=?", (tid,)).fetchone()
+                if not row:
+                    row = c.execute("SELECT 1 FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        c.close()
+                        self._err(404, "not found")
+                        return
+                    for _ in range(3):
+                        tok = secrets.token_hex(6)          # 12 位随机，不可反推歌曲 ID
+                        try:
+                            c.execute("INSERT INTO share_tokens(token, track_id, created) VALUES(?,?,?)",
+                                      (tok, tid, time.time()))
+                            c.commit()
+                            row = (tok,)
+                            break
+                        except sqlite3.IntegrityError:
+                            continue
+                token = row[0]
+                c.close()
+                self._json(200, {"token": token})
+                return
+
+            # 分享 H5 页面：GET /api/share/{token} → 深黑灰极简单曲页（封面/歌名/作者 + 播放暂停/进度条）
+            if u.path.startswith("/api/share/"):
+                if not rate_limit(self, "share_url"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                token = u.path.rsplit("/", 1)[-1]
+                c = db()
+                row = c.execute("SELECT track_id FROM share_tokens WHERE token=?", (token,)).fetchone()
+                if not row:
+                    c.close()
+                    self._err(404, "not found")
+                    return
+                tid = row[0]
+                tr = c.execute("""SELECT id, title, artist, cover, lrc, user_id,
+                                  COALESCE((SELECT name FROM users WHERE id=tracks.user_id), '')
+                                  FROM tracks WHERE id=?""", (tid,)).fetchone()
+                c.close()
+                if not tr:
+                    self._err(404, "not found")
+                    return
+                _, title, artist, cover, _lrc, _uid, uname = tr
+                author = uname or artist or "未知歌手"
+                page = self._share_page(title, author, tid, cover)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(page)
                 return
 
             if u.path.startswith("/api/stream/"):
