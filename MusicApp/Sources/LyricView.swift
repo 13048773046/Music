@@ -89,9 +89,9 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
 /// 只显示「当前播放的一句 + 下一句」的滚动歌词：
-/// - **整句从左到右平滑填满**：`TimelineView(.periodic)` **每 100ms** 驱动一次填充进度，
-///   填充用**单个 Text + 线性渐变前景**实现——渐变 stops 的边界位置 = 时间进度，
-///   每次更新直接实时查询 AVPlayer（毫秒级），白色从左到右连续填满整句，开销小不卡；
+/// - **整句从左到右平滑填满**：`TimelineView(.animation)` 按屏幕刷新率**逐帧**驱动填充进度，
+///   填充用**遮罩矩形裁剪**（白色文字纹理只渲染一次，矩形宽度=进度×整句宽，GPU合成伸展），
+///   进度每帧直接实时查询 AVPlayer（毫秒级），高帧率且开销小、流畅不卡；
 /// - **滚动与字号同步过渡**：下一句用 `scaleEffect(0.8)` 呈现 16pt，**放大进度直接绑定滚动
 ///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 20pt，
 ///   滚动结束即放大到位，复位后无缝衔接为当前句，无先后之分、无跳变；
@@ -116,8 +116,8 @@ struct LyricPreview: View {
     @State private var offsetY: CGFloat = 0
     @State private var isScrolling = false
 
-    /// 播放跟随：**每 100ms 直接实时查询 AVPlayer 当前时间**（毫秒级，非 0.5s 阶梯缓存值），
-    /// 填充进度按 100ms 推进、开销小不卡；拖动 scrub 预览时用外部进度
+    /// 播放跟随：**每帧直接实时查询 AVPlayer 当前时间**（毫秒级，非 0.5s 阶梯缓存值），
+    /// 填充进度逐帧连续推进；拖动 scrub 预览时用外部进度
     private var displayProgress: Double {
         let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
         let safe = now.isFinite ? now : 0
@@ -161,12 +161,12 @@ struct LyricPreview: View {
     }
 
     var body: some View {
-        // 每 100ms 驱动一次（替代逐帧），填充/进度推进开销小、不卡顿
-        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+        // 屏幕刷新率逐帧驱动（60/120fps）；填充层为遮罩矩形（文字纹理只渲染一次，只动矩形），帧率高且开销小
+        TimelineView(.animation) { _ in
             GeometryReader { geo in
                 VStack(spacing: Self.rowGap) {
                     ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
-                        // 第 0 行恒为当前句（100ms 整句填充）；第 1 行（下一句）放大进度绑定
+                        // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
                         // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
                         let scale = idx == 0 ? 1.0
                             : (idx == 1 ? 0.8 + 0.2 * scrollProgress : 0.8)
@@ -206,7 +206,7 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 渐变填充 + 滚动同步字号过渡）
+// MARK: - 单行歌词（左对齐 + 遮罩矩形平滑填充 + 滚动同步字号过渡）
 
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
@@ -220,29 +220,26 @@ private struct LyricRowView: View, Equatable {
         return 0.4 + 0.1 * min(max(t, 0), 1)
     }
 
-    /// 填充渐变：左侧白、右侧灰，边界位置 = fillRatio（相对文字宽度，从左到右填满）
-    private var fillGradient: LinearGradient {
-        let r = min(max(fillRatio, 0), 1)
-        return LinearGradient(
-            stops: [
-                .init(color: .white, location: 0),
-                .init(color: .white, location: r),
-                .init(color: tint.opacity(baseOpacity), location: min(r + 0.001, 1)),
-                .init(color: tint.opacity(baseOpacity), location: 1)
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
     var body: some View {
         HStack(spacing: 0) {
-            // Text 按内容宽度布局（渐变横跨文字本身），Spacer 实现整行左对齐
-            Text(line.text)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(fillGradient)
-                .lineLimit(1)
-                .scaleEffect(scale, anchor: .leading)
+            ZStack(alignment: .leading) {
+                // 灰底层：整句未填充部分
+                Text(line.text)
+                    .foregroundColor(tint.opacity(baseOpacity))
+                // 白填充层：文字纹理只渲染一次，遮罩矩形宽度随进度伸展 → 从左到右填满。
+                // 每帧只动矩形（GPU合成），不重绘文字，60fps 流畅不卡
+                Text(line.text)
+                    .foregroundColor(.white)
+                    .mask(alignment: .leading) {
+                        GeometryReader { g in
+                            Rectangle()
+                                .frame(width: g.size.width * fillRatio)
+                        }
+                    }
+            }
+            .font(.system(size: 20, weight: .medium))
+            .lineLimit(1)
+            .scaleEffect(scale, anchor: .leading)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
