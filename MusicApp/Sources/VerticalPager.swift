@@ -255,7 +255,7 @@ struct PlayerCard: View {
                             onLight: onLight
                         ) { Task { await share() } }
                     }
-                    .padding(.horizontal, sidePadding)
+                    .padding(.horizontal, 20)
                     .padding(.top, 14)
 
                     // 底部留白（TabBar 空间，自适应导航栏高度与底部安全区）
@@ -292,12 +292,9 @@ struct PlayerCard: View {
                     .foregroundColor(tint)
                 if let count, count > 0 {
                     Text(count > 99 ? "99+" : "\(count)")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1.5)
-                        .background(Capsule().fill(Color.black.opacity(0.55)))
-                        .offset(x: 9, y: -9)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(tint)
+                        .offset(x: 12, y: -10)
                         .fixedSize()
                 }
             }

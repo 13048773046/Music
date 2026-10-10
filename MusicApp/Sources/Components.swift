@@ -250,12 +250,9 @@ struct TrackRow: View {
                 .foregroundColor(tint)
             if count > 0 {
                 Text(count > 99 ? "99+" : "\(count)")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 3.5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.black.opacity(0.55)))
-                    .offset(x: 7, y: -7)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(tint)
+                    .offset(x: 9, y: -8)
                     .fixedSize()
             }
         }
