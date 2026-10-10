@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 // MARK: - KRC / LRC 歌词模型（毫秒级逐字时间戳）
 
@@ -115,10 +116,12 @@ struct LyricPreview: View {
     @State private var offsetY: CGFloat = 0
     @State private var isScrolling = false
 
-    /// 播放跟随：正常播放用实时播放时间（逐帧精确、丝滑）；拖动 scrub 预览时用外部进度
+    /// 播放跟随：**每帧直接实时查询 AVPlayer 当前时间**（毫秒级，非 0.5s 阶梯缓存值），
+    /// 保证填充进度逐帧连续推进 → 整句平滑填满不跳变；拖动 scrub 预览时用外部进度
     private var displayProgress: Double {
-        let now = PlayerManager.shared.currentTime
-        return abs(progress - now) < 0.6 ? now : progress
+        let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
+        let safe = now.isFinite ? now : 0
+        return abs(progress - safe) < 0.6 ? safe : progress
     }
 
     /// 当前行索引（-1 = 尚未到第一行歌词）
@@ -238,11 +241,11 @@ private struct LyricRowView: View {
             }
             .font(.system(size: 18, weight: .medium))
             .lineLimit(1)
-            // 背景测量一次整句宽度（ZStack 尺寸稳定，仅在内容/尺寸变化时更新）
+            // 背景测量一次整句宽度（ZStack 尺寸稳定；过滤 0 值防个别帧布局抖动把宽度冲成 0）
             .background(GeometryReader { geo in
                 Color.clear
-                    .onAppear { textWidth = geo.size.width }
-                    .onChange(of: geo.size.width) { textWidth = $0 }
+                    .onAppear { if geo.size.width > 0 { textWidth = geo.size.width } }
+                    .onChange(of: geo.size.width) { w in if w > 0 { textWidth = w } }
             })
             .scaleEffect(scale, anchor: .leading)
             Spacer(minLength: 0)

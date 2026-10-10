@@ -59,7 +59,7 @@ final class PlayerManager: NSObject, ObservableObject {
         setupInterruptionHandling()
 
         timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(value: 1, timescale: 2),
+            forInterval: CMTime(value: 1, timescale: 10),   // 0.1s：进度条等 UI 平滑（歌词另有逐帧实时源）
             queue: .main
         ) { [weak self] time in
             guard let self = self else { return }
