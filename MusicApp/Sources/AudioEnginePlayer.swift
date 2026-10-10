@@ -197,9 +197,9 @@ final class AudioEnginePlayer {
             startingFrame: frame,
             frameCount: AVAudioFrameCount(framesToPlay),
             at: nil
-        ) { [weak self] _ in
-            guard let self = self, self.isPlaying else { return }
-            DispatchQueue.main.async {
+        ) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.isPlaying else { return }
                 self.onCompletion?()
             }
         }
@@ -273,7 +273,7 @@ final class AudioEnginePlayer {
             return pausedFrame
         }
         guard let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
-              playerTime.isPlaying else {
+              playerTime.isSampleTimeValid else {
             return pausedFrame
         }
         return startedFrame + playerTime.sampleTime
