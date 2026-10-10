@@ -98,7 +98,8 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 /// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
 ///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
 ///
-/// 性能：行视图 Equatable 局部刷新（仅填充行随进度重绘）；二分定位当前行（O(log n)）。
+/// 性能：行视图 Equatable 局部刷新（仅填充行随进度重绘）；二分定位当前行（O(log n)）；
+/// 每帧仅一次 AVPlayer 时间查询；行内容 drawingGroup 预合成纹理，滚动缩放走 GPU 变换。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
@@ -127,10 +128,11 @@ struct LyricPreview: View {
     /// 当前行索引（-1 = 尚未到第一行歌词）
     private var currentIndex: Int {
         guard !lines.isEmpty else { return -1 }
+        let p = displayProgress
         var lo = 0, hi = lines.count
         while lo < hi {
             let mid = (lo + hi) / 2
-            if lines[mid].start <= displayProgress { lo = mid + 1 } else { hi = mid }
+            if lines[mid].start <= p { lo = mid + 1 } else { hi = mid }
         }
         return lo - 1
     }
@@ -146,12 +148,12 @@ struct LyricPreview: View {
     }
 
     /// 当前句（第一行）的整句填充进度 0...1：按整句时间线性推进，从左到右平滑填满
-    private var fillRatio: Double {
+    private func fillRatio(at p: Double) -> Double {
         guard anchor < lines.count else { return 0 }
         let line = lines[anchor]
         let span = line.end - line.start
         guard span > 0 else { return 0 }
-        return min(max((displayProgress - line.start) / span, 0), 1)
+        return min(max((p - line.start) / span, 0), 1)
     }
 
     /// 滚动进度 0...1（滚动动画期间随 offsetY 逐帧插值，同步驱动下一句放大）
@@ -161,26 +163,26 @@ struct LyricPreview: View {
     }
 
     var body: some View {
-        // 屏幕刷新率逐帧驱动（60/120fps）；填充层为遮罩矩形（文字纹理只渲染一次，只动矩形），帧率高且开销小
+        // 屏幕刷新率逐帧驱动（60/120fps）；填充层为遮罩矩形（文字纹理只渲染一次，只动矩形），
+        // 帧率高且开销小。每帧只查一次 AVPlayer 时间，复用给当前行定位与填充进度。
         TimelineView(.animation) { _ in
-            GeometryReader { geo in
-                VStack(spacing: Self.rowGap) {
-                    ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
-                        // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
-                        // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
-                        let scale = idx == 0 ? 1.0
-                            : (idx == 1 ? 0.8 + 0.2 * scrollProgress : 0.8)
-                        LyricRowView(
-                            line: line,
-                            fillRatio: idx == 0 ? fillRatio : 0,
-                            scale: scale,
-                            tint: tint
-                        )
-                    }
+            let p = displayProgress
+            VStack(spacing: Self.rowGap) {
+                ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
+                    // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
+                    // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
+                    let scale = idx == 0 ? 1.0
+                        : (idx == 1 ? 0.8 + 0.2 * scrollProgress : 0.8)
+                    LyricRowView(
+                        line: line,
+                        fillRatio: idx == 0 ? fillRatio(at: p) : 0,
+                        scale: scale,
+                        tint: tint
+                    )
                 }
-                .offset(y: offsetY)
-                .frame(width: geo.size.width, alignment: .leading)
             }
+            .offset(y: offsetY)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: Self.viewHeight)
         .clipped()
@@ -239,9 +241,12 @@ private struct LyricRowView: View, Equatable {
             }
             .font(.system(size: 20, weight: .medium))
             .lineLimit(1)
-            .scaleEffect(scale, anchor: .leading)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // 行内容（含当前填充状态）合成一次离屏纹理；滚动放大的 scaleEffect 变换走 GPU，
+        // 避免动画期间每帧重新栅格化文字 → 切句滚动/放大更顺滑
+        .drawingGroup()
+        .scaleEffect(scale, anchor: .leading)
     }
 }
