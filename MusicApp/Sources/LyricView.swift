@@ -88,15 +88,16 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
 /// 只显示「当前播放的一句 + 下一句」的滚动歌词：
-/// - **丝滑填充**：`TimelineView(.animation)` 按屏幕刷新率（60/120fps）逐帧驱动填充进度，
-///   遮罩宽度每帧推进，白色从左到右平滑填满整句，无定时器跳变；
-/// - **字号过渡**：当前句 18pt，下一句用 `scaleEffect(0.78)` 呈现为约 14pt 视觉大小
-///   （布局行高保持统一，滚动步长固定）；下一句滚到当前句位置时 0.3s 平滑放大，无跳变；
+/// - **丝滑填充（无闪烁）**：`TimelineView(.animation)` 按屏幕刷新率逐帧驱动填充进度，
+///   填充用**单个 Text + 线性渐变前景**实现——渐变 stops 的边界位置 = 时间进度，
+///   纯颜色渲染、无 mask/GeometryReader 布局依赖，逐帧更新也不会闪；
+/// - **滚动与字号同步过渡**：下一句用 `scaleEffect` 呈现约 14pt，**放大进度直接绑定滚动
+///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 18pt，
+///   滚动结束即放大到位，复位后无缝衔接为当前句，无先后之分、无跳变；
 /// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
-///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，
-///   下一句→当前句时同一视图实例保留，字号过渡动画自然触发。
+///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
 ///
-/// 性能：行视图 Equatable 局部刷新（仅第一行随填充进度重绘）；二分定位当前行（O(log n)）。
+/// 性能：行视图 Equatable 局部刷新（仅填充行/放大行随进度重绘）；二分定位当前行（O(log n)）。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
@@ -150,15 +151,25 @@ struct LyricPreview: View {
         return min(max((displayProgress - line.start) / span, 0), 1)
     }
 
+    /// 滚动进度 0...1（滚动动画期间随 offsetY 逐帧插值，同步驱动下一句放大）
+    private var scrollProgress: Double {
+        guard Self.step > 0 else { return 0 }
+        return min(Double(-offsetY / Self.step), 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { _ in
             GeometryReader { geo in
                 VStack(spacing: Self.rowGap) {
                     ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
+                        // 第 0 行恒为当前句；第 1 行（下一句）放大进度绑定滚动进度 → 滚动与放大同步；
+                        // 第 2 行（再下一句）恒为小字
+                        let scale = idx == 0 ? 1.0
+                            : (idx == 1 ? 0.78 + 0.22 * scrollProgress : 0.78)
                         LyricRowView(
                             line: line,
                             fillRatio: idx == 0 ? fillRatio : 0,
-                            isCurrent: idx == 0,
+                            scale: scale,
                             tint: tint
                         )
                     }
@@ -174,7 +185,7 @@ struct LyricPreview: View {
         }
     }
 
-    /// 切句滚动：先整体上滑一个行块，动画结束后换内容并复位（连续无跳变）
+    /// 切句滚动：整体上滑一个行块；位移逐帧插值时下一句同步放大（见 scrollProgress）
     private func scrollIfNeeded(to newIdx: Int) {
         let target = newIdx < 0 ? 0 : newIdx
         guard target != anchor, !isScrolling, !lines.isEmpty else { return }
@@ -182,7 +193,7 @@ struct LyricPreview: View {
         withAnimation(.easeInOut(duration: 0.25)) {
             offsetY = -Self.step
         }
-        // 动画结束后换内容 + 无动画复位（结束帧与复位帧视口内容一致）
+        // 动画结束后换内容 + 无动画复位（结束帧与复位帧视口内容一致；此时下一句已放大到位）
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.27) {
             anchor = target
             offsetY = 0
@@ -191,36 +202,45 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 平滑填充 + 当前/下一句字号过渡）
+// MARK: - 单行歌词（左对齐 + 渐变填充 + 滚动同步字号过渡）
 
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
     let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
-    let isCurrent: Bool     // 是否当前句（决定字号与底色调）
+    let scale: Double       // 0.78...1.0：下一句在滚动期间同步放大
     let tint: Color
 
+    /// 底色透明度：随放大同步从 0.4 过渡到 0.5
+    private var baseOpacity: Double {
+        let t = (scale - 0.78) / 0.22
+        return 0.4 + 0.1 * min(max(t, 0), 1)
+    }
+
+    /// 填充渐变：左侧白、右侧灰，边界位置 = fillRatio（相对文字宽度，从左到右填满）
+    private var fillGradient: LinearGradient {
+        let r = min(max(fillRatio, 0), 1)
+        return LinearGradient(
+            stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: r),
+                .init(color: tint.opacity(baseOpacity), location: min(r + 0.001, 1)),
+                .init(color: tint.opacity(baseOpacity), location: 1)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
     var body: some View {
-        ZStack(alignment: .leading) {
-            // 底色：整句灰色（未填充部分）
+        HStack(spacing: 0) {
+            // Text 按内容宽度布局（渐变横跨文字本身），Spacer 实现整行左对齐
             Text(line.text)
-                .foregroundColor(tint.opacity(isCurrent ? 0.5 : 0.4))
-            // 填充层：白色，遮罩宽度随时间从左向右推进 → 平滑填满效果
-            Text(line.text)
-                .foregroundColor(.white)
-                .mask(alignment: .leading) {
-                    GeometryReader { geo in
-                        Rectangle()
-                            .fill(Color.white)
-                            .frame(width: geo.size.width * fillRatio)
-                    }
-                }
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(fillGradient)
+                .lineLimit(1)
+                .scaleEffect(scale, anchor: .leading)
+            Spacer(minLength: 0)
         }
-        .font(.system(size: 18, weight: .medium))
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
-        // 字号过渡：下一句视觉约 14pt，滚到当前句位置后 0.3s 平滑放大到 18pt
-        // （scaleEffect 不改变布局行高，滚动步长保持稳定）
-        .scaleEffect(isCurrent ? 1.0 : 0.78, anchor: .leading)
-        .animation(.easeInOut(duration: 0.3), value: isCurrent)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
