@@ -105,13 +105,24 @@ struct MainTabView: View {
                         }
                 }
             }
-            // 左边缘右滑打开侧边栏（全局手势）
+            // 全局手势：首页任意位置向右大幅滑打开侧边栏；展开后向左大幅滑关闭
             .gesture(
-                DragGesture(minimumDistance: 20)
+                DragGesture(minimumDistance: 30)
                     .onEnded { v in
-                        guard !player.sidebarOpen else { return }
-                        if v.startLocation.x < 25 && v.translation.width > 60 {
-                            withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
+                        // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑
+                        let dx = v.translation.width
+                        let dy = v.translation.height
+                        guard abs(dx) > abs(dy) * 1.5 else { return }
+                        if player.sidebarOpen {
+                            // 展开状态：向左大幅滑（dx < -80）关闭
+                            if dx < -80 {
+                                withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
+                            }
+                        } else {
+                            // 收起状态：向右大幅滑（dx > 100）打开，不限制起始位置
+                            if dx > 100 {
+                                withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
+                            }
                         }
                     }
             )
@@ -138,8 +149,8 @@ struct GlobalTopBar: View {
                 withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "music.note")
-                        .font(.system(size: 15, weight: .bold))
+                    Image(systemName: "line.horizontal.3")
+                        .font(.system(size: 20, weight: .bold))
                         .foregroundColor(textPrimary.opacity(0.9))
                     Text("流萤音乐")
                         .font(.system(size: 17, weight: .bold))
