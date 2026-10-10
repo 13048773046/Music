@@ -142,15 +142,6 @@ struct LyricPreview: View {
         return out
     }
 
-    /// 第一行（当前句）的填充进度 0...1：按整句时间线性推进，从左到右平滑填满
-    private var fillRatio: Double {
-        guard anchor < lines.count else { return 0 }
-        let line = lines[anchor]
-        let span = line.end - line.start
-        guard span > 0 else { return 0 }
-        return min(max((displayProgress - line.start) / span, 0), 1)
-    }
-
     /// 滚动进度 0...1（滚动动画期间随 offsetY 逐帧插值，同步驱动下一句放大）
     private var scrollProgress: Double {
         guard Self.step > 0 else { return 0 }
@@ -162,13 +153,14 @@ struct LyricPreview: View {
             GeometryReader { geo in
                 VStack(spacing: Self.rowGap) {
                     ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
-                        // 第 0 行恒为当前句；第 1 行（下一句）放大进度绑定滚动进度 → 滚动与放大同步；
-                        // 第 2 行（再下一句）恒为小字
+                        // 第 0 行恒为当前句（传实时进度 → 逐字平滑填充）；
+                        // 第 1 行（下一句）放大进度绑定滚动进度 → 滚动与放大同步，传 -1 恒为灰；
+                        // 第 2 行（再下一句）恒为小字灰
                         let scale = idx == 0 ? 1.0
                             : (idx == 1 ? 0.78 + 0.22 * scrollProgress : 0.78)
                         LyricRowView(
                             line: line,
-                            fillRatio: idx == 0 ? fillRatio : 0,
+                            progress: idx == 0 ? displayProgress : -1,
                             scale: scale,
                             tint: tint
                         )
@@ -202,12 +194,17 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 渐变填充 + 滚动同步字号过渡）
+// MARK: - 单行歌词（左对齐 + 逐字平滑填充 + 滚动同步字号过渡）
 
+/// 逐字卡拉OK填充：每个字在其 KRC 时间区间 [start, end) 内从灰色**平滑渐变**到白色，
+/// 字唱完变白后下一个字开始平滑变白，以此类推、无缝衔接。
+/// 进度由 TimelineView 逐帧传入，每帧颜色微变 → 60fps 连续渐变，无闪烁、无跳变。
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    let fillRatio: Double   // 0...1：整句填充进度（非当前行恒为 0）
-    let scale: Double       // 0.78...1.0：下一句在滚动期间同步放大
+    /// 当前播放进度（秒）；非当前行传 -1 → 整行恒为灰色（未唱状态）
+    let progress: Double
+    /// 0.78...1.0：下一句在滚动期间同步放大
+    let scale: Double
     let tint: Color
 
     /// 底色透明度：随放大同步从 0.4 过渡到 0.5
@@ -216,31 +213,43 @@ private struct LyricRowView: View, Equatable {
         return 0.4 + 0.1 * min(max(t, 0), 1)
     }
 
-    /// 填充渐变：左侧白、右侧灰，边界位置 = fillRatio（相对文字宽度，从左到右填满）
-    private var fillGradient: LinearGradient {
-        let r = min(max(fillRatio, 0), 1)
-        return LinearGradient(
-            stops: [
-                .init(color: .white, location: 0),
-                .init(color: .white, location: r),
-                .init(color: tint.opacity(baseOpacity), location: min(r + 0.001, 1)),
-                .init(color: tint.opacity(baseOpacity), location: 1)
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
     var body: some View {
         HStack(spacing: 0) {
-            // Text 按内容宽度布局（渐变横跨文字本身），Spacer 实现整行左对齐
-            Text(line.text)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(fillGradient)
-                .lineLimit(1)
-                .scaleEffect(scale, anchor: .leading)
-            Spacer(minLength: 0)
+            ForEach(line.words.indices, id: \.self) { i in
+                Text(line.words[i].text)
+                    .foregroundColor(wordColor(line.words[i]))
+            }
         }
+        .font(.system(size: 18, weight: .medium))
+        .lineLimit(1)
+        .scaleEffect(scale, anchor: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 单个字的颜色：未唱=灰 / 正唱=灰→白按字内时间平滑渐变 / 已唱=白
+    private func wordColor(_ w: KRWord) -> Color {
+        if progress < w.start {
+            return tint.opacity(baseOpacity)          // 未唱：灰
+        }
+        if progress >= w.end {
+            return .white                             // 已唱：白
+        }
+        // 正唱：字内时间占比 0→1，颜色从灰平滑渐变到白
+        let t = (progress - w.start) / max(w.end - w.start, 0.001)
+        return lerpColor(tint.opacity(baseOpacity), .white, min(max(t, 0), 1))
+    }
+
+    /// 颜色线性插值（UIColor 分量），用于逐字平滑填充
+    private func lerpColor(_ a: Color, _ b: Color, _ t: Double) -> Color {
+        let ua = UIColor(a), ub = UIColor(b)
+        var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
+        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+        ua.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
+        ub.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+        let k = CGFloat(min(max(t, 0), 1))
+        return Color(UIColor(red: ar + (br - ar) * k,
+                             green: ag + (bg - ag) * k,
+                             blue: ab + (bb - ab) * k,
+                             alpha: aa + (ba - aa) * k))
     }
 }
