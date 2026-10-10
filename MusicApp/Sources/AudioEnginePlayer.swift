@@ -46,6 +46,7 @@ final class AudioEnginePlayer {
     private var startedFrame: AVAudioFramePosition = 0
     private var pausedFrame: AVAudioFramePosition = 0
     private var isConfigured = false
+    private var progressTimer: Timer?
 
     /// 进度回调（每秒约 10 次）
     var onProgress: ((Double, Double) -> Void)?   // (currentSeconds, durationSeconds)
@@ -210,6 +211,7 @@ final class AudioEnginePlayer {
         guard !isPlaying else { return }
         playerNode.play()
         isPlaying = true
+        startTimer()
     }
 
     func pause() {
@@ -217,15 +219,30 @@ final class AudioEnginePlayer {
         pausedFrame = currentFrame()
         playerNode.pause()
         isPlaying = false
+        stopTimer()
     }
 
     func stop() {
         playerNode.stop()
         isPlaying = false
         pausedFrame = 0
+        stopTimer()
         if engine.isRunning {
             engine.pause()
         }
+    }
+
+    private func startTimer() {
+        stopTimer()
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.onProgress?(self.currentSeconds(), self.durationSeconds())
+        }
+    }
+
+    private func stopTimer() {
+        progressTimer?.invalidate()
+        progressTimer = nil
     }
 
     func seek(toSeconds seconds: Double) {
