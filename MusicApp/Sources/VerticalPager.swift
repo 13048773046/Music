@@ -69,6 +69,7 @@ struct VerticalPager: UIViewControllerRepresentable {
                     rootView: PlayerCard(track: track, index: index, total: total,
                                          topInset: top, bottomInset: bottom)
                         .environmentObject(PlayerManager.shared)
+                        .environmentObject(AuthManager.shared)
                 )
                 // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
                 hosting.view.backgroundColor = .clear
@@ -130,6 +131,7 @@ struct VerticalPager: UIViewControllerRepresentable {
 
 struct PlayerCard: View {
     @EnvironmentObject private var player: PlayerManager
+    @EnvironmentObject private var auth: AuthManager
     let track: Track
     let index: Int
     let total: Int
@@ -141,6 +143,24 @@ struct PlayerCard: View {
     @State private var bgColor: Color?
     /// 进度条拖动中的预览位置（nil = 跟随真实播放进度，松手才 seek）
     @State private var scrubFraction: Double? = nil
+    /// 互动状态（按歌曲独立，切回页面保留）
+    @State private var liked: Bool
+    @State private var likeCount: Int
+    @State private var shareCount: Int
+    @State private var showComments = false
+    @State private var shareURL: URL?
+
+    init(track: Track, index: Int, total: Int,
+         topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
+        self.track = track
+        self.index = index
+        self.total = total
+        self.topInset = topInset
+        self.bottomInset = bottomInset
+        _liked = State(initialValue: track.isLiked ?? false)
+        _likeCount = State(initialValue: track.likeCount ?? 0)
+        _shareCount = State(initialValue: track.shareCount ?? 0)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -212,6 +232,32 @@ struct PlayerCard: View {
                     }
                     .padding(.horizontal, sidePadding)
 
+                    // 互动操作行：点赞 / 评论 / 分享（纯图标+计数，无阴影渐变，跟随页面深浅色）
+                    HStack(spacing: 0) {
+                        actionButton(
+                            icon: liked ? "heart.fill" : "heart",
+                            tint: liked ? .red : textPrimary(onLight: onLight),
+                            caption: likeCount > 0 ? "\(likeCount)" : "点赞",
+                            onLight: onLight
+                        ) { Task { await toggleLike() } }
+                        Spacer()
+                        actionButton(
+                            icon: "bubble.right",
+                            tint: textPrimary(onLight: onLight),
+                            caption: "评论",
+                            onLight: onLight
+                        ) { showComments = true }
+                        Spacer()
+                        actionButton(
+                            icon: "square.and.arrow.up",
+                            tint: textPrimary(onLight: onLight),
+                            caption: shareCount > 0 ? "\(shareCount)" : "分享",
+                            onLight: onLight
+                        ) { Task { await share() } }
+                    }
+                    .padding(.horizontal, sidePadding + 16)
+                    .padding(.top, 14)
+
                     // 底部留白（TabBar 空间，自适应导航栏高度与底部安全区）
                     Spacer(minLength: tabBarSpace)
                 }
@@ -225,6 +271,47 @@ struct PlayerCard: View {
         }
         .animation(.easeInOut(duration: 0.35), value: bgColor)
         .id(track.id)
+        .sheet(isPresented: $showComments) {
+            CommentSheet(track: track)
+                .environmentObject(auth)
+        }
+        .sheet(item: $shareURL) { u in
+            ShareSheet(url: u)
+        }
+    }
+
+    // MARK: - 互动按钮（点赞 / 评论 / 分享）
+
+    private func actionButton(icon: String, tint: Color, caption: String,
+                              onLight: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(tint)
+                Text(caption)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(textSecondary(onLight: onLight))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggleLike() async {
+        guard let uid = auth.currentUser?.id else { return }
+        do {
+            let r = try await API.toggleLike(trackId: track.id, userId: uid)
+            liked = r.liked
+            likeCount = r.count
+        } catch {}
+    }
+
+    private func share() async {
+        let updated = await API.reportShare(track.id)
+        if updated > 0 { shareCount = updated }   // 接口失败时保留本地计数，不被 0 覆盖
+        shareURL = API.streamURL(track.id)
     }
 
     // MARK: - 背景：封面主色纯色

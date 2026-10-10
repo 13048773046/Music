@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""音乐后端：上传 / 列表 / 流式播放 / 音频时长解析。
+"""音乐后端：上传 / 列表 / 流式播放 / 音频时长解析 / 用户注册登录。
 纯标准库，监听 127.0.0.1:8788。兼容原 tracks.db 表结构。"""
-import os, json, sqlite3, time, uuid, mimetypes, urllib.parse, struct
+import os, json, sqlite3, time, uuid, hashlib, mimetypes, urllib.parse, struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = "/www/wwwroot/music"
 FILES = os.path.join(ROOT, "files")
 DB = os.path.join(ROOT, "tracks.db")
 PORT = 8788
-MAX_UPLOAD = 100 * 1024 * 1024  # 100MB
+MAX_UPLOAD = 100 * 1024 * 1024
 
 os.makedirs(FILES, exist_ok=True)
 
@@ -22,8 +22,82 @@ def db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(tracks)")]
     if "cover" not in cols:
         c.execute("ALTER TABLE tracks ADD COLUMN cover TEXT DEFAULT ''")
-        c.commit()
+    c.execute("""CREATE TABLE IF NOT EXISTS users(
+        id TEXT PRIMARY KEY, account TEXT UNIQUE, password_hash TEXT,
+        name TEXT, avatar TEXT, created REAL)""")
+    # 资料字段迁移（老库平滑加列）
+    ucols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
+    for _col, _ddl in [("gender", "TEXT DEFAULT ''"),
+                       ("age", "INTEGER DEFAULT 0"),
+                       ("background_image", "TEXT DEFAULT ''"),
+                       ("signature", "TEXT DEFAULT ''"),
+                       ("ip_address", "TEXT DEFAULT ''")]:
+        if _col not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN %s %s" % (_col, _ddl))
+    # 歌曲互动字段迁移
+    tcols = [r[1] for r in c.execute("PRAGMA table_info(tracks)")]
+    for _col, _ddl in [("user_id", "TEXT DEFAULT ''"),
+                       ("play_count", "INTEGER DEFAULT 0"),
+                       ("like_count", "INTEGER DEFAULT 0"),
+                       ("share_count", "INTEGER DEFAULT 0")]:
+        if _col not in tcols:
+            c.execute("ALTER TABLE tracks ADD COLUMN %s %s" % (_col, _ddl))
+    c.execute("""CREATE TABLE IF NOT EXISTS likes(
+        user_id TEXT, track_id TEXT, created REAL,
+        PRIMARY KEY(user_id, track_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS comments(
+        id TEXT PRIMARY KEY, track_id TEXT, user_id TEXT,
+        user_name TEXT, content TEXT, created REAL)""")
+    c.commit()
     return c
+
+
+def client_ip(handler):
+    """经 nginx 反代，优先取 X-Forwarded-For 第一段，其次 X-Real-IP。"""
+    xff = handler.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    xri = handler.headers.get("X-Real-IP", "")
+    if xri:
+        return xri.strip()
+    return handler.client_address[0] if handler.client_address else ""
+
+
+def public_user(row):
+    """users 行 → 对外资料 JSON（不含密码哈希）。
+    row 顺序: id,account,password_hash,name,avatar,created,
+              gender,age,background_image,signature,ip_address"""
+    return {
+        "id": row[0],
+        "account": row[1],
+        "name": row[3] or "",
+        "avatar": row[4] or "",
+        "created": row[5] or 0,
+        "gender": row[6] or "",
+        "age": row[7] or 0,
+        "background": row[8] or "",
+        "signature": row[9] or "",
+        "ip": row[10] or "",
+    }
+
+
+# ---------- 密码哈希（pbkdf2，纯标准库） ----------
+
+def hash_password(pw):
+    salt = os.urandom(16).hex()
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"),
+                            bytes.fromhex(salt), 120000).hex()
+    return salt + "$" + h
+
+
+def verify_password(pw, stored):
+    try:
+        salt, h = stored.split("$", 1)
+        test = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"),
+                                   bytes.fromhex(salt), 120000).hex()
+        return h == test
+    except Exception:
+        return False
 
 
 # ---------- 音频时长解析（纯标准库） ----------
@@ -147,6 +221,27 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_file(self, fp, cacheable=True):
+        size = os.path.getsize(fp)
+        ctype = mimetypes.guess_type(fp)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        if cacheable:
+            self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        # 客户端断开（切歌/锁屏暂停）时静默结束，不刷 BrokenPipeError 日志
+        try:
+            with open(fp, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -162,11 +257,18 @@ class H(BaseHTTPRequestHandler):
             return
         if u.path == "/api/tracks":
             c = db()
-            rows = c.execute("SELECT id,title,artist,album,cover,fname,size,dur,created FROM tracks ORDER BY created DESC").fetchall()
+            rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                                t.play_count,t.like_count,t.share_count,t.user_id,
+                                COALESCE(u.name,'') FROM tracks t
+                                LEFT JOIN users u ON u.id=t.user_id
+                                ORDER BY t.created DESC""").fetchall()
             c.close()
             self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
                               "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
-                              "durText": _fmt_dur(r[7]), "created": r[8]} for r in rows])
+                              "durText": _fmt_dur(r[7]), "created": r[8],
+                              "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                              "shareCount": r[11] or 0,
+                              "userId": r[12] or "", "userName": r[13] or ""} for r in rows])
             return
         if u.path.startswith("/api/cover/"):
             tid = u.path.rsplit("/", 1)[-1]
@@ -180,20 +282,45 @@ class H(BaseHTTPRequestHandler):
             if not os.path.exists(fp):
                 self._json(404, {"err": "cover missing"})
                 return
-            size = os.path.getsize(fp)
-            ctype = mimetypes.guess_type(fp)[0] or "image/jpeg"
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            with open(fp, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+            self._serve_file(fp)
+            return
+        if u.path.startswith("/api/avatar/"):
+            uid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            row = c.execute("SELECT avatar FROM users WHERE id=?", (uid,)).fetchone()
+            c.close()
+            if not row or not row[0]:
+                self._json(404, {"err": "no avatar"})
+                return
+            fp = os.path.join(FILES, row[0])
+            if not os.path.exists(fp):
+                self._json(404, {"err": "avatar missing"})
+                return
+            self._serve_file(fp)
+            return
+        if u.path.startswith("/api/background/"):
+            uid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            row = c.execute("SELECT background_image FROM users WHERE id=?", (uid,)).fetchone()
+            c.close()
+            if not row or not row[0]:
+                self._json(404, {"err": "no background"})
+                return
+            fp = os.path.join(FILES, row[0])
+            if not os.path.exists(fp):
+                self._json(404, {"err": "background missing"})
+                return
+            self._serve_file(fp)
+            return
+        if u.path.startswith("/api/comments/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            rows = c.execute("""SELECT id,user_id,user_name,content,created
+                                FROM comments WHERE track_id=? ORDER BY created DESC LIMIT 200""",
+                             (tid,)).fetchall()
+            c.close()
+            self._json(200, [{"id": r[0], "userId": r[1], "userName": r[2],
+                              "content": r[3], "created": r[4]} for r in rows])
             return
         if u.path.startswith("/api/stream/"):
             tid = u.path.rsplit("/", 1)[-1]
@@ -225,15 +352,18 @@ class H(BaseHTTPRequestHandler):
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                with open(fp, "rb") as f:
-                    f.seek(start)
-                    remain = end - start + 1
-                    while remain > 0:
-                        chunk = f.read(min(65536, remain))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        remain -= len(chunk)
+                try:
+                    with open(fp, "rb") as f:
+                        f.seek(start)
+                        remain = end - start + 1
+                        while remain > 0:
+                            chunk = f.read(min(65536, remain))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remain -= len(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             else:
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
@@ -241,49 +371,314 @@ class H(BaseHTTPRequestHandler):
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                with open(fp, "rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
+                try:
+                    with open(fp, "rb") as f:
+                        while True:
+                            chunk = f.read(65536)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             return
         self._json(404, {"err": "unknown"})
 
+    def _parse_multipart(self, length):
+        ctype = self.headers.get("Content-Type", "")
+        if not ctype.startswith("multipart/form-data"):
+            return None, None
+        boundary = ctype.split("boundary=")[-1].encode()
+        data = self.rfile.read(length)
+        parts = data.split(b"--" + boundary)
+        fields, files = {}, {}
+        for p in parts:
+            if b"Content-Disposition" not in p:
+                continue
+            head, _, body = p.partition(b"\r\n\r\n")
+            head = head.decode("utf-8", "ignore")
+            name = None
+            if 'name="' in head:
+                name = head.split('name="')[1].split('"')[0]
+            fn = None
+            if 'filename="' in head:
+                fn = head.split('filename="')[1].split('"')[0]
+            body = body.rstrip(b"\r\n")
+            # 兼容：旧版客户端 Content-Disposition 后多写了 CRLF，
+            # 导致 Content-Type 头混进文件二进制；剥掉残留头。
+            if fn and body.startswith(b"Content-Type:"):
+                idx = body.find(b"\r\n\r\n")
+                if idx != -1:
+                    body = body[idx + 4:]
+            if fn:
+                files[name] = (fn, body)
+            elif name:
+                fields[name] = body.decode("utf-8", "ignore")
+        return fields, files
+
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0))
+
+        # ---------- 用户注册 ----------
+        if u.path == "/api/register":
+            try:
+                if length <= 0 or length > 5 * 1024 * 1024:
+                    self._json(413, {"err": "too large"})
+                    return
+                fields, files = self._parse_multipart(length)
+                if fields is None:
+                    self._json(400, {"err": "need multipart"})
+                    return
+                account = (fields.get("account") or "").strip()
+                password = fields.get("password") or ""
+                name = (fields.get("name") or "").strip() or account
+                gender = (fields.get("gender") or "").strip()[:8]
+                signature = (fields.get("signature") or "").strip()[:100]
+                try:
+                    age = int(fields.get("age") or 0)
+                except Exception:
+                    age = 0
+                age = max(0, min(age, 150))
+                if not account or not password:
+                    self._json(400, {"err": "账号和密码不能为空"})
+                    return
+                c = db()
+                dup = c.execute("SELECT 1 FROM users WHERE account=?", (account,)).fetchone()
+                if dup:
+                    c.close()
+                    self._json(409, {"err": "账号已被注册"})
+                    return
+                uid = uuid.uuid4().hex
+                avatar_fname = ""
+                avatar = files.get("avatar")
+                if avatar and avatar[1]:
+                    aext = os.path.splitext(avatar[0])[1].lower()
+                    if aext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                        aext = ".jpg"
+                    avatar_fname = uid + "_avatar" + aext
+                    with open(os.path.join(FILES, avatar_fname), "wb") as f:
+                        f.write(avatar[1])
+                bg_fname = ""
+                bg = files.get("background")
+                if bg and bg[1]:
+                    bext = os.path.splitext(bg[0])[1].lower()
+                    if bext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                        bext = ".jpg"
+                    bg_fname = uid + "_bg" + bext
+                    with open(os.path.join(FILES, bg_fname), "wb") as f:
+                        f.write(bg[1])
+                ip = client_ip(self)
+                c.execute("""INSERT INTO users(id,account,password_hash,name,avatar,created,
+                              gender,age,background_image,signature,ip_address)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                          (uid, account, hash_password(password), name, avatar_fname, time.time(),
+                           gender, age, bg_fname, signature, ip))
+                c.commit()
+                row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
+                                  gender,age,background_image,signature,ip_address
+                                  FROM users WHERE id=?""", (uid,)).fetchone()
+                c.close()
+                self._json(200, public_user(row))
+            except Exception as e:
+                self._json(500, {"err": "internal error: %s" % e})
+            return
+
+        # ---------- 用户登录 ----------
+        if u.path == "/api/login":
+            try:
+                if length <= 0 or length > 64 * 1024:
+                    self._json(413, {"err": "too large"})
+                    return
+                fields, files = self._parse_multipart(length)
+                if fields is None:
+                    self._json(400, {"err": "need multipart"})
+                    return
+                account = (fields.get("account") or "").strip()
+                password = fields.get("password") or ""
+                c = db()
+                row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
+                                 gender,age,background_image,signature,ip_address
+                                 FROM users WHERE account=?""",
+                                (account,)).fetchone()
+                if not row or not verify_password(password, row[2]):
+                    c.close()
+                    self._json(401, {"err": "账号或密码错误"})
+                    return
+                # 每次登录自动更新当前 IP
+                ip = client_ip(self)
+                c.execute("UPDATE users SET ip_address=? WHERE id=?", (ip, row[0]))
+                c.commit()
+                row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
+                                 gender,age,background_image,signature,ip_address
+                                 FROM users WHERE id=?""", (row[0],)).fetchone()
+                c.close()
+                self._json(200, public_user(row))
+            except Exception as e:
+                self._json(500, {"err": "internal error: %s" % e})
+            return
+
+        # ---------- 用户资料更新 ----------
+        if u.path == "/api/profile/update":
+            try:
+                if length <= 0 or length > 8 * 1024 * 1024:
+                    self._json(413, {"err": "too large"})
+                    return
+                fields, files = self._parse_multipart(length)
+                if fields is None:
+                    self._json(400, {"err": "need multipart"})
+                    return
+                account = (fields.get("account") or "").strip()
+                if not account:
+                    self._json(400, {"err": "缺少账号"})
+                    return
+                c = db()
+                row = c.execute("SELECT id FROM users WHERE account=?", (account,)).fetchone()
+                if not row:
+                    c.close()
+                    self._json(404, {"err": "账号不存在"})
+                    return
+                uid = row[0]
+                name = (fields.get("name") or "").strip() or account
+                gender = (fields.get("gender") or "").strip()[:8]
+                signature = (fields.get("signature") or "").strip()[:100]
+                try:
+                    age = int(fields.get("age") or 0)
+                except Exception:
+                    age = 0
+                age = max(0, min(age, 150))
+                # 可选：换头像
+                avatar_fname = None
+                av = files.get("avatar")
+                if av and av[1]:
+                    aext = os.path.splitext(av[0])[1].lower()
+                    if aext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                        aext = ".jpg"
+                    avatar_fname = uid + "_avatar" + aext
+                    with open(os.path.join(FILES, avatar_fname), "wb") as f:
+                        f.write(av[1])
+                # 可选：换背景图
+                bg_fname = None
+                bg = files.get("background")
+                if bg and bg[1]:
+                    bext = os.path.splitext(bg[0])[1].lower()
+                    if bext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                        bext = ".jpg"
+                    bg_fname = uid + "_bg" + bext
+                    with open(os.path.join(FILES, bg_fname), "wb") as f:
+                        f.write(bg[1])
+                if avatar_fname and bg_fname:
+                    c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
+                                 avatar=?,background_image=?,ip_address=? WHERE id=?""",
+                              (name, gender, age, signature, avatar_fname, bg_fname,
+                               client_ip(self), uid))
+                elif avatar_fname:
+                    c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
+                                 avatar=?,ip_address=? WHERE id=?""",
+                              (name, gender, age, signature, avatar_fname,
+                               client_ip(self), uid))
+                elif bg_fname:
+                    c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
+                                 background_image=?,ip_address=? WHERE id=?""",
+                              (name, gender, age, signature, bg_fname,
+                               client_ip(self), uid))
+                else:
+                    c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
+                                 ip_address=? WHERE id=?""",
+                              (name, gender, age, signature, client_ip(self), uid))
+                c.commit()
+                row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
+                                  gender,age,background_image,signature,ip_address
+                                  FROM users WHERE id=?""", (uid,)).fetchone()
+                c.close()
+                self._json(200, public_user(row))
+            except Exception as e:
+                self._json(500, {"err": "internal error: %s" % e})
+            return
+
+        # ---------- 播放量 +1 ----------
+        if u.path.startswith("/api/play/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            c.execute("UPDATE tracks SET play_count=play_count+1 WHERE id=?", (tid,))
+            c.commit()
+            row = c.execute("SELECT play_count FROM tracks WHERE id=?", (tid,)).fetchone()
+            c.close()
+            self._json(200, {"playCount": row[0] if row else 0})
+            return
+
+        # ---------- 点赞 / 取消 ----------
+        if u.path.startswith("/api/like/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except Exception:
+                body = {}
+            uid = (body.get("userId") or "").strip()
+            if not uid:
+                self._json(400, {"err": "need userId"})
+                return
+            c = db()
+            ex = c.execute("SELECT 1 FROM likes WHERE user_id=? AND track_id=?", (uid, tid)).fetchone()
+            if ex:
+                c.execute("DELETE FROM likes WHERE user_id=? AND track_id=?", (uid, tid))
+                c.execute("UPDATE tracks SET like_count=MAX(0,like_count-1) WHERE id=?", (tid,))
+                liked = False
+            else:
+                c.execute("INSERT OR IGNORE INTO likes(user_id,track_id,created) VALUES(?,?,?)",
+                          (uid, tid, time.time()))
+                c.execute("UPDATE tracks SET like_count=like_count+1 WHERE id=?", (tid,))
+                liked = True
+            c.commit()
+            row = c.execute("SELECT like_count FROM tracks WHERE id=?", (tid,)).fetchone()
+            c.close()
+            self._json(200, {"liked": liked, "likeCount": row[0] if row else 0})
+            return
+
+        # ---------- 分享 +1 ----------
+        if u.path.startswith("/api/share/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            c = db()
+            c.execute("UPDATE tracks SET share_count=share_count+1 WHERE id=?", (tid,))
+            c.commit()
+            row = c.execute("SELECT share_count FROM tracks WHERE id=?", (tid,)).fetchone()
+            c.close()
+            self._json(200, {"shareCount": row[0] if row else 0})
+            return
+
+        # ---------- 发表评论 ----------
+        if u.path.startswith("/api/comment/"):
+            tid = u.path.rsplit("/", 1)[-1]
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except Exception:
+                body = {}
+            uid = (body.get("userId") or "").strip()
+            uname = (body.get("userName") or "").strip()[:20]
+            content = (body.get("content") or "").strip()[:200]
+            if not uid or not content:
+                self._json(400, {"err": "need userId and content"})
+                return
+            cid = uuid.uuid4().hex
+            c = db()
+            c.execute("INSERT INTO comments(id,track_id,user_id,user_name,content,created) VALUES(?,?,?,?,?,?)",
+                      (cid, tid, uid, uname, content, time.time()))
+            c.commit()
+            c.close()
+            self._json(200, {"id": cid})
+            return
+
+        # ---------- 歌曲上传 ----------
         if u.path != "/api/upload":
             self._json(404, {"err": "unknown"})
             return
-        ctype = self.headers.get("Content-Type", "")
-        if not ctype.startswith("multipart/form-data"):
-            self._json(400, {"err": "need multipart"})
-            return
         try:
-            boundary = ctype.split("boundary=")[-1].encode()
-            length = int(self.headers.get("Content-Length", 0))
             if length <= 0 or length > MAX_UPLOAD + 1024 * 1024:
                 self._json(413, {"err": "too large"})
                 return
-            data = self.rfile.read(length)
-            parts = data.split(b"--" + boundary)
-            fields, files = {}, {}
-            for p in parts:
-                if b"Content-Disposition" not in p:
-                    continue
-                head, _, body = p.partition(b"\r\n\r\n")
-                head = head.decode("utf-8", "ignore")
-                name = None
-                if 'name="' in head:
-                    name = head.split('name="')[1].split('"')[0]
-                fn = None
-                if 'filename="' in head:
-                    fn = head.split('filename="')[1].split('"')[0]
-                body = body.rstrip(b"\r\n")
-                if fn:
-                    files[name] = (fn, body)
-                elif name:
-                    fields[name] = body.decode("utf-8", "ignore")
+            fields, files = self._parse_multipart(length)
+            if fields is None:
+                self._json(400, {"err": "need multipart"})
+                return
             audio = files.get("file")
             if not audio or not audio[0]:
                 self._json(400, {"err": "no file"})
@@ -315,9 +710,11 @@ class H(BaseHTTPRequestHandler):
                 with open(cpath, "wb") as f:
                     f.write(cdata)
             c = db()
-            c.execute("INSERT INTO tracks(id,title,artist,album,cover,fname,size,dur,created) VALUES(?,?,?,?,?,?,?,?,?)",
+            uploader_id = (fields.get("userId") or "").strip()
+            c.execute("""INSERT INTO tracks(id,title,artist,album,cover,fname,size,dur,created,user_id)
+                         VALUES(?,?,?,?,?,?,?,?,?,?)""",
                       (tid, title, fields.get("artist", ""), fields.get("album", ""),
-                       cover_fname, stored, len(filedata), dur, time.time()))
+                       cover_fname, stored, len(filedata), dur, time.time(), uploader_id))
             c.commit()
             c.close()
             self._json(200, {"id": tid, "title": title, "cover": cover_fname,

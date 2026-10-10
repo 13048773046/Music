@@ -37,11 +37,14 @@ enum API {
                 count: (obj?["likeCount"] as? Int) ?? 0)
     }
 
-    static func reportShare(_ trackId: String) async {
+    @discardableResult
+    static func reportShare(_ trackId: String) async -> Int {
         var req = URLRequest(url: base.appendingPathComponent("share").appendingPathComponent(trackId))
         req.httpMethod = "POST"
         req.timeoutInterval = 10
-        _ = try? await URLSession.shared.data(for: req)
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        return obj["shareCount"] as? Int ?? 0
     }
 
     struct Comment: Codable, Identifiable, Hashable {
