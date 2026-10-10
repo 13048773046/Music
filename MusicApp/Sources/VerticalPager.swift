@@ -38,6 +38,9 @@ struct VerticalPager: UIViewControllerRepresentable {
 
     func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
         context.coordinator.parent = self
+        // 歌曲追加（滑到末尾自动加载下一批）时，只给新 track 补建控制器，
+        // 不重建已有页——否则会把当前翻页位置重置到首页。
+        context.coordinator.syncControllers(for: tracks)
         // 用户正在手势翻页时，禁止程序化 setViewControllers 回跳：
         // 播放器 0.1s timeObserver 会高频触发本方法，若在手势进行中
         // 按 player.currentIndex 强制回跳，会与 didFinishAnimating 的新索引打架，
@@ -90,6 +93,26 @@ struct VerticalPager: UIViewControllerRepresentable {
                 // 顶部/底部安全区一律由 keyWindow 真实值显式注入（iOS 16.0 全版本兼容）。
                 hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
                 return hosting
+            }
+        }
+
+        /// 歌曲追加时只为新增 track 补建控制器（不重建已有页，避免翻页位置跳动）
+        func syncControllers(for newTracks: [Track]) {
+            let total = newTracks.count
+            let top = Self.windowSafeAreaTop
+            let bottom = Self.windowSafeAreaBottom
+            while controllers.count < newTracks.count {
+                let index = controllers.count
+                let track = newTracks[index]
+                let hosting = UIHostingController(
+                    rootView: PlayerCard(track: track, index: index, total: total,
+                                         topInset: top, bottomInset: bottom)
+                        .environmentObject(PlayerManager.shared)
+                        .environmentObject(AuthManager.shared)
+                )
+                hosting.view.backgroundColor = .clear
+                hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
+                controllers.append(hosting)
             }
         }
 

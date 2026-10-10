@@ -51,6 +51,10 @@ struct HomeView: View {
                         onPageChanged: { index in
                             guard library.tracks.indices.contains(index) else { return }
                             player.play(library.tracks[index], in: library.tracks)
+                            // 滑到倒数第二首附近，提前预取下一批随机歌单
+                            if index >= library.tracks.count - 2 {
+                                Task { await library.loadMore() }
+                            }
                         }
                     )
                     .ignoresSafeArea()
