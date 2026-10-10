@@ -12,7 +12,8 @@ final class Library: ObservableObject {
 
     func load() async {
         do {
-            let list = try await API.tracks()
+            // 带上当前登录用户 id，让后端返回每首歌的 commentCount 与 isLiked
+            let list = try await API.tracks(userId: AuthManager.shared.currentUser?.id)
             await MainActor.run {
                 self.tracks = list
                 self.isLoaded = true

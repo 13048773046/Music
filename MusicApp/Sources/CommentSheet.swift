@@ -46,13 +46,27 @@ struct CommentSheet: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 16) {
                             ForEach(comments) { c in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(c.userName.isEmpty ? "用户" : c.userName)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(Theme.accent)
-                                    Text(c.content)
-                                        .font(.system(size: 14))
-                                        .foregroundColor(Theme.textPrimary)
+                                HStack(alignment: .top, spacing: 10) {
+                                    // 用户头像（无头像时显示默认占位）
+                                    CachedCoverImage(
+                                        url: API.avatarURL(c.userId),
+                                        title: c.userName,
+                                        placeholder: Circle().fill(Theme.accentSoft)
+                                            .overlay(Image(systemName: "person.fill")
+                                                .font(.system(size: 15))
+                                                .foregroundColor(Theme.accent))
+                                    )
+                                    .frame(width: 36, height: 36)
+                                    .clipShape(Circle())
+
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(c.userName.isEmpty ? "用户" : c.userName)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(Theme.accent)
+                                        Text(c.content)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Theme.textPrimary)
+                                    }
                                 }
                             }
                         }

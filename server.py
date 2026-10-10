@@ -257,18 +257,28 @@ class H(BaseHTTPRequestHandler):
             return
         if u.path == "/api/tracks":
             c = db()
+            # 可选：当前登录用户 id，用于返回其对每首歌的点赞状态 isLiked
+            qs = urllib.parse.parse_qs(u.query)
+            viewer_id = (qs.get("userId", [""])[0] or "").strip()
             rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
                                 t.play_count,t.like_count,t.share_count,t.user_id,
-                                COALESCE(u.name,'') FROM tracks t
+                                COALESCE(u.name,''),
+                                (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                                MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
+                                FROM tracks t
                                 LEFT JOIN users u ON u.id=t.user_id
-                                ORDER BY t.created DESC""").fetchall()
+                                LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
+                                GROUP BY t.id
+                                ORDER BY t.created DESC""", (viewer_id,)).fetchall()
             c.close()
             self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
                               "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
                               "durText": _fmt_dur(r[7]), "created": r[8],
                               "playCount": r[9] or 0, "likeCount": r[10] or 0,
                               "shareCount": r[11] or 0,
-                              "userId": r[12] or "", "userName": r[13] or ""} for r in rows])
+                              "userId": r[12] or "", "userName": r[13] or "",
+                              "commentCount": r[14] or 0,
+                              "isLiked": bool(r[15])} for r in rows])
             return
         if u.path.startswith("/api/cover/"):
             tid = u.path.rsplit("/", 1)[-1]

@@ -13,6 +13,7 @@ struct Track: Codable, Identifiable, Hashable {
     let playCount: Int?
     let likeCount: Int?
     let shareCount: Int?
+    let commentCount: Int?
     let userId: String?
     let userName: String?
     var isLiked: Bool?

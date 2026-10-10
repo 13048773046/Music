@@ -147,6 +147,7 @@ struct PlayerCard: View {
     @State private var liked: Bool
     @State private var likeCount: Int
     @State private var shareCount: Int
+    @State private var commentCount: Int
     @State private var showComments = false
     @State private var shareURL: URL?
 
@@ -160,6 +161,7 @@ struct PlayerCard: View {
         _liked = State(initialValue: track.isLiked ?? false)
         _likeCount = State(initialValue: track.likeCount ?? 0)
         _shareCount = State(initialValue: track.shareCount ?? 0)
+        _commentCount = State(initialValue: track.commentCount ?? 0)
     }
 
     var body: some View {
@@ -232,30 +234,28 @@ struct PlayerCard: View {
                     }
                     .padding(.horizontal, sidePadding)
 
-                    // 互动操作行：点赞 / 评论 / 分享（纯图标+计数，无阴影渐变，跟随页面深浅色）
-                    HStack(spacing: 0) {
+                    // 互动操作行：点赞 / 评论 / 分享（全实心圆润图标，左对齐，数量在图标右上角角标）
+                    HStack(spacing: 30) {
                         actionButton(
-                            icon: liked ? "heart.fill" : "heart",
+                            icon: "heart.fill",
                             tint: liked ? .red : textPrimary(onLight: onLight),
-                            caption: likeCount > 0 ? "\(likeCount)" : "点赞",
+                            count: likeCount,
                             onLight: onLight
                         ) { Task { await toggleLike() } }
-                        Spacer()
                         actionButton(
-                            icon: "bubble.right",
+                            icon: "message.fill",
                             tint: textPrimary(onLight: onLight),
-                            caption: "评论",
+                            count: commentCount,
                             onLight: onLight
                         ) { showComments = true }
-                        Spacer()
                         actionButton(
-                            icon: "square.and.arrow.up",
+                            icon: "paperplane.fill",
                             tint: textPrimary(onLight: onLight),
-                            caption: shareCount > 0 ? "\(shareCount)" : "分享",
+                            count: shareCount,
                             onLight: onLight
                         ) { Task { await share() } }
                     }
-                    .padding(.horizontal, sidePadding + 16)
+                    .padding(.horizontal, sidePadding)
                     .padding(.top, 14)
 
                     // 底部留白（TabBar 空间，自适应导航栏高度与底部安全区）
@@ -282,19 +282,27 @@ struct PlayerCard: View {
 
     // MARK: - 互动按钮（点赞 / 评论 / 分享）
 
-    private func actionButton(icon: String, tint: Color, caption: String,
+    /// 实心圆润图标 + 数量角标（显示在图标右上角，0 或无数量时不显示角标）
+    private func actionButton(icon: String, tint: Color, count: Int?,
                               onLight: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            ZStack(alignment: .topTrailing) {
                 Image(systemName: icon)
-                    .font(.system(size: 22))
+                    .font(.system(size: 26))
                     .foregroundColor(tint)
-                Text(caption)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(textSecondary(onLight: onLight))
+                if let count, count > 0 {
+                    Text(count > 99 ? "99+" : "\(count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .offset(x: 9, y: -9)
+                        .fixedSize()
+                }
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 2)
+            .padding(.vertical, 6)
+            .padding(.trailing, 4)
         }
         .buttonStyle(.plain)
     }

@@ -144,6 +144,8 @@ struct TrackRow: View {
 
     @State private var liked: Bool
     @State private var likeCount: Int
+    @State private var commentCount: Int
+    @State private var shareCount: Int
     @State private var showComments = false
     @State private var shareURL: URL?
 
@@ -152,6 +154,8 @@ struct TrackRow: View {
         self.onTap = onTap
         _liked = State(initialValue: track.isLiked ?? false)
         _likeCount = State(initialValue: track.likeCount ?? 0)
+        _commentCount = State(initialValue: track.commentCount ?? 0)
+        _shareCount = State(initialValue: track.shareCount ?? 0)
     }
 
     private var isCurrent: Bool {
@@ -183,38 +187,31 @@ struct TrackRow: View {
 
                 Spacer()
 
-                // 点赞
+                // 点赞（实心心形，数量角标在图标右上角）
                 Button {
                     Task { await toggleLike() }
                 } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: liked ? "heart.fill" : "heart")
-                            .font(.system(size: 15))
-                            .foregroundColor(liked ? .red : Theme.textTertiary)
-                        if likeCount > 0 {
-                            Text("\(likeCount)")
-                                .font(.system(size: 12))
-                                .foregroundColor(Theme.textTertiary)
-                        }
-                    }
+                    cornerBadge(icon: "heart.fill",
+                                tint: liked ? .red : Theme.textTertiary,
+                                count: likeCount)
                 }
                 .buttonStyle(.plain)
 
-                // 评论
+                // 评论（实心对话框，数量角标在图标右上角）
                 Button { showComments = true } label: {
-                    Image(systemName: "bubble.right")
-                        .font(.system(size: 15))
-                        .foregroundColor(Theme.textTertiary)
+                    cornerBadge(icon: "message.fill",
+                                tint: Theme.textTertiary,
+                                count: commentCount)
                 }
                 .buttonStyle(.plain)
 
-                // 分享
+                // 分享（实心纸飞机，数量角标在图标右上角）
                 Button {
                     Task { await share() }
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 15))
-                        .foregroundColor(Theme.textTertiary)
+                    cornerBadge(icon: "paperplane.fill",
+                                tint: Theme.textTertiary,
+                                count: shareCount)
                 }
                 .buttonStyle(.plain)
 
@@ -245,6 +242,26 @@ struct TrackRow: View {
         }
     }
 
+    /// 实心图标 + 数量角标（右上角），0 或无数量时只显示图标
+    private func cornerBadge(icon: String, tint: Color, count: Int) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(tint)
+            if count > 0 {
+                Text(count > 99 ? "99+" : "\(count)")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 3.5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .offset(x: 7, y: -7)
+                    .fixedSize()
+            }
+        }
+        .padding(4)
+    }
+
     private func toggleLike() async {
         guard let uid = auth.currentUser?.id else { return }
         do {
@@ -255,7 +272,8 @@ struct TrackRow: View {
     }
 
     private func share() async {
-        await API.reportShare(track.id)
+        let updated = await API.reportShare(track.id)
+        if updated > 0 { shareCount = updated }
         // 分享歌曲流式地址给朋友
         shareURL = API.streamURL(track.id)
     }

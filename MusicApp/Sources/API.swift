@@ -3,8 +3,13 @@ import Foundation
 enum API {
     static let base = URL(string: "https://www.dbmt999.asia/music/api")!
 
-    static func tracks() async throws -> [Track] {
-        var req = URLRequest(url: base.appendingPathComponent("tracks"))
+    static func tracks(userId: String? = nil) async throws -> [Track] {
+        var components = URLComponents(url: base.appendingPathComponent("tracks"),
+                                       resolvingAgainstBaseURL: false)!
+        if let userId, !userId.isEmpty {
+            components.queryItems = [URLQueryItem(name: "userId", value: userId)]
+        }
+        var req = URLRequest(url: components.url!)
         req.timeoutInterval = 15
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
