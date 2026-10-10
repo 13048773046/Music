@@ -207,7 +207,7 @@ struct LyricPreview: View {
 /// 整句卡拉OK填充：白色 Text 以「进度 × 整句宽度」为裁剪宽度，左对齐覆盖在灰色 Text 上，
 /// 宽度随 TimelineView 逐帧伸展 → 白色从左到右**连续平滑填满整句**。
 /// 只更新裁剪宽度一个属性，文字本身不重光栅化、无渐变/mask 渲染，逐帧伸展不闪烁。
-private struct LyricRowView: View, Equatable {
+private struct LyricRowView: View {
     let line: KRCLine
     /// 0...1：整句填充进度（非当前行恒为 0 → 整句灰）
     let fillRatio: Double
@@ -248,5 +248,15 @@ private struct LyricRowView: View, Equatable {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
+    }
+}
+
+// @State 阻止自动合成，手动实现 Equatable（比较除内部状态外的渲染参数）
+extension LyricRowView: Equatable {
+    static func == (lhs: LyricRowView, rhs: LyricRowView) -> Bool {
+        lhs.line == rhs.line
+            && lhs.fillRatio == rhs.fillRatio
+            && lhs.scale == rhs.scale
+            && lhs.tint == rhs.tint
     }
 }
