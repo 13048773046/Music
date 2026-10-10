@@ -127,66 +127,6 @@ struct VerticalPager: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - 双击点赞爆发爱心粒子
-
-struct BurstHeart: Identifiable {
-    let id = UUID()
-    var position: CGPoint
-    var size: CGFloat
-    var drift: CGSize
-    var delay: Double
-}
-
-/// 单个爆发爱心：onAppear 时自己播放缩放+上飘+淡出
-private struct HeartParticle: View {
-    let heart: BurstHeart
-    @State private var appear = false
-
-    var body: some View {
-        Image(systemName: "heart.fill")
-            .foregroundColor(.pink)
-            .font(.system(size: heart.size))
-            .position(x: heart.position.x, y: heart.position.y)
-            .offset(appear ? heart.drift : .zero)
-            .scaleEffect(appear ? 1.25 : 0.3)
-            .opacity(appear ? 0 : 1)
-            .animation(.easeOut(duration: 0.9).delay(heart.delay), value: appear)
-            .onAppear { appear = true }
-    }
-}
-
-/// 双击手势捕获层：不阻挡其他手势（按钮/进度条拖动照常）
-private struct DoubleTapCapture: UIViewRepresentable {
-    let onDoubleTap: (CGPoint) -> Void
-
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView()
-        v.backgroundColor = .clear
-        let tap = UITapGestureRecognizer(target: context.coordinator,
-                                         action: #selector(Coordinator.doubleTap(_:)))
-        tap.numberOfTapsRequired = 2
-        tap.cancelsTouchesInView = false
-        tap.delaysTouchesBegan = false
-        tap.delaysTouchesEnded = false
-        v.addGestureRecognizer(tap)
-        context.coordinator.onDoubleTap = onDoubleTap
-        return v
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.onDoubleTap = onDoubleTap
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject {
-        var onDoubleTap: ((CGPoint) -> Void)?
-        @objc func doubleTap(_ g: UITapGestureRecognizer) {
-            onDoubleTap?(g.location(in: g.view))
-        }
-    }
-}
-
 // MARK: - 音效预设（UI 先做，功能后续接）
 
 struct EQOption: Identifiable {
@@ -265,8 +205,6 @@ struct PlayerCard: View {
     @State private var showComments = false
     @State private var shareURL: URL?
     @State private var lyricLines: [KRCLine] = []
-    /// 双击点赞爆发的爱心粒子
-    @State private var burstHearts: [BurstHeart] = []
     /// 音效选择弹窗
     @State private var showEQ = false
     @State private var selectedEQ = "原音"
@@ -331,15 +269,20 @@ struct PlayerCard: View {
                         }
                         .layoutPriority(1)
 
-                        // 音效按钮：固定最右，跑马灯时不被遮住
+                        // 音效按钮：固定最右，显示当前选中的音效名，跑马灯时不被遮住
                         Button {
                             showEQ = true
                         } label: {
-                            Image(systemName: "hifispeaker.fill")
-                                .font(.system(size: 18))
+                            Text(selectedEQ)
+                                .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(textPrimary(onLight: onLight).opacity(0.85))
-                                .frame(width: 34, height: 34)
-                                .contentShape(Rectangle())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    (onLight ? Color.black.opacity(0.08) : Color.white.opacity(0.15)),
+                                    in: Capsule()
+                                )
+                                .contentShape(Capsule())
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -411,20 +354,6 @@ struct PlayerCard: View {
             }
             // 背景偏浅→深色状态栏文字；背景偏深→白色状态栏文字（沉浸式适配）
             .preferredColorScheme(onLight ? .light : .dark)
-
-            // 双击捕获层：整个播放页双击触发点赞，不阻挡其他手势
-            .overlay(DoubleTapCapture { loc in
-                burst(at: loc)
-            })
-            // 爱心爆发粒子层
-            .overlay(alignment: .topLeading) {
-                ZStack(alignment: .topLeading) {
-                    ForEach(burstHearts) { h in
-                        HeartParticle(heart: h)
-                    }
-                }
-                .allowsHitTesting(false)
-            }
         }
         .task(id: track.id) {
             await loadBackground()
@@ -448,39 +377,6 @@ struct PlayerCard: View {
         .sheet(isPresented: $showEQ) {
             EQBSheet(selected: $selectedEQ)
                 .presentationDetents([.medium])
-        }
-    }
-
-    // MARK: - 双击点赞爆发
-
-    private func burst(at point: CGPoint) {
-        // 已点赞也触发动画，但不取消（同抖音）
-        if !liked {
-            Task { await toggleLike() }
-        }
-        // 大爱心 + 5 个小爱心
-        let big = BurstHeart(position: point, size: 90,
-                             drift: CGSize(width: 0, height: -40), delay: 0)
-        var particles: [BurstHeart] = [big]
-        for i in 0..<5 {
-            let angle = Double(i) * (Double.pi * 2 / 5) - Double.pi / 2
-            let dist: CGFloat = 60 + CGFloat.random(in: 0...30)
-            let p = CGPoint(x: point.x + CGFloat(cos(angle)) * 30,
-                            y: point.y + CGFloat(sin(angle)) * 20)
-            particles.append(BurstHeart(
-                position: p,
-                size: CGFloat.random(in: 18...36),
-                drift: CGSize(width: CGFloat(cos(angle)) * dist,
-                              height: CGFloat(sin(angle)) * dist - 60),
-                delay: 0.05 + Double(i) * 0.04
-            ))
-        }
-        burstHearts.append(contentsOf: particles)
-        // 动画结束后清理
-        for h in particles {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1 + h.delay) {
-                burstHearts.removeAll { $0.id == h.id }
-            }
         }
     }
 
