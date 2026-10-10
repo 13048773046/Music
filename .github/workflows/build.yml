@@ -4,6 +4,13 @@ on:
     branches: [main]
   workflow_dispatch:
 jobs:
+  server-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run backend smoke tests
+        run: python3 tests/server_smoke_test.py --port 18788
+
   build:
     runs-on: macos-15
     steps:

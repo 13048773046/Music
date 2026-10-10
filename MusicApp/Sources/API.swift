@@ -22,13 +22,40 @@ enum API {
         base.appendingPathComponent("stream").appendingPathComponent(id)
     }
 
+    // MARK: - 鉴权请求基础设施（Bearer Token + 401 统一处理）
+
+    /// 为请求附加当前登录用户的 Bearer Token（旧会话无 token 时不附加，依赖后端兼容模式）
+    private static func applyAuth(_ req: inout URLRequest) {
+        if let token = AuthManager.shared.authToken {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
+    /// 鉴权接口返回 401 时：清除本地登录态（下次进 App 要求重新登录）并抛错
+    private static func checkAuth(_ resp: URLResponse?) throws {
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if http.statusCode == 401 {
+            AuthManager.shared.handleUnauthorized()
+            throw APIError.message("登录已过期，请重新登录")
+        }
+    }
+
+    /// 上报类接口（播放/分享）：401 只静默清理登录态，不抛错打断播放流程
+    private static func noticeAuthFailure(_ resp: URLResponse?) {
+        if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
+            AuthManager.shared.handleUnauthorized()
+        }
+    }
+
     // MARK: - 互动：播放 / 点赞 / 评论 / 分享
 
     static func reportPlay(_ trackId: String) async {
         var req = URLRequest(url: base.appendingPathComponent("play").appendingPathComponent(trackId))
         req.httpMethod = "POST"
         req.timeoutInterval = 10
-        _ = try? await URLSession.shared.data(for: req)
+        applyAuth(&req)
+        let (_, resp) = (try? await URLSession.shared.data(for: req)) ?? (Data(), nil)
+        noticeAuthFailure(resp)
     }
 
     static func toggleLike(trackId: String, userId: String) async throws -> (liked: Bool, count: Int) {
@@ -36,7 +63,9 @@ enum API {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["userId": userId])
-        let (data, _) = try await URLSession.shared.data(for: req)
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return (liked: (obj?["liked"] as? Bool) ?? false,
                 count: (obj?["likeCount"] as? Int) ?? 0)
@@ -47,8 +76,10 @@ enum API {
         var req = URLRequest(url: base.appendingPathComponent("share").appendingPathComponent(trackId))
         req.httpMethod = "POST"
         req.timeoutInterval = 10
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        applyAuth(&req)
+        let (data, resp) = (try? await URLSession.shared.data(for: req)) ?? (Data(), nil)
+        noticeAuthFailure(resp)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
         return obj["shareCount"] as? Int ?? 0
     }
 
@@ -73,7 +104,9 @@ enum API {
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
             "userId": userId, "userName": userName, "content": content
         ])
+        applyAuth(&req)
         let (_, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
@@ -175,18 +208,26 @@ enum API {
         if let avatarData { filePart("avatar", avatarData) }
         if let backgroundData { filePart("background", backgroundData) }
         body.append(Data("--\(boundary)--\r\n".utf8))
-        return try await submitUser(path: "profile/update", boundary: boundary, body: body)
+        return try await submitUser(path: "profile/update", boundary: boundary, body: body,
+                                    authed: true)
     }
 
-    private static func submitUser(path: String, boundary: String, body: Data) async throws -> User {
+    private static func submitUser(path: String, boundary: String, body: Data,
+                                   authed: Bool = false) async throws -> User {
         var req = URLRequest(url: base.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 30
         req.httpBody = body
+        if authed {
+            applyAuth(&req)
+        }
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
+        }
+        if authed {
+            try checkAuth(resp)
         }
         guard (200...299).contains(http.statusCode) else {
             if let err = try? JSONDecoder().decode([String: String].self, from: data),
@@ -232,8 +273,14 @@ enum API {
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 180
         req.httpBody = body
-        let (_, resp) = try await URLSession.shared.data(for: req)
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            if let err = try? JSONDecoder().decode([String: String].self, from: data),
+               let msg = err["err"] {
+                throw APIError.message(msg)
+            }
             throw URLError(.badServerResponse)
         }
     }

@@ -385,6 +385,27 @@ struct PlayerCard: View {
                     // 多功能进度条：同一根条展示已播放段 + 已缓冲段，缓冲中拖头变加载动画；
                     // 拖动时只预览位置，松手才执行 seek
                     VStack(spacing: 10) {
+                        // 音频加载失败：显示重试入口（网络中断/资源损坏时避免静默卡死）
+                        if player.loadFailed {
+                            Button {
+                                player.reloadCurrent()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Text("加载失败，点此重试")
+                                        .font(.system(size: 13, weight: .medium))
+                                }
+                                .foregroundColor(textSecondary(onLight: onLight))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(
+                                    (onLight ? Color.black.opacity(0.06) : Color.white.opacity(0.14)),
+                                    in: Capsule()
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
                         PlayerProgressBar(
                             progress: player.progress,
                             buffer: player.bufferProgress,

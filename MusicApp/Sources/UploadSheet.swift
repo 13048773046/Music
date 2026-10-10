@@ -184,6 +184,13 @@ struct UploadSheet: View {
         error = nil
         defer { uploading = false }
         do {
+            // 与后端一致的单曲大小上限：超过直接拦截，避免大文件白传失败
+            let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+            if size > 100 * 1024 * 1024 {
+                error = "文件超过 100MB 上限，无法上传"
+                return
+            }
             let accessing = fileURL.startAccessingSecurityScopedResource()
             defer {
                 if accessing {

@@ -48,12 +48,15 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var bufferProgress: Double = 0
     /// 是否正在缓冲（等待网络数据，用于进度条加载动画）
     @Published var isBuffering: Bool = false
+    /// 当前音频加载失败（网络中断/资源损坏/流不可用），UI 展示重试入口
+    @Published var loadFailed: Bool = false
     /// 全局音效选择（切歌不重置）
     @Published var selectedEQ: String = "原音"
 
     private var pendingArtwork: UIImage?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var failObserver: NSObjectProtocol?
 
     override init() {
         super.init()
@@ -93,6 +96,16 @@ final class PlayerManager: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             self?.next()
+        }
+
+        // 音频流加载失败（网络中断/资源损坏/服务器返回错误）：UI 展示重试，避免 App 静默卡死
+        failObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.loadFailed = true
+            self?.isBuffering = false
         }
     }
 
@@ -229,6 +242,7 @@ final class PlayerManager: NSObject, ObservableObject {
         currentTime = 0
         bufferProgress = 0
         isBuffering = true
+        loadFailed = false
         pendingArtwork = nil
         updateNowPlaying()
         loadArtworkIfNeeded()

@@ -14,6 +14,8 @@ struct User: Codable, Identifiable, Hashable {
     let signature: String?      // 用户签名
     let ip: String?            // 最近登录 IP（后端自动获取）
     let created: Double?       // 注册时间戳
+    /// 登录/注册时后端签发的 Bearer Token；旧会话无 token（兼容模式下仍可用，严格模式下需重新登录）
+    var token: String?
 
     /// 头像/背景图 URL 一律按用户 id 请求；后端无图时返回 404，CachedCoverImage 自动占位
     var avatarURL: URL {
@@ -64,12 +66,21 @@ final class AuthManager: ObservableObject {
 
     @Published var currentUser: User?
     var isLoggedIn: Bool { currentUser != nil }
+    /// 当前登录用户的 Bearer Token（可能为 nil：旧会话，后端兼容模式下仍可用）
+    var authToken: String? { currentUser?.token }
 
     private let serviceName = "app.star2936.guava3291.auth"
     private let accountName = "session"
 
     private init() {
         restore()
+    }
+
+    /// 接口返回 401（token 失效/被严格模式拒绝）时调用：清除本地登录态，下次进 App 需重新登录
+    func handleUnauthorized() {
+        guard currentUser != nil else { return }
+        currentUser = nil
+        Keychain.delete(service: serviceName, account: accountName)
     }
 
     /// 启动时从 Keychain 恢复登录态，恢复成功则直接进首页，不再要求登录
@@ -111,10 +122,15 @@ final class AuthManager: ObservableObject {
     }
 
     private func saveSession(_ user: User) {
-        if let data = try? JSONEncoder().encode(user) {
+        // 后端 profile/update 响应不含 token：合并保留已有 token，避免覆盖丢失导致后续请求 401
+        var u = user
+        if u.token == nil {
+            u.token = currentUser?.token
+        }
+        if let data = try? JSONEncoder().encode(u) {
             Keychain.save(data, service: serviceName, account: accountName)
         }
-        currentUser = user
+        currentUser = u
     }
 }
 

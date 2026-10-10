@@ -13,3 +13,5 @@ MusicApp/*.xcodeproj
 
 # ---- 系统文件 ----
 .DS_Store
+__pycache__/
+*.pyc
