@@ -38,6 +38,11 @@ struct VerticalPager: UIViewControllerRepresentable {
 
     func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
         context.coordinator.parent = self
+        // 用户正在手势翻页时，禁止程序化 setViewControllers 回跳：
+        // 播放器 0.1s timeObserver 会高频触发本方法，若在手势进行中
+        // 按 player.currentIndex 强制回跳，会与 didFinishAnimating 的新索引打架，
+        // 导致"滑到下一首不播、再滑一首才播上一首"的滞后一首 bug。
+        guard !context.coordinator.isUserPaging else { return }
         guard let visible = pvc.viewControllers?.first,
               let visibleIndex = context.coordinator.controllers.firstIndex(of: visible),
               visibleIndex != currentIndex,
@@ -55,6 +60,9 @@ struct VerticalPager: UIViewControllerRepresentable {
     final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         var parent: VerticalPager
         var controllers: [UIViewController] = []
+        /// 用户手势正在翻页（willTransitionTo 置位、didFinishAnimating 复位）。
+        /// 期间 updateUIViewController 不得程序化回跳，否则会与手势索引打架。
+        var isUserPaging = false
 
         init(_ parent: VerticalPager) {
             self.parent = parent
@@ -114,10 +122,18 @@ struct VerticalPager: UIViewControllerRepresentable {
 
         // MARK: Delegate
 
+        /// 用户手势开始翻到下一个控制器：标记为正在翻页，
+        /// 拦截高频 updateUIViewController 的程序化回跳。
+        func pageViewController(_ pvc: UIPageViewController,
+                                willTransitionTo pendingViewControllers: [UIViewController]) {
+            isUserPaging = true
+        }
+
         func pageViewController(_ pvc: UIPageViewController,
                                 didFinishAnimating finished: Bool,
                                 previousViewControllers: [UIViewController],
                                 transitionCompleted completed: Bool) {
+            isUserPaging = false
             guard completed,
                   let visible = pvc.viewControllers?.first,
                   let index = controllers.firstIndex(of: visible) else { return }
