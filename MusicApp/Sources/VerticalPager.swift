@@ -150,8 +150,6 @@ struct PlayerCard: View {
     @State private var commentCount: Int
     @State private var showComments = false
     @State private var shareURL: URL?
-    /// 歌词显示切换（点击封面切换）
-    @State private var showLyrics = false
     @State private var lyricLines: [KRCLine] = []
 
     init(track: Track, index: Int, total: Int,
@@ -195,20 +193,8 @@ struct PlayerCard: View {
                     // 1:1 正方形封面（小圆角，居中，左外距很小）；与顶部栏间距收小，整体上移
                     Spacer(minLength: 6)
 
-                    // 封面区域：点击切换封面/歌词视图
-                    Group {
-                        if showLyrics && !lyricLines.isEmpty {
-                            LyricView(lines: lyricLines,
-                                      progress: (scrubFraction ?? player.progress) * player.duration,
-                                      tint: textPrimary(onLight: onLight))
-                                .frame(width: coverSize, height: coverSize)
-                        } else {
-                            AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
-                        }
-                    }
-                    .onTapGesture {
-                        if !lyricLines.isEmpty { showLyrics.toggle() }
-                    }
+                    // 封面区域（1:1 正方形，小圆角，居中）
+                    AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
 
                     // 歌曲名称 + 作者名称：左对齐，左外距与封面一致
                     VStack(alignment: .leading, spacing: 6) {
@@ -225,6 +211,15 @@ struct PlayerCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, sidePadding)
                     .padding(.top, 26)
+
+                    // 歌词预览：当前句（逐字填充）+ 下一句，两句滚动播放（歌名下方、互动行上方）
+                    if !lyricLines.isEmpty {
+                        LyricPreview(lines: lyricLines,
+                                     progress: (scrubFraction ?? player.progress) * player.duration,
+                                     tint: textPrimary(onLight: onLight))
+                            .padding(.horizontal, sidePadding)
+                            .padding(.top, 10)
+                    }
 
                     Spacer(minLength: 12)
 
@@ -286,7 +281,6 @@ struct PlayerCard: View {
         .task(id: track.id) {
             await loadBackground()
             // 加载歌词
-            showLyrics = false
             lyricLines = []
             if track.hasLyric == true {
                 if let text = try? await API.fetchLyric(track.id) {
