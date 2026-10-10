@@ -284,7 +284,7 @@ class H(BaseHTTPRequestHandler):
                                 LEFT JOIN users u ON u.id=t.user_id
                                 LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
                                 GROUP BY t.id
-                                ORDER BY t.created DESC""", (viewer_id,)).fetchall()
+                                ORDER BY RANDOM()""", (viewer_id,)).fetchall()
             c.close()
             self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
                               "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
