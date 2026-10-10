@@ -138,25 +138,8 @@ struct EqualizerBars: View {
 
 struct TrackRow: View {
     @EnvironmentObject private var player: PlayerManager
-    @EnvironmentObject private var auth: AuthManager
     let track: Track
     let onTap: () -> Void
-
-    @State private var liked: Bool
-    @State private var likeCount: Int
-    @State private var commentCount: Int
-    @State private var shareCount: Int
-    @State private var showComments = false
-    @State private var shareURL: URL?
-
-    init(track: Track, onTap: @escaping () -> Void) {
-        self.track = track
-        self.onTap = onTap
-        _liked = State(initialValue: track.isLiked ?? false)
-        _likeCount = State(initialValue: track.likeCount ?? 0)
-        _commentCount = State(initialValue: track.commentCount ?? 0)
-        _shareCount = State(initialValue: track.shareCount ?? 0)
-    }
 
     private var isCurrent: Bool {
         player.current?.id == track.id
@@ -187,92 +170,30 @@ struct TrackRow: View {
 
                 Spacer()
 
-                // 点赞（实心心形，数量角标在图标右上角）
-                Button {
-                    Task { await toggleLike() }
-                } label: {
-                    cornerBadge(icon: "heart.fill",
-                                tint: liked ? .red : Theme.textTertiary,
-                                count: likeCount)
-                }
-                .buttonStyle(.plain)
-
-                // 评论（实心对话框，数量角标在图标右上角）
-                Button { showComments = true } label: {
-                    cornerBadge(icon: "message.fill",
-                                tint: Theme.textTertiary,
-                                count: commentCount)
-                }
-                .buttonStyle(.plain)
-
-                // 分享（实心纸飞机，数量角标在图标右上角）
-                Button {
-                    Task { await share() }
-                } label: {
-                    cornerBadge(icon: "paperplane.fill",
-                                tint: Theme.textTertiary,
-                                count: shareCount)
-                }
-                .buttonStyle(.plain)
-
+                // 右侧状态：未播放=竖三点；当前播放=跳动三竖条；当前暂停=静止三竖条
                 if isCurrent {
                     if player.isPlaying {
                         EqualizerBars()
                     } else {
-                        Image(systemName: "pause.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(Theme.accent)
+                        // 暂停的当前歌曲：静止三根竖条
+                        HStack(spacing: 2.5) {
+                            Capsule().fill(Theme.accent).frame(width: 2.5, height: 10)
+                            Capsule().fill(Theme.accent).frame(width: 2.5, height: 10)
+                            Capsule().fill(Theme.accent).frame(width: 2.5, height: 10)
+                        }
+                        .frame(width: 20, height: 16)
                     }
                 } else {
-                    Image(systemName: "play.circle")
-                        .font(.system(size: 20))
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundColor(Theme.textTertiary)
+                        .rotationEffect(.degrees(90))
+                        .frame(width: 20, height: 20)
                 }
             }
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showComments) {
-            CommentSheet(track: track)
-                .environmentObject(auth)
-                .environmentObject(player)
-        }
-        .sheet(item: $shareURL) { u in
-            ShareSheet(url: u)
-        }
-    }
-
-    /// 实心图标 + 数量角标（右上角），0 或无数量时只显示图标
-    private func cornerBadge(icon: String, tint: Color, count: Int) -> some View {
-        ZStack(alignment: .topTrailing) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundColor(tint)
-            if count > 0 {
-                Text(count > 99 ? "99+" : "\(count)")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(tint)
-                    .offset(x: 9, y: -8)
-                    .fixedSize()
-            }
-        }
-        .padding(4)
-    }
-
-    private func toggleLike() async {
-        guard let uid = auth.currentUser?.id else { return }
-        do {
-            let r = try await API.toggleLike(trackId: track.id, userId: uid)
-            liked = r.liked
-            likeCount = r.count
-        } catch {}
-    }
-
-    private func share() async {
-        let updated = await API.reportShare(track.id)
-        if updated > 0 { shareCount = updated }
-        // 分享歌曲流式地址给朋友
-        shareURL = API.streamURL(track.id)
     }
 }
 
