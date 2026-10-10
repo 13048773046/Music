@@ -1,0 +1,104 @@
+<html style="margin:0;padding:0;">
+<title>流萤音乐 iOS App 架构总览</title>
+<div style="width:100%;box-sizing:border-box;background:#121214;color:#ECECEC;font-family:-apple-system,'PingFang SC',sans-serif;padding:20px 14px 28px;">
+  <div style="font-size:20px;font-weight:700;color:#ECECEC;margin-bottom:4px;">流萤音乐 iOS App — 架构总览</div>
+  <div style="font-size:13px;color:#9C9CA0;margin-bottom:16px;">SwiftUI + AVPlayer · iOS 16.0+ · Bundle: app.star2936.guava3291 · 深黑灰极简主题（无阴影/渐变光影）</div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;font-size:12px;">
+    <span style="padding:3px 8px;border-radius:6px;background:#1D2B3A;color:#6FA3C9;">视图层</span>
+    <span style="padding:3px 8px;border-radius:6px;background:#1C3A30;color:#4CD9A5;">状态管理</span>
+    <span style="padding:3px 8px;border-radius:6px;background:#2A2440;color:#8F84C7;">网络/工具</span>
+    <span style="padding:3px 8px;border-radius:6px;background:#33201C;color:#C98870;">后端/CI</span>
+  </div>
+
+  <!-- 视图层 -->
+  <div style="border:1px solid #2A2A2E;border-radius:14px;padding:12px;background:#16161a;margin-bottom:14px;">
+    <div style="font-size:14px;font-weight:700;color:#6FA3C9;margin-bottom:10px;">① 视图层 SwiftUI（三页常驻，Tab 切换不销毁）</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;">
+      <div style="flex:1 1 220px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">MainTabView 根容器</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">ZStack + opacity 切换显隐，三页常驻内存；AppTabBar 悬浮：首页透明 / 其他页深色不透明，中间缩略封面+跳动竖条</div>
+      </div>
+      <div style="flex:1 1 220px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">HomeView 播放首页</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">VerticalPager（UIPageViewController 竖滑切歌，绑定 PlayerManager 全局索引）→ PlayerCard：封面主色背景（CIAreaAverage 压暗40%）、1:1 封面、歌名跑马灯、KRC/LRC 逐字歌词、点赞/评论/分享、多功能进度条（缓冲+预览松手 seek）、音效面板</div>
+      </div>
+      <div style="flex:1 1 220px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">DiscoverView 发现页</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">推荐横卡（随机6）＋ 最新上架横卡（按 created 倒序6）＋ 全部歌曲单列（TrackRow 播放中跳动竖条指示器）</div>
+      </div>
+      <div style="flex:1 1 220px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">MineView 我的页</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">用户资料卡（头像/背景图/性别年龄/签名）· 统计卡片 · 上传入口（fileImporter → UploadSheet 自动识别音频元数据）· 服务信息 · 退出登录</div>
+      </div>
+      <div style="flex:1 1 220px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">弹窗/页面</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">SplashView（预加载歌曲）→ LoginView/注册 · CommentSheet 评论 · UploadSheet 上传 · ProfileEditView 编辑资料 · ShareSheet 系统分享</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="text-align:center;font-size:13px;color:#4CD9A5;margin:-4px 0 14px;">▼ 状态同步：滑动切歌 / 锁屏切歌 / Tab 缩略图点击 全部走 PlayerManager</div>
+
+  <!-- 状态层 -->
+  <div style="border:1px solid #2A2A2E;border-radius:14px;padding:12px;background:#16161a;margin-bottom:14px;">
+    <div style="font-size:14px;font-weight:700;color:#4CD9A5;margin-bottom:10px;">② 状态管理层（全局单例 ObservableObject）</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;">
+      <div style="flex:2 1 300px;min-width:0;background:#1C1C1F;border:1px solid #4CD9A5;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#4CD9A5;">PlayerManager.shared — 唯一播放数据源</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">AVPlayer 流式播放 + AudioEnginePlayer（AVAudioEngine 3D 环绕：分频 EQ→左右微延迟→小房间混响）· queue/currentIndex 全局索引 · 播放模式 列表/单曲/随机 · progress/bufferProgress/isBuffering · MPRemoteCommandCenter 锁屏上一首/下一首/暂停 · NowPlaying 锁屏封面（fallback 复用缓存）· 来电/微信语音打断自动恢复 · 0.1s 时间观察器驱动 UI</div>
+      </div>
+      <div style="flex:1 1 200px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">Library.shared</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">tracks 列表缓存 · 滑到末尾 loadMore 随机10首去重追加 · 首次取到列表自动播第一首 · 启动页预加载</div>
+      </div>
+      <div style="flex:1 1 200px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">AuthManager.shared</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">User 模型 · 登录/注册/改资料 · Keychain 持久化登录态（杀后台、重装仍保留）· 决定 tracks 接口是否返回 isLiked</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="text-align:center;font-size:13px;color:#8F84C7;margin:-4px 0 14px;">▼ REST API（前端只通过接口取数，与后端解耦）</div>
+
+  <!-- 网络/工具层 -->
+  <div style="border:1px solid #2A2A2E;border-radius:14px;padding:12px;background:#16161a;margin-bottom:14px;">
+    <div style="font-size:14px;font-weight:700;color:#8F84C7;margin-bottom:10px;">③ 网络层与工具</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;">
+      <div style="flex:1 1 260px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">API（https://www.dbmt999.asia/music/api）</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">tracks?userId / stream/{id} / cover / lyric / avatar / background / comments · POST：play（播放量）like（点赞）share（分享）comment（评论）register / login / profile/update / upload（multipart）</div>
+      </div>
+      <div style="flex:1 1 200px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">CoverPalette</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">CIAreaAverage 提取封面主色 → 压暗 40% 作播放页纯色背景，带缓存，驱动透明 Tab 栏文字颜色</div>
+      </div>
+      <div style="flex:1 1 200px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">CoverImageCache / AudioMetadata / LyricParser</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">NSCache 封面内存缓存 · AVURLAsset 读取上传音频内嵌标题/歌手/专辑/封面 · KRC/LRC 双格式解析（逐字毫秒时间戳，过滤水印行）</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="text-align:center;font-size:13px;color:#C98870;margin:-4px 0 14px;">▼ 后端（独立部署，本地 127.0.0.1:8788 / 公网 https）</div>
+
+  <!-- 后端/CI -->
+  <div style="border:1px solid #2A2A2E;border-radius:14px;padding:12px;background:#16161a;">
+    <div style="font-size:14px;font-weight:700;color:#C98870;margin-bottom:10px;">④ 后端 Python 服务 + CI/CD</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;">
+      <div style="flex:1 1 260px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">server.py（BaseHTTPRequestHandler + SQLite）</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">tracks / users / likes / comments 表 · /api/tracks 随机10首（带 commentCount、isLiked）· /api/stream 支持 Range 206 分块流式（边缓冲边播）· CORS 全开</div>
+      </div>
+      <div style="flex:1 1 260px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">GitHub Actions 构建</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">push main / 手动触发 · macos-15 + XcodeGen + xcodebuild archive（CODE_SIGNING_ALLOWED=NO）→ 打包未签名 .ipa 上传 Artifacts，需开发者证书重签名才能装真机</div>
+      </div>
+      <div style="flex:1 1 260px;min-width:0;background:#1C1C1F;border:1px solid #2A2A2E;border-radius:10px;padding:10px;">
+        <div style="font-size:13px;font-weight:700;color:#ECECEC;">关键实现细节</div>
+        <div style="font-size:12px;color:#9C9CA0;margin-top:6px;line-height:1.7;">安全区：keyWindow 读真实值 + additionalSafeAreaInsets 负值抵消桥接层（iOS16 全兼容）· 进度条拖拽预览与 seek 分离 · 手势翻页时禁止程序化回跳（防滞后一首 bug）· 三根跳动竖条 EqualizerBars 全 App 复用</div>
+      </div>
+    </div>
+  </div>
+</div>
+</html>

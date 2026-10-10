@@ -1,2 +1,15 @@
-ipa_out*/
+# ---- 构建产物（ipa / zip / 打包缓存）----
+*.ipa
 *.zip
+ipa_out*/
+new_ipa/
+v3/
+build/
+*.xcarchive
+DerivedData/
+
+# ---- XcodeGen 生成工程（由 project.yml 生成，不入库）----
+MusicApp/*.xcodeproj
+
+# ---- 系统文件 ----
+.DS_Store
