@@ -88,16 +88,16 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
 /// 只显示「当前播放的一句 + 下一句」的滚动歌词：
-/// - **丝滑填充（无闪烁）**：`TimelineView(.animation)` 按屏幕刷新率逐帧驱动填充进度，
-///   填充用**单个 Text + 线性渐变前景**实现——渐变 stops 的边界位置 = 时间进度，
-///   纯颜色渲染、无 mask/GeometryReader 布局依赖，逐帧更新也不会闪；
+/// - **整句从左到右平滑填满**：`TimelineView(.animation)` 按屏幕刷新率逐帧驱动整句填充进度，
+///   白色字用**宽度裁剪**（`frame(width: 进度×整句宽, alignment: .leading).clipped()`）覆盖在灰字上——
+///   只更新裁剪宽度一个属性，文字不重光栅化、无 mask/渐变渲染，逐帧伸展绝对平滑不闪；
 /// - **滚动与字号同步过渡**：下一句用 `scaleEffect` 呈现约 14pt，**放大进度直接绑定滚动
 ///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 18pt，
 ///   滚动结束即放大到位，复位后无缝衔接为当前句，无先后之分、无跳变；
 /// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
 ///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
 ///
-/// 性能：行视图 Equatable 局部刷新（仅填充行/放大行随进度重绘）；二分定位当前行（O(log n)）。
+/// 性能：行视图 Equatable 局部刷新（仅填充行随进度重绘）；二分定位当前行（O(log n)）。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
@@ -142,6 +142,15 @@ struct LyricPreview: View {
         return out
     }
 
+    /// 当前句（第一行）的整句填充进度 0...1：按整句时间线性推进，从左到右平滑填满
+    private var fillRatio: Double {
+        guard anchor < lines.count else { return 0 }
+        let line = lines[anchor]
+        let span = line.end - line.start
+        guard span > 0 else { return 0 }
+        return min(max((displayProgress - line.start) / span, 0), 1)
+    }
+
     /// 滚动进度 0...1（滚动动画期间随 offsetY 逐帧插值，同步驱动下一句放大）
     private var scrollProgress: Double {
         guard Self.step > 0 else { return 0 }
@@ -153,14 +162,13 @@ struct LyricPreview: View {
             GeometryReader { geo in
                 VStack(spacing: Self.rowGap) {
                     ForEach(Array(visibleLines.enumerated()), id: \.element.id) { idx, line in
-                        // 第 0 行恒为当前句（传实时进度 → 逐字平滑填充）；
-                        // 第 1 行（下一句）放大进度绑定滚动进度 → 滚动与放大同步，传 -1 恒为灰；
-                        // 第 2 行（再下一句）恒为小字灰
+                        // 第 0 行恒为当前句（逐帧整句填充）；第 1 行（下一句）放大进度绑定
+                        // 滚动进度 → 滚动与放大同步；第 2 行（再下一句）恒为小字
                         let scale = idx == 0 ? 1.0
                             : (idx == 1 ? 0.78 + 0.22 * scrollProgress : 0.78)
                         LyricRowView(
                             line: line,
-                            progress: idx == 0 ? displayProgress : -1,
+                            fillRatio: idx == 0 ? fillRatio : 0,
                             scale: scale,
                             tint: tint
                         )
@@ -194,18 +202,21 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（左对齐 + 逐字平滑填充 + 滚动同步字号过渡）
+// MARK: - 单行歌词（左对齐 + 整句平滑填充 + 滚动同步字号过渡）
 
-/// 逐字卡拉OK填充：每个字在其 KRC 时间区间 [start, end) 内从灰色**平滑渐变**到白色，
-/// 字唱完变白后下一个字开始平滑变白，以此类推、无缝衔接。
-/// 进度由 TimelineView 逐帧传入，每帧颜色微变 → 60fps 连续渐变，无闪烁、无跳变。
+/// 整句卡拉OK填充：白色 Text 以「进度 × 整句宽度」为裁剪宽度，左对齐覆盖在灰色 Text 上，
+/// 宽度随 TimelineView 逐帧伸展 → 白色从左到右**连续平滑填满整句**。
+/// 只更新裁剪宽度一个属性，文字本身不重光栅化、无渐变/mask 渲染，逐帧伸展不闪烁。
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    /// 当前播放进度（秒）；非当前行传 -1 → 整行恒为灰色（未唱状态）
-    let progress: Double
+    /// 0...1：整句填充进度（非当前行恒为 0 → 整句灰）
+    let fillRatio: Double
     /// 0.78...1.0：下一句在滚动期间同步放大
     let scale: Double
     let tint: Color
+
+    /// 整句宽度（等于灰色文字宽度，ZStack 由文字撑开，稳定不变）
+    @State private var textWidth: CGFloat = 0
 
     /// 底色透明度：随放大同步从 0.4 过渡到 0.5
     private var baseOpacity: Double {
@@ -215,41 +226,27 @@ private struct LyricRowView: View, Equatable {
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(line.words.indices, id: \.self) { i in
-                Text(line.words[i].text)
-                    .foregroundColor(wordColor(line.words[i]))
+            ZStack(alignment: .leading) {
+                // 灰底层：整句未填充部分
+                Text(line.text)
+                    .foregroundColor(tint.opacity(baseOpacity))
+                // 白填充层：裁剪宽度 = 进度×整句宽，从左到右平滑填满
+                Text(line.text)
+                    .foregroundColor(.white)
+                    .frame(width: textWidth * fillRatio, alignment: .leading)
+                    .clipped()
             }
+            .font(.system(size: 18, weight: .medium))
+            .lineLimit(1)
+            // 背景测量一次整句宽度（ZStack 尺寸稳定，仅在内容/尺寸变化时更新）
+            .background(GeometryReader { geo in
+                Color.clear
+                    .onAppear { textWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { textWidth = $0 }
+            })
+            .scaleEffect(scale, anchor: .leading)
+            Spacer(minLength: 0)
         }
-        .font(.system(size: 18, weight: .medium))
-        .lineLimit(1)
-        .scaleEffect(scale, anchor: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// 单个字的颜色：未唱=灰 / 正唱=灰→白按字内时间平滑渐变 / 已唱=白
-    private func wordColor(_ w: KRWord) -> Color {
-        if progress < w.start {
-            return tint.opacity(baseOpacity)          // 未唱：灰
-        }
-        if progress >= w.end {
-            return .white                             // 已唱：白
-        }
-        // 正唱：字内时间占比 0→1，颜色从灰平滑渐变到白
-        let t = (progress - w.start) / max(w.end - w.start, 0.001)
-        return lerpColor(tint.opacity(baseOpacity), .white, min(max(t, 0), 1))
-    }
-
-    /// 颜色线性插值（UIColor 分量），用于逐字平滑填充
-    private func lerpColor(_ a: Color, _ b: Color, _ t: Double) -> Color {
-        let ua = UIColor(a), ub = UIColor(b)
-        var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
-        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
-        ua.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
-        ub.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
-        let k = CGFloat(min(max(t, 0), 1))
-        return Color(UIColor(red: ar + (br - ar) * k,
-                             green: ag + (bg - ag) * k,
-                             blue: ab + (bb - ab) * k,
-                             alpha: aa + (ba - aa) * k))
+        .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
     }
 }
