@@ -502,9 +502,14 @@ struct PlayerCard: View {
         player.playerCardBackgroundLight = true
         guard let url = track.coverURL else { return }
         let ui = await CoverPalette.color(for: track.id, from: url)
-        let color = Color(uiColor: ui)
+        // 把提取出的主色压暗到约 40%，作为播放页背景（深底白字更沉浸）
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let factor: CGFloat = 0.4
+        let dark = UIColor(red: r * factor, green: g * factor, blue: b * factor, alpha: a)
+        let color = Color(uiColor: dark)
         bgColor = color
-        player.playerCardBackgroundLight = luminance(of: color) > 0.55
+        player.playerCardBackgroundLight = false
     }
 
     // MARK: - 亮度与动态文字色
