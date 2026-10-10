@@ -122,9 +122,7 @@ struct SearchView: View {
     }
 
     private func play(track: Track) {
-        // 把搜索结果作为队列，播放选中项
-        player.queue = results
-        player.play(at: results.firstIndex(where: { $0.id == track.id }) ?? 0)
+        player.play(track, in: results)
     }
 }
 
@@ -160,7 +158,7 @@ private struct SearchRow: View {
                 if isCurrent && player.isPlaying {
                     EqualizerBars(color: .white)
                 } else {
-                    Text(track.durText)
+                    Text(track.durText ?? "")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.5))
                 }
