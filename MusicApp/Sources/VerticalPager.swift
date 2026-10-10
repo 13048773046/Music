@@ -219,13 +219,13 @@ struct PlayerCard: View {
                             onLight: onLight
                         ) { Task { await toggleLike() } }
                         actionButton(
-                            icon: "message.fill",
+                            icon: "bubble.right.fill",
                             tint: textPrimary(onLight: onLight),
                             count: commentCount,
                             onLight: onLight
                         ) { showComments = true }
                         actionButton(
-                            icon: "paperplane.fill",
+                            icon: "arrowshape.turn.up.forward.fill",
                             tint: textPrimary(onLight: onLight),
                             count: shareCount,
                             onLight: onLight
