@@ -44,22 +44,24 @@ struct MusicApp: App {
 struct MainTabView: View {
     @EnvironmentObject private var player: PlayerManager
     @State private var selection = 1
+    /// 侧边栏实时露出宽度（0 = 完全关闭，panelWidth = 完全打开），由跟手手势实时驱动
+    @State private var sidebarDrag: CGFloat = 0
 
     /// 侧边栏宽度（约屏宽 85%）
     private let panelWidth = UIScreen.main.bounds.width * 0.85
 
+    /// 遮罩透明度进度 0...1
+    private var progress: CGFloat { panelWidth > 0 ? sidebarDrag / panelWidth : 0 }
+
     var body: some View {
         ZStack {
-            // 侧边栏：盖在最上层，从左侧滑入
-            if player.sidebarOpen {
-                SidebarView(
-                    onClose: {
-                        withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
-                    }
-                )
-                .transition(.move(edge: .leading))
-                .zIndex(1)
-            }
+            // 侧边栏：常驻渲染，offset 跟随手势实时滑动（关闭时完全移出屏幕左侧）
+            SidebarView(
+                onClose: closeSidebar
+            )
+            .offset(x: sidebarDrag - panelWidth)
+            .zIndex(1)
+            .allowsHitTesting(sidebarDrag > 0)
 
             // 主界面（内容区 + 顶部栏 + TabBar），打开侧边栏时整体向右推
             ZStack(alignment: .bottom) {
@@ -85,7 +87,7 @@ struct MainTabView: View {
                 // 顶部栏只在首页（播放页）展示：切到发现/我的后隐藏，
                 // 内容区完全沉浸，不残留全局顶部栏
                 if selection == 1 {
-                    GlobalTopBar()
+                    GlobalTopBar(onOpenSidebar: openSidebar)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.top, 8)
@@ -95,38 +97,66 @@ struct MainTabView: View {
 
                 AppTabBar(selection: $selection)
             }
-            .offset(x: player.sidebarOpen ? panelWidth : 0)
-            // 侧边栏打开时压暗主界面（遮罩效果）
+            .offset(x: sidebarDrag)
+            // 遮罩随侧边栏进度渐显，点击关闭
             .overlay {
-                if player.sidebarOpen {
-                    Color.black.opacity(0.4)
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
-                        }
+                if sidebarDrag > 0 {
+                    Color.black.opacity(0.4 * progress)
+                        .onTapGesture { closeSidebar() }
                 }
             }
-            // 全局手势：首页任意位置向右大幅滑打开侧边栏；展开后向左大幅滑关闭
-            .gesture(
-                DragGesture(minimumDistance: 30)
-                    .onEnded { v in
-                        // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑
-                        let dx = v.translation.width
-                        let dy = v.translation.height
-                        guard abs(dx) > abs(dy) * 1.5 else { return }
-                        if player.sidebarOpen {
-                            // 展开状态：向左大幅滑（dx < -80）关闭
-                            if dx < -80 {
-                                withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
-                            }
-                        } else {
-                            // 收起状态：向右大幅滑（dx > 100）打开，不限制起始位置
-                            if dx > 100 {
-                                withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
-                            }
-                        }
-                    }
-            )
         }
+        // 全局手势：整个屏幕左右拖动，侧边栏实时跟手；松手按位移/速度落位或回弹
+        .gesture(dragGesture)
+    }
+
+    // MARK: - 侧边栏开合（唯一入口：动画同步 sidebarOpen 语义状态与 sidebarDrag 视觉进度）
+
+    private func openSidebar() {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            player.sidebarOpen = true
+            sidebarDrag = panelWidth
+        }
+    }
+
+    private func closeSidebar() {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            player.sidebarOpen = false
+            sidebarDrag = 0
+        }
+    }
+
+    /// 跟手拖拽手势：onChanged 实时更新露出宽度；onEnded 超过阈值（位移/速度）落位，否则回弹
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { v in
+                let dx = v.translation.width
+                let dy = v.translation.height
+                // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑
+                guard abs(dx) > abs(dy) * 1.5 else { return }
+                // 以「当前开合状态 + 本次拖动位移」计算目标露出宽度，钳制在 0...panelWidth
+                let base = player.sidebarOpen ? panelWidth : 0
+                sidebarDrag = min(panelWidth, max(0, base + dx))
+            }
+            .onEnded { v in
+                let dx = v.translation.width
+                let vel = v.predictedEndTranslation.width
+                if player.sidebarOpen {
+                    // 展开状态：向左拖超 1/4 宽度或快速左滑 → 关闭，否则回弹到全开
+                    if dx < -panelWidth * 0.25 || vel < -80 {
+                        closeSidebar()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.25)) { sidebarDrag = panelWidth }
+                    }
+                } else {
+                    // 收起状态：向右拖超 1/4 宽度或快速右滑 → 打开，否则回弹到全关
+                    if dx > panelWidth * 0.25 || vel > 80 {
+                        openSidebar()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.25)) { sidebarDrag = 0 }
+                    }
+                }
+            }
     }
 }
 
@@ -137,12 +167,14 @@ struct MainTabView: View {
 struct GlobalTopBar: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var library: Library
+    /// 点击汉堡菜单打开侧边栏（统一走 MainTabView 的动画开合入口）
+    let onOpenSidebar: () -> Void
     @State private var showSearch = false
 
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = true }
+                onOpenSidebar()
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "line.horizontal.3")

@@ -33,13 +33,8 @@ struct SidebarView: View {
             Color.clear
         }
         .ignoresSafeArea()
-        // 侧边栏打开时，左滑关闭
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { v in
-                    if v.translation.width < -50 { onClose() }
-                }
-        )
+        // 开合手势统一由 MainTabView 的全局跟手手势控制（拖动侧边栏区域同样跟手），
+        // 这里不再挂独立手势，避免与全局手势冲突导致卡顿
     }
 
     // MARK: - 背景色：跟随当前歌曲封面主色（比播放页再暗一档）
@@ -75,20 +70,6 @@ struct SidebarView: View {
             }
 
             Spacer(minLength: 0)
-
-            // 已登录：右侧显示用户头像；未登录保持空白对齐
-            if let u = auth.currentUser {
-                CachedCoverImage(
-                    url: u.avatarURL,
-                    title: u.name,
-                    placeholder: avatarPlaceholder
-                )
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
-                .overlay(
-                    Circle().stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
-            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 54)
@@ -101,15 +82,6 @@ struct SidebarView: View {
             return u.name.isEmpty ? "已登录" : u.name
         }
         return "登录后推荐更精准"
-    }
-
-    private var avatarPlaceholder: some View {
-        ZStack {
-            Color(red: 0.22, green: 0.22, blue: 0.24)
-            Image(systemName: "person.fill")
-                .font(.system(size: 16))
-                .foregroundColor(.white.opacity(0.5))
-        }
     }
 
     // MARK: - 分区小标题
