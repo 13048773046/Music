@@ -1842,13 +1842,16 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                         cand[tid] = cand.get(tid, 0.0) + sc
                 ranked = sorted(cand.items(), key=lambda kv: (-kv[1], kv[0]))
                 chosen = [tid for tid, _ in ranked[:20]]
-                # 4) 候选不足 20 首时随机补齐（上传 + 采集混合，同样排除已强互动）
+                # 4) 候选不足 20 首时随机补齐（上传 + 采集按曲库实际比例统一随机混合，
+                #    同样排除已强互动；避免先填上传导致采集歌几乎不出现）
                 if len(chosen) < 20:
                     used = set(chosen)
-                    pool = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=?"
-                                     " ORDER BY RANDOM() LIMIT 30", (viewer_id,)).fetchall()
-                    pool += c.execute("SELECT id FROM collected_tracks WHERE offline=0"
-                                      " ORDER BY RANDOM() LIMIT 30").fetchall()
+                    pool = c.execute(
+                        "SELECT id FROM ("
+                        "  SELECT id, 1 AS src FROM tracks WHERE offline=0 AND user_id!=?"
+                        "  UNION ALL"
+                        "  SELECT id, 2 FROM collected_tracks WHERE offline=0"
+                        ") ORDER BY RANDOM() LIMIT 120", (viewer_id,)).fetchall()
                     for (tid,) in pool:
                         if len(chosen) >= 20:
                             break
