@@ -92,10 +92,18 @@ func parseLyrics(_ text: String) -> [KRCLine] {
     return lines
 }
 
-// MARK: - 两句固定歌词预览（歌名/作者下方，互动行上方）
+// MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
-/// **固定模式**：当前句永远显示在第 1 行、下一句在第 2 行，位置完全固定，
-/// 无位移动画、无缩放动画、无滚动回弹；切句瞬间仅做极短淡入（0.12s，帧驱动）。
+/// 平滑滚动过渡 + 逐字高亮全部由 `TimelineView(.animation)` 帧驱动，单一时间源：
+///
+/// **切句平滑滚动（保留原动画，去除结尾回弹）**
+/// 滚动进度 `t` = 距当前行 start 的时间 / 0.28s，每帧按时间戳插值：
+/// - 滚动期间行集合为 `[旧行, 当前行, 预备行]`，容器上滑 `-step * easeOutCubic(t)`
+/// - 旧行同步淡出并轻微缩小，当前行从 0.8 放大到 1.0，全部由同一 `t` 驱动，天然同步
+/// - **单调化**：AVPlayer 时间在流式播放时可能毫秒级抖动/回退，若直接驱动 `t`，
+///   位移会跟着回退，表现为"滚上去又弹回来"的小回弹。这里用引用类型记录已到达的
+///   最大进度（class 属性不触发 SwiftUI 重绘），进度只增不减；切句（当前行变化）时
+///   重置，保证每次滚动平滑单向、无回弹。
 ///
 /// **逐字卡拉OK高亮（整行单 mask，无 GeometryReader）**
 /// 白色整行文字用**一个**左对齐矩形 mask 裁剪，mask 宽度 = 已唱完字宽之和 + 正在唱的字宽×进度。
@@ -112,10 +120,20 @@ struct LyricPreview: View {
     // 固定排版尺寸（字号 20 行高约 26，间距 8）
     private static let rowHeight: CGFloat = 26
     private static let rowGap: CGFloat = 8
-    // 视口固定两行：当前句 + 下一句
+    private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
+    // 视口只露两行：当前句 + 下一句。第三行（预备行）在 frame 外被 clipped，
+    // 在页面上自然被点赞/评论/分享按钮挡住，滚动时从下方滑上来接替下一句。
     private static let viewHeight: CGFloat = rowHeight * 2 + rowGap
-    /// 切句后当前行的淡入时长（秒）：仅透明度过渡，位置不动
-    private static let fadeDuration: Double = 0.12
+    /// 切句滚动时长（秒）：滚动进度 = 距当前行 start 的时间 / 该值
+    private static let scrollDuration: Double = 0.28
+
+    /// 滚动单调化追踪器：记录已到达的最大滚动进度与当前行，
+    /// class 引用属性不触发 SwiftUI 重绘，可安全在 TimelineView 每帧更新。
+    private final class ScrollTracker {
+        var maxT: Double = 0
+        var lastC: Int = -2
+    }
+    @State private var tracker = ScrollTracker()
 
     /// 播放跟随：每帧直接实时查询 AVPlayer 当前时间（毫秒级），逐字高亮逐帧推进
     private func displayTime() -> Double {
@@ -139,33 +157,47 @@ struct LyricPreview: View {
         TimelineView(.animation) { _ in
             let display = displayTime()
             let c = currentIndex(display)
-            // 切句淡入：距当前行 start 0.12s 内透明度 0.25 → 1.0（smoothstep），
-            // 之后恒定 1.0。位置固定，无位移无缩放无回弹。
-            let fadeT = c >= 0 ? min(max((display - lines[c].start) / Self.fadeDuration, 0), 1) : 1
-            let fade = fadeT * fadeT * (3 - 2 * fadeT)
+            // 切句（当前行变化）：重置单调进度，开启新一轮平滑滚动
+            if c != tracker.lastC {
+                tracker.lastC = c
+                tracker.maxT = 0
+            }
+            // 滚动进度：切句瞬间（display 刚过当前行 start）为 0，0.28s 后为 1。
+            // 单调化：只增不减，AVPlayer 时间抖动不会让位移回退（无回弹）。
+            let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
+            let t = max(tRaw, tracker.maxT)
+            tracker.maxT = t
+            let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0   // easeOutCubic：起快收慢，跟手不拖沓
+            // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
+            let scrolling = c > 0 && t < 1
+            let base = scrolling ? c - 1 : c
+            let offsetY = scrolling ? -Self.step * eased : 0
 
             VStack(spacing: Self.rowGap) {
-                // 当前句：固定第 1 行，逐字高亮
-                if c >= 0, lines.indices.contains(c) {
-                    LyricRowView(
-                        line: lines[c],
-                        currentTime: display,
-                        scale: 1.0,
-                        opacity: 0.25 + 0.75 * fade,
-                        tint: tint
-                    )
-                }
-                // 下一句：固定第 2 行，灰字
-                if lines.indices.contains(c + 1) {
-                    LyricRowView(
-                        line: lines[c + 1],
-                        currentTime: -1,
-                        scale: 0.8,
-                        opacity: 1.0,
-                        tint: tint
-                    )
+                ForEach(0..<3, id: \.self) { idx in
+                    let li = base + idx
+                    if lines.indices.contains(li) {
+                        let line = lines[li]
+                        // 当前行：随滚动放大到满字号 + 逐字高亮；
+                        // 旧行（仅滚动期间）：已唱完全白，同步淡出缩小；
+                        // 预备行：恒灰小字。
+                        let isCurrent = li == c
+                        let isOld = li == c - 1
+                        let scale: Double = isCurrent
+                            ? (scrolling ? 0.8 + 0.2 * eased : 1.0)
+                            : (isOld ? 1.0 - 0.15 * eased : 0.8)
+                        let opacity = isOld ? 1 - eased : 1.0
+                        LyricRowView(
+                            line: line,
+                            currentTime: isCurrent ? display : (isOld ? display : -1),
+                            scale: scale,
+                            opacity: opacity,
+                            tint: tint
+                        )
+                    }
                 }
             }
+            .offset(y: offsetY)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: Self.viewHeight, alignment: .top)
