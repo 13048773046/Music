@@ -162,7 +162,11 @@ def db():
     c.execute("""CREATE TABLE IF NOT EXISTS behavior_events(
         id TEXT PRIMARY KEY, user_id TEXT, track_id TEXT,
         event TEXT, value REAL DEFAULT 0, meta TEXT DEFAULT '',
+        track_info TEXT DEFAULT '',
         created REAL)""")
+    bev_cols = [r[1] for r in c.execute("PRAGMA table_info(behavior_events)")]
+    if "track_info" not in bev_cols:
+        c.execute("ALTER TABLE behavior_events ADD COLUMN track_info TEXT DEFAULT ''")
     c.execute("CREATE INDEX IF NOT EXISTS idx_bev_user ON behavior_events(user_id, created)")
     c.commit()
     return c
@@ -531,6 +535,23 @@ def _fmt_dur(d):
         return "--:--"
     m, s = int(d) // 60, int(d) % 60
     return f"{m}:{s:02d}"
+
+
+def _track_info(c, tid):
+    """歌曲信息快照 JSON（title/artist/album）：行为记录用，推荐时提取相似度关键词。
+    优先用户上传表，其次采集表；查不到返回空字符串。"""
+    if not tid:
+        return ""
+    try:
+        row = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
+        if not row:
+            row = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+        if not row:
+            return ""
+        return json.dumps({"title": row[0] or "", "artist": row[1] or "",
+                           "album": row[2] or ""}, ensure_ascii=False)[:500]
+    except Exception:
+        return ""
 
 
 # ---------------- HTTP ----------------
@@ -1663,6 +1684,72 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                                            "shareCount": r[13] or 0, "hasLyric": bool(r[14])} for r in rows]})
                 return
 
+            # 用户点赞的歌曲列表（我的喜欢：用户上传 + 采集歌曲混合，字段与 /api/tracks 一致）
+            if u.path == "/api/likes":
+                if not rate_limit(self, "tracks"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                qs = urllib.parse.parse_qs(u.query)
+                viewer_id = (qs.get("userId", [""])[0] or "").strip()
+                c = db()
+                tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if tok_uid:
+                    viewer_id = tok_uid
+                if not viewer_id:
+                    c.close()
+                    self._json(200, [])
+                    return
+                like_rows = c.execute(
+                    "SELECT track_id FROM likes WHERE user_id=? ORDER BY created DESC LIMIT 300",
+                    (viewer_id,)).fetchall()
+                if not like_rows:
+                    c.close()
+                    self._json(200, [])
+                    return
+                ids = [r[0] for r in like_rows]
+                ph = ",".join("?" * len(ids))
+                # 用户上传歌曲
+                rows = c.execute(
+                    """SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                       t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                       COALESCE(u.name,''),
+                       (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id), 1
+                       FROM tracks t
+                       LEFT JOIN users u ON u.id=t.user_id
+                       WHERE t.offline=0 AND t.id IN (%s) GROUP BY t.id""" % ph, ids).fetchall()
+                # 采集歌曲（字段与上传一致：cover 占位、size 强转 int）
+                crows = c.execute(
+                    "SELECT id,title,artist,album,cover,duration,size,created,"
+                    " play_count,like_count,share_count,user_id,lrc"
+                    " FROM collected_tracks WHERE offline=0 AND id IN (%s)" % ph, ids).fetchall()
+                uname = ""
+                urow = c.execute("SELECT name FROM users WHERE id=(SELECT user_id FROM collected_tracks"
+                                 " WHERE user_id!='' LIMIT 1)").fetchone()
+                if urow:
+                    uname = urow[0]
+                merged = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                           "cover": "1", "fname": "",
+                           "size": int(r[6]) if r[6] is not None else 0,
+                           "dur": r[5], "durText": _fmt_dur(r[5]), "created": r[7],
+                           "playCount": r[8] or 0, "likeCount": r[9] or 0,
+                           "shareCount": r[10] or 0,
+                           "userId": r[11] or "", "userName": uname,
+                           "hasLyric": bool(r[12]), "commentCount": 0, "isLiked": True} for r in crows]
+                merged += [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                            "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
+                            "durText": _fmt_dur(r[7]), "created": r[8],
+                            "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                            "shareCount": r[11] or 0,
+                            "userId": r[12] or "", "userName": r[14] or "",
+                            "hasLyric": bool(r[13]), "commentCount": r[15] or 0,
+                            "isLiked": True} for r in rows]
+                # 保持点赞时间倒序（新点赞的在前）
+                order = {rid: i for i, rid in enumerate(ids)}
+                merged.sort(key=lambda x: order.get(x["id"], 999))
+                c.close()
+                self._json(200, merged)
+                return
+
             # 搜索：按歌名/歌手模糊匹配（用户上传 + 采集歌曲统一返回，App 端无差别）
             if u.path == "/api/search":
                 qs = urllib.parse.parse_qs(u.query)
@@ -1795,12 +1882,28 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                     return [p for p in pieces if len(p) >= 2]
                 kw_list = []
                 for tid, sc in top:
-                    row = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
-                    if not row:
-                        row = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
-                    if not row:
-                        continue
-                    title, artist, album = row
+                    # 优先用行为事件里记录的歌曲信息快照提取相似度关键词：
+                    # 记录的是「这首歌的信息」，推荐的是「信息相似的其它歌」
+                    title = artist = album = ""
+                    if viewer_id:
+                        _ti = c.execute(
+                            "SELECT track_info FROM behavior_events WHERE user_id=? AND track_id=?"
+                            " AND track_info!='' ORDER BY created DESC LIMIT 1", (viewer_id, tid)).fetchone()
+                        if _ti and _ti[0]:
+                            try:
+                                _info = json.loads(_ti[0])
+                                title = _info.get("title") or ""
+                                artist = _info.get("artist") or ""
+                                album = _info.get("album") or ""
+                            except Exception:
+                                pass
+                    if not title and not artist and not album:
+                        row = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
+                        if not row:
+                            row = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                        if not row:
+                            continue
+                        title, artist, album = row
                     for kw in (_kw_pieces(title)
                                + ([artist] if artist and len(artist) >= 2 else [])
                                + ([album] if album and len(album) >= 2 else [])):
@@ -2964,9 +3067,10 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                                   (uid, tid, time.time()))
                         c.execute("UPDATE tracks SET like_count=like_count+1 WHERE id=?", (tid,))
                         liked = True
-                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
-                                 VALUES(?,?,?,?,?,?,?)""",
-                              (uuid.uuid4().hex, uid, tid, "like", 1.0 if liked else 0.0, "", time.time()))
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
+                                 VALUES(?,?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, "like", 1.0 if liked else 0.0,
+                               "", _track_info(c, tid), time.time()))
                     c.commit()
                     row = c.execute("SELECT like_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -2989,9 +3093,10 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                         self._err(401, "未登录或登录已过期")
                         return
                     c.execute("UPDATE tracks SET share_count=share_count+1 WHERE id=?", (tid,))
-                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
-                                 VALUES(?,?,?,?,?,?,?)""",
-                              (uuid.uuid4().hex, uid, tid, "share", 1.0, "", time.time()))
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
+                                 VALUES(?,?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, "share", 1.0,
+                               "", _track_info(c, tid), time.time()))
                     c.commit()
                     row = c.execute("SELECT share_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -3033,9 +3138,10 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                     c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,created)
                                  VALUES(?,?,?,?,?,?)""",
                               (cid, tid, uid, uname, content, time.time()))
-                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
-                                 VALUES(?,?,?,?,?,?,?)""",
-                              (uuid.uuid4().hex, uid, tid, "comment", 1.0, "", time.time()))
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
+                                 VALUES(?,?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, "comment", 1.0,
+                               "", _track_info(c, tid), time.time()))
                     c.commit()
                     c.close()
                     self._json(200, {"id": cid})
@@ -3086,9 +3192,19 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                         meta_s = meta[:500]
                     else:
                         meta_s = ""
-                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
-                                 VALUES(?,?,?,?,?,?,?)""",
-                              (uuid.uuid4().hex, uid, tid, ev, val, meta_s, now))
+                    # 歌曲信息快照：记录这首歌的完整信息（歌名/歌手/专辑），
+                    # 推荐时直接用它找「类似的歌」，即使歌曲日后下架/删除也不影响推荐
+                    tinfo = ""
+                    if tid:
+                        _tr = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
+                        if not _tr:
+                            _tr = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                        if _tr:
+                            tinfo = json.dumps({"title": _tr[0] or "", "artist": _tr[1] or "",
+                                                "album": _tr[2] or ""}, ensure_ascii=False)[:500]
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
+                                 VALUES(?,?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, ev, val, meta_s, tinfo, now))
                     ins += 1
                 c.commit()
                 c.close()
