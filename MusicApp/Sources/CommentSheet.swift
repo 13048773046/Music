@@ -99,7 +99,14 @@ struct CommentSheet: View {
                 .background(Theme.background)
             }
         }
-        .task { await load() }
+        .task {
+            // 打开评论弹窗即记录行为（即使没评论也记：comment_open，个性化推荐弱信号）
+            if auth.currentUser != nil {
+                let ev = API.BehaviorEvent(trackId: track.id, event: "comment_open", value: 1)
+                await API.reportBehavior([ev])
+            }
+            await load()
+        }
     }
 
     private func load() async {

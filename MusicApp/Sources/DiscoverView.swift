@@ -3,9 +3,12 @@ import SwiftUI
 struct DiscoverView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var library: Library
+    @EnvironmentObject private var auth: AuthManager
     @State private var state: LoadState = .loading
     @State private var latest: [Track] = []
     @State private var recommended: [Track] = []
+    /// 个性化推荐（基于听歌行为），未登录/无行为时后端返回随机兜底
+    @State private var personalized: [Track] = []
 
     var body: some View {
         NavigationStack {
@@ -61,6 +64,20 @@ struct DiscoverView: View {
             LazyVStack(alignment: .leading, spacing: 28) {
                 // 头部
                 header
+
+                if !personalized.isEmpty {
+                    sectionTitle("猜你喜欢", subtitle: "根据你的听歌行为推荐")
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(personalized) { track in
+                                RecommendCard(track: track) {
+                                    playPersonalized(track)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                }
 
                 if !recommended.isEmpty {
                     sectionTitle("为你推荐", subtitle: "根据你的喜好精选")
@@ -164,6 +181,30 @@ struct DiscoverView: View {
             buildSections(from: library.tracks)
             state = .loaded
         }
+        // 登录用户才拉个性化推荐（未登录时后端无法关联行为数据）
+        if auth.currentUser != nil {
+            Task { await loadPersonalized() }
+        }
+    }
+
+    /// 拉取个性化推荐（失败静默，不影响页面）
+    private func loadPersonalized() async {
+        do {
+            let tracks = try await API.recommend()
+            guard !Task.isCancelled else { return }
+            personalized = Array(tracks.prefix(10))
+        } catch {
+            // 静默：接口不可用或网络失败时仅隐藏该区块
+        }
+    }
+
+    /// 播放个性化推荐歌曲：以推荐列表为队列（后续续拉切回普通全随机流）
+    private func playPersonalized(_ track: Track) {
+        library.searchContext = nil
+        if !library.tracks.contains(where: { $0.id == track.id }) {
+            library.tracks.append(track)
+        }
+        player.play(track, in: personalized)
     }
 
     /// 最新 = 按入库时间倒序前 6；推荐 = 其余歌曲随机 6 首

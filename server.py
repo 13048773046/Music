@@ -23,8 +23,10 @@
 """
 import os
 import json
+import ssl
 import sqlite3
 import time
+import random
 import uuid
 import hashlib
 import hmac
@@ -34,6 +36,9 @@ import logging
 import socket
 import struct
 import urllib.parse
+import urllib.request
+import re
+import base64
 import threading
 from html import escape as html_escape
 from collections import deque
@@ -108,14 +113,18 @@ def db():
                        ("age", "INTEGER DEFAULT 0"),
                        ("background_image", "TEXT DEFAULT ''"),
                        ("signature", "TEXT DEFAULT ''"),
-                       ("ip_address", "TEXT DEFAULT ''")]:
+                       ("ip_address", "TEXT DEFAULT ''"),
+                       ("banned", "INTEGER DEFAULT 0"),
+                       ("ban_reason", "TEXT DEFAULT ''")]:
         if _col not in ucols:
             c.execute("ALTER TABLE users ADD COLUMN %s %s" % (_col, _ddl))
     tcols = [r[1] for r in c.execute("PRAGMA table_info(tracks)")]
     for _col, _ddl in [("user_id", "TEXT DEFAULT ''"),
                        ("play_count", "INTEGER DEFAULT 0"),
                        ("like_count", "INTEGER DEFAULT 0"),
-                       ("share_count", "INTEGER DEFAULT 0")]:
+                       ("share_count", "INTEGER DEFAULT 0"),
+                       ("offline", "INTEGER DEFAULT 0"),
+                       ("offline_reason", "TEXT DEFAULT ''")]:
         if _col not in tcols:
             c.execute("ALTER TABLE tracks ADD COLUMN %s %s" % (_col, _ddl))
     c.execute("""CREATE TABLE IF NOT EXISTS likes(
@@ -141,6 +150,20 @@ def db():
         play_count INTEGER DEFAULT 0, like_count INTEGER DEFAULT 0,
         share_count INTEGER DEFAULT 0, lrc TEXT DEFAULT '',
         UNIQUE(source, source_id))""")
+    ccols = [r[1] for r in c.execute("PRAGMA table_info(collected_tracks)")]
+    for _col, _ddl in [("offline", "INTEGER DEFAULT 0"),
+                       ("offline_reason", "TEXT DEFAULT ''")]:
+        if _col not in ccols:
+            c.execute("ALTER TABLE collected_tracks ADD COLUMN %s %s" % (_col, _ddl))
+    # 用户行为事件表（个性化推荐数据源）
+    # event: like / comment_open / comment / share / listen
+    # value: listen=累计收听秒数，like=1/0，其余 0
+    # meta: JSON，如 {"fraction": 收听进度0~1, "plays": 本次会话播放次数}
+    c.execute("""CREATE TABLE IF NOT EXISTS behavior_events(
+        id TEXT PRIMARY KEY, user_id TEXT, track_id TEXT,
+        event TEXT, value REAL DEFAULT 0, meta TEXT DEFAULT '',
+        created REAL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_bev_user ON behavior_events(user_id, created)")
     c.commit()
     return c
 
@@ -269,10 +292,28 @@ RATE_LIMITS = {
     "share_url": (60, 60),    # 分享 token 签发/分享页 60 次/分
     "collect":   (60, 60),    # 采集歌曲列表 60 次/分
     "collect_add": (20, 60),  # 采集入库 20 次/分
+    "behavior":  (120, 60),   # 用户行为上报 120 次/分
+    "recommend": (30, 60),    # 个性化推荐 30 次/分
 }
 
 # 采集入库接口密钥（音乐源采集器调用 POST /api/collect/add 时携带）
 COLLECT_KEY = os.environ.get("COLLECT_KEY", "liuying-collect-7f3a9c2e")
+
+
+def _ssl_ctx():
+    """优先使用系统 CA 证书（服务器 Python 环境证书链不完整会导致 https 下载失败），
+    找不到 CA 文件时降级为不校验证书（仅用于封面图片下载，非敏感链路）。"""
+    for cafile in ("/etc/pki/tls/certs/ca-bundle.crt",
+                   "/etc/ssl/certs/ca-certificates.crt"):
+        if os.path.exists(cafile):
+            try:
+                return ssl.create_default_context(cafile=cafile)
+            except Exception:
+                pass
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 def rate_key(handler, name, extra=""):
@@ -312,6 +353,20 @@ def gen_short_code(n=8):
 
 
 # ---------------- 文件安全 ----------------
+
+ADMIN_PWD_FILE = "/www/wwwroot/music/admin_pwd"
+
+def _admin_token():
+    """管理后台密码：持久化文件优先，其次环境变量，最后默认值"""
+    try:
+        with open(ADMIN_PWD_FILE, "r", encoding="utf-8") as _f:
+            _t = _f.read().strip()
+        if _t:
+            return _t
+    except Exception:
+        pass
+    return os.environ.get("ADMIN_TOKEN", "liuying-admin-8f3a")
+
 
 def safe_file_path(fname):
     """仅允许 FILES 目录内的文件，防路径穿越（纵深防御）。"""
@@ -763,9 +818,18 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 row = c.execute("SELECT fname FROM tracks WHERE id=?", (tid,)).fetchone()
+                # 采集歌曲：302 到第三方播放地址（HEAD 与 GET 一致）
+                crow = c.execute("SELECT play_url FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                 c.close()
                 fp = safe_file_path(row[0] if row else "")
                 if not fp:
+                    if crow and crow[0]:
+                        self.send_response(302)
+                        self.send_header("Location", crow[0])
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        return
                     self._err(404, "not found")
                     return
                 size = os.path.getsize(fp)
@@ -790,6 +854,673 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 self._json(200, {"ok": True, "service": "music",
                                  "time": time.strftime("%Y-%m-%d %H:%M:%S")})
                 return
+
+            # ---------- 采集控制台 H5 页面 ----------
+            if u.path == "/collect.html":
+                html = """<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>流萤音乐 · 采集控制台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0f0f10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:640px;margin:0 auto;padding:24px 18px}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+.sub{color:#888;font-size:13px;margin-bottom:20px}
+.btn{display:block;width:100%;padding:15px;border-radius:14px;border:0;font-size:16px;font-weight:600;cursor:pointer}
+.btn:active{opacity:.8}
+.btn.start{background:#2a2a2e;color:#fff}
+.btn.stop{background:#c0392b;color:#fff}
+.row2{display:flex;gap:10px;margin-bottom:12px}
+.tgtrow{flex:1;display:flex;align-items:center;gap:10px;background:#1a1a1c;border-radius:14px;padding:10px 14px}
+.tgtrow input{flex:1;min-width:0;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:10px;font-size:15px;outline:none}
+.tgtrow input:disabled{opacity:.4}
+.tgtlbl{font-size:12px;color:#888;flex-shrink:0}
+.sec{margin:18px 0 8px;font-size:13px;color:#888}
+.sec b{color:#eee}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.chip{background:#1a1a1c;color:#aaa;border:1px solid #2a2a2e;padding:8px 13px;border-radius:20px;font-size:13px;cursor:pointer;user-select:none}
+.chip.on{background:#1e3a2a;color:#5cd68a;border-color:#2d5a3e}
+.chip:disabled{opacity:.35;cursor:not-allowed}
+.searchbox{display:flex;gap:8px;background:#1a1a1c;border-radius:14px;padding:8px;margin:10px 0 12px}
+.searchbox input{flex:1;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:11px 12px;font-size:15px;outline:none;min-width:0}
+.searchbox button{background:#2a6df4;color:#fff;border:0;border-radius:10px;padding:0 18px;font-size:14px;font-weight:600;cursor:pointer}
+.runbox{background:#1a1a1c;border-radius:14px;padding:18px 16px;margin:16px 0;text-align:center}
+.runbox .num{font-size:42px;font-weight:800;color:#5cd68a;line-height:1.1}
+.runbox .lbl{font-size:13px;color:#888;margin-top:6px}
+.runbox .st{font-size:11px;color:#555;margin-top:6px}
+.list{background:#1a1a1c;border-radius:14px;overflow:hidden}
+.row{padding:11px 14px;border-bottom:1px solid #262629;font-size:13px;display:flex;align-items:center;gap:8px}
+.row:last-child{border-bottom:0}
+.row .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .a{color:#777;font-size:11px;flex-shrink:0;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .dur{color:#555;font-size:11px;flex-shrink:0}
+.row .collectbtn{background:#1e3a2a;color:#5cd68a;border:0;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0}
+.row .collectbtn:disabled{opacity:.5}
+.empty{padding:24px;text-align:center;color:#555;font-size:13px}
+.tag{display:inline-block;background:#2a2a2e;color:#aaa;font-size:10px;padding:2px 7px;border-radius:5px;margin-left:6px}
+.tag.on{background:#1e4d2b;color:#5cd68a}
+.tag.no{background:#3a2a2a;color:#c9866e}
+.tag.wy{background:#1e3a5f;color:#6fb1ff}
+.tag.kw{background:#3a2a1e;color:#ffb36b}
+.tag.kg{background:#3a1e3a;color:#d68fd6}
+.tag.tx{background:#1e3a3a;color:#6fd6c8}
+</style></head><body><div class="wrap">
+<h1>流萤音乐 · 采集控制台</h1>
+<div class="sub">选择平台与方式，自动入库；也可搜歌名单点采集</div>
+
+<div class="row2">
+  <div class="tgtrow"><input id="tgt" type="number" min="1" inputmode="numeric" placeholder="目标数量"><span class="tgtlbl">目标</span></div>
+</div>
+
+<div class="sec"><b>采集平台</b>（多选）</div>
+<div class="chips" id="platChips">
+  <div class="chip on" data-v="kw">酷我</div>
+  <div class="chip on" data-v="wy">网易云</div>
+  <div class="chip" data-v="kg">酷狗</div>
+  <div class="chip" data-v="tx">腾讯</div>
+</div>
+
+<div class="sec"><b>采集方式</b></div>
+<div class="chips" id="modeChips">
+  <div class="chip on" data-v="search">关键词搜索</div>
+  <div class="chip" data-v="hot">热门榜单</div>
+</div>
+
+<div class="sec" id="kwSec"><b>关键词</b>（多选）</div>
+<div class="chips" id="kwChips"></div>
+
+<button id="btn" class="btn start">开始采集</button>
+
+<div class="runbox">
+  <div class="num" id="runCount">0</div>
+  <div class="lbl" id="runLbl">已完成 / 未设置目标</div>
+  <div class="st" id="runState">尚未开始</div>
+</div>
+
+<div class="sec"><b>搜索歌名，点采集入库</b></div>
+<div class="searchbox">
+  <input id="kwInput" placeholder="输入歌名 / 歌手" />
+  <button id="searchBtn">搜索</button>
+</div>
+<div class="list" id="searchList"><div class="empty">输入歌名搜索，再点右侧「采集」</div></div>
+
+<div class="sec"><b>本次采集歌曲</b> <span id="runNum" style="color:#555;font-weight:400"></span></div>
+<div class="list" id="list"><div class="empty">点击开始采集或搜索歌名</div></div>
+<div class="sec">库内共 <b id="total">0</b> 首 <span id="runstate" class="tag">空闲</span></div>
+</div>
+<script>
+const KW_LIST=["抖音热歌","华语流行","热门新歌","2024流行","2025流行","2023热门","华语金曲","伤感流行","民谣","抖音神曲","网络热歌","粤语经典"];
+const btn=document.getElementById('btn');
+const list=document.getElementById('list');
+const total=document.getElementById('total');
+const runstate=document.getElementById('runstate');
+const runCount=document.getElementById('runCount');
+const runState=document.getElementById('runState');
+const runNum=document.getElementById('runNum');
+const runLbl=document.getElementById('runLbl');
+const tgtInp=document.getElementById('tgt');
+const platChips=document.getElementById('platChips');
+const modeChips=document.getElementById('modeChips');
+const kwChips=document.getElementById('kwChips');
+const kwSec=document.getElementById('kwSec');
+const kwInput=document.getElementById('kwInput');
+const searchBtn=document.getElementById('searchBtn');
+const searchList=document.getElementById('searchList');
+let running=false, mode='search';
+
+// 初始化关键词 chips
+KW_LIST.forEach(k=>{
+  const d=document.createElement('div');
+  d.className='chip on';d.textContent=k;d.dataset.v=k;
+  kwChips.appendChild(d);
+});
+function sel(container,cb){
+  container.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
+    if(container===modeChips){
+      container.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+      c.classList.add('on');mode=c.dataset.v;
+      kwSec.style.opacity=(mode==='search')?1:.3;
+      kwChips.querySelectorAll('.chip').forEach(x=>x.disabled=(mode!=='search'));
+    }else{
+      c.classList.toggle('on');
+    }
+    if(cb)cb();
+  });
+}
+sel(platChips);sel(kwChips);sel(modeChips);
+kwChips.querySelectorAll('.chip').forEach(x=>x.disabled=false);
+
+function getPlats(){return [...platChips.querySelectorAll('.chip.on')].map(x=>x.dataset.v)}
+function getKws(){return [...kwChips.querySelectorAll('.chip.on')].map(x=>x.dataset.v)}
+function pad(n){return String(n).padStart(2,'0')}
+function fmt(t){if(!t)return '';const d=new Date(t*1000);return pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+async function load(){
+  try{
+    const r=await fetch('/music/api/collect/status');
+    const d=await r.json();
+    running=!!d.running;
+    total.textContent=d.total||0;
+    btn.className='btn '+(running?'stop':'start');
+    btn.textContent=running?'停止采集':'开始采集';
+    runstate.textContent=running?'采集中':'空闲';
+    runstate.className='tag'+(running?' on':'');
+    const songs=d.run_songs||[];
+    const n=songs.length;
+    const tgt=d.target||0, done=d.completed||0, rem=d.remaining||0, ach=!!d.achieved;
+    const ar=songs.filter(x=>x.audio).length;
+    runCount.textContent=tgt?done:0;
+    runCount.style.color=ach?'#e8c46a':'#5cd68a';
+    runLbl.textContent=tgt?('已完成 / 目标 '+tgt+' 首'):'已完成（未设置目标）';
+    runNum.textContent=n?('本次 '+n+' 首 · 音频就绪 '+ar+'/'+n):'';
+    tgtInp.disabled=running;
+    platChips.querySelectorAll('.chip').forEach(c=>c.disabled=running);
+    modeChips.querySelectorAll('.chip').forEach(c=>c.disabled=running);
+    kwChips.querySelectorAll('.chip').forEach(c=>c.disabled=running||mode!=='search');
+    let st;
+    if(tgt){
+      st=(ach?'目标已完成，可重新设置后开始新一轮':('目标 '+tgt+' · 已完成 '+done+'/'+tgt+' · 剩余 '+rem));
+      if(running)st='采集中 · '+st;
+      else if(n)st=(d.started?('上次运行 '+fmt(d.started)+' · '):'')+st;
+    }else{
+      st=running?'采集中…':(d.started?('上次运行 '+n+' 首，始于 '+fmt(d.started)):'尚未开始');
+    }
+    if(d.run_skipped)st+=' · 跳过 '+d.run_skipped;
+    runState.textContent=st;
+    if(n){
+      list.innerHTML=songs.map((s,i)=>'<div class="row"><span class="t">'+esc(s.title)+'</span><span class="a">'+esc(s.artist||'')+'</span><span class="tag'+(s.audio?' on':' no')+'">'+(s.audio?'已下':'待补')+'</span></div>').join('');
+    }else{
+      list.innerHTML='<div class="empty">'+(running?'采集中，等待首批…':'点击开始采集或搜索歌名')+'</div>';
+    }
+  }catch(e){}
+}
+
+btn.onclick=async()=>{
+  btn.disabled=true;
+  try{
+    const v=tgtInp.value.trim();
+    const body=new URLSearchParams();
+    if(v&&!running)body.set('target',v);
+    body.set('platforms',getPlats().join(','));
+    body.set('mode',mode);
+    body.set('keywords',getKws().join(','));
+    await fetch('/music/api/collect/'+(running?'stop':'start'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
+  }catch(e){alert('请求失败：'+e)}
+  setTimeout(()=>{btn.disabled=false;load()},800);
+};
+
+// 搜索
+searchBtn.onclick=async()=>{
+  const kw=kwInput.value.trim();
+  if(!kw){alert('请输入歌名');return}
+  searchBtn.disabled=true;searchBtn.textContent='搜索中…';
+  searchList.innerHTML='<div class="empty">搜索中…</div>';
+  try{
+    const plats=getPlats().length?getPlats():['wy'];
+    const all=[];
+    for(const p of plats){
+      try{
+        const r=await fetch('/music/api/collect/search?source='+p+'&kw='+encodeURIComponent(kw)+'&page=1&limit=15');
+        const d=await r.json();
+        if(d.ok&&d.list)d.list.forEach(s=>all.push(Object.assign({_p:p},s)));
+      }catch(e){}
+    }
+    if(!all.length){searchList.innerHTML='<div class="empty">未找到结果</div>';return}
+    searchList.innerHTML=all.map((s,i)=>{
+      const p=s.source||s._p;
+      return '<div class="row"><span class="tag '+p+'">'+p+'</span><span class="t">'+esc(s.name)+'</span><span class="a">'+esc(s.singer||'')+'</span><span class="dur">'+esc(s.interval||'')+'</span><button class="collectbtn" data-i="'+i+'">采集</button></div>';
+    }).join('');
+    searchList.querySelectorAll('.collectbtn').forEach(b=>b.onclick=async()=>{
+      const s=all[+b.dataset.i];
+      b.disabled=true;b.textContent='采集中…';
+      try{
+        const r=await fetch('/music/api/collect/one',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({source:s.source||s._p,songmid:s.songmid,name:s.name,singer:s.singer||'',album:s.albumName||'',interval:s.interval||'',img:s.img||''})});
+        const d=await r.json();
+        if(d.ok){b.textContent='已入库';b.style.background='#2a6df4';}
+        else{alert(d.err||'采集失败');b.disabled=false;b.textContent='重试';}
+      }catch(e){alert('失败:'+e);b.disabled=false;b.textContent='重试';}
+      load();
+    });
+  }catch(e){searchList.innerHTML='<div class="empty">搜索失败</div>'}
+  searchBtn.disabled=false;searchBtn.textContent='搜索';
+};
+kwInput.addEventListener('keydown',e=>{if(e.key==='Enter')searchBtn.click()});
+load();setInterval(load,1500);
+</script></body></html>
+"""
+                body = html.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            # ---------- 采集控制台 API ----------
+            if u.path == "/api/collect/status":
+                import subprocess
+                try:
+                    out = subprocess.check_output(["pgrep", "-f", "collect_v3.py"])
+                    is_run = bool(out.strip())
+                except Exception:
+                    is_run = False
+                c = db()
+                total = c.execute("SELECT COUNT(*) FROM collected_tracks").fetchone()[0]
+                recent = c.execute("SELECT title, artist FROM collected_tracks ORDER BY created DESC LIMIT 50").fetchall()
+                c.close()
+                run_data = {"started": None, "collected": []}
+                try:
+                    with open("/www/wwwroot/music/source-bridge/collect_run.json", "r", encoding="utf-8") as _rf:
+                        run_data = json.load(_rf)
+                except Exception:
+                    pass
+                if not isinstance(run_data, dict):
+                    run_data = {"started": None, "collected": []}
+                run_songs = run_data.get("collected") or []
+                tgt, st_total = None, total
+                try:
+                    with open("/www/wwwroot/music/source-bridge/collect_target.json", "r", encoding="utf-8") as _tf:
+                        _tj = json.load(_tf)
+                    if isinstance(_tj, dict):
+                        tgt = int(_tj.get("target") or 0)
+                        st_total = int(_tj.get("start_total") or total)
+                except Exception:
+                    pass
+                completed = max(0, total - st_total) if tgt is not None else 0
+                achieved = (tgt is not None) and (completed >= tgt)
+                self._json(200, {"ok": True, "running": is_run, "total": total,
+                                  "recent": [{"title": r[0], "artist": r[1] or ""} for r in recent],
+                                  "run_count": len(run_songs),
+                                  "run_skipped": run_data.get("skipped", 0),
+                                  "run_songs": [{"title": str(s.get("title", "")), "artist": str(s.get("artist", "") or ""), "audio": bool(s.get("audio"))} for s in run_songs],
+                                  "started": run_data.get("started"),
+                                  "target": tgt, "completed": completed,
+                                  "remaining": max(0, (tgt - completed) if tgt is not None else 0),
+                                  "achieved": achieved})
+                return
+
+            # ---------- 采集搜索代理（前端 H5 搜索歌名） ----------
+            if u.path == "/api/collect/search":
+                q = urllib.parse.parse_qs(u.query)
+                src_p = (q.get("source") or ["wy"])[0]
+                kw_p = (q.get("kw") or [""])[0].strip()
+                page_p = (q.get("page") or ["1"])[0]
+                limit_p = (q.get("limit") or ["15"])[0]
+                if not kw_p:
+                    self._json(200, {"ok": False, "err": "kw required"}); return
+                try:
+                    br_url = "http://127.0.0.1:8789/search?source=" + urllib.parse.quote(src_p) + \
+                             "&kw=" + urllib.parse.quote(kw_p) + "&page=" + urllib.parse.quote(page_p) + \
+                             "&limit=" + urllib.parse.quote(limit_p)
+                    with urllib.request.urlopen(br_url, timeout=25) as _r:
+                        _data = json.loads(_r.read().decode())
+                    self._json(200, _data); return
+                except Exception as e:
+                    self._json(200, {"ok": False, "err": str(e)}); return
+
+            # ---------- 后台管理 API ----------
+            ADMIN_TOKEN = _admin_token()
+            def _admin_auth(self):
+                return self.headers.get("X-Admin-Token", "").strip() == ADMIN_TOKEN
+
+            if u.path == "/admin.html":
+                admin_html = """<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流萤音乐 · 后台管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:100vh}
+.login{max-width:360px;margin:15vh auto;background:#1a1a1c;padding:30px;border-radius:16px}
+.login h2{margin-bottom:18px;font-size:18px}
+.login input{width:100%;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;margin-bottom:12px;font-size:14px}
+.login button{width:100%;padding:12px;border:0;border-radius:10px;background:#2a6df4;color:#fff;font-size:15px;cursor:pointer}
+.app{display:flex;min-height:100vh}
+.side{width:200px;background:#151517;padding:20px 0;flex-shrink:0}
+.side h2{font-size:15px;padding:0 20px 18px;border-bottom:1px solid #262629;margin-bottom:10px}
+.side button{display:block;width:100%;text-align:left;padding:11px 20px;background:none;border:0;color:#aaa;font-size:14px;cursor:pointer}
+.side button.on{color:#fff;background:#222226;border-left:3px solid #2a6df4}
+.main{flex:1;padding:24px 28px;overflow:auto;max-width:100%}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+.card{background:#1a1a1c;padding:18px;border-radius:12px}
+.card .n{font-size:26px;font-weight:600;color:#fff}
+.card .l{font-size:12px;color:#888;margin-top:4px}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:12px}
+table{width:100%;border-collapse:collapse;background:#1a1a1c;font-size:13px;min-width:560px}
+th,td{padding:11px 14px;text-align:left;border-bottom:1px solid #262629;white-space:nowrap}
+th{color:#888;font-weight:500;background:#1f1f22}
+tr:last-child td{border-bottom:0}
+td.act button{background:#3a1f1f;color:#e06c5c;border:0;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+td.act button.ok{background:#1e3a2a;color:#5cd68a}
+td.act button.gray{background:#2a2a2e;color:#ddd}
+.tag{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;background:#2a2a2e;color:#aaa}
+.tag.wy{background:#1e3a5f;color:#6fb1ff}
+.tag.kw{background:#3a2a1e;color:#ffb36b}
+.tag.off{background:#3a1f1f;color:#e06c5c}
+.tag.on{background:#1e3a2a;color:#5cd68a}
+.thumb{width:36px;height:36px;border-radius:6px;object-fit:cover;background:#222;vertical-align:middle}
+.empty{padding:30px;text-align:center;color:#555}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.topbar h1{font-size:18px}
+.topbar button{background:#2a2a2e;color:#aaa;border:0;padding:7px 14px;border-radius:8px;cursor:pointer;font-size:12px}
+.hidden{display:none}
+.modal.hidden{display:none}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;z-index:99;padding:18px}
+.modal-box{background:#1a1a1c;border-radius:14px;width:100%;max-width:420px;max-height:84vh;overflow:auto;display:flex;flex-direction:column}
+.modal-h{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #262629;font-size:15px;font-weight:600;flex-shrink:0}
+.modal-h button{background:none;border:0;color:#888;font-size:20px;cursor:pointer;padding:0 6px}
+.modal-b{padding:16px;overflow:auto}
+.modal-f{display:flex;gap:10px;padding:14px 16px;border-top:1px solid #262629;flex-shrink:0}
+.modal-f .mbtn{flex:1;padding:11px;border:0;border-radius:10px;background:#2a2a2e;color:#eee;font-size:14px;cursor:pointer}
+.modal-f .m-save{background:#2a6df4;color:#fff}
+.frow{margin-bottom:12px}
+.frow label{display:block;font-size:12px;color:#888;margin-bottom:5px}
+.frow input,.frow select,.frow textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;outline:none}
+.frow textarea{resize:none}
+.avrow{display:flex;align-items:center;gap:10px}
+.avrow img{width:64px;height:64px;border-radius:10px;object-fit:cover;background:#222;flex-shrink:0}
+.avrow button{padding:8px 12px;border:0;border-radius:8px;background:#2a2a2e;color:#ddd;font-size:13px;cursor:pointer}
+.hint{font-size:11px;color:#666;margin-top:4px}
+@media (max-width:768px){
+  .app{flex-direction:column}
+  .side{width:100%;padding:0;display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;border-bottom:1px solid #262629}
+  .side h2{display:none}
+  .side button{display:inline-block;width:auto;padding:13px 16px;border-left:0;border-bottom:3px solid transparent;white-space:nowrap}
+  .side button.on{border-left:0;border-bottom:3px solid #2a6df4;background:transparent}
+  .main{padding:14px 12px calc(20px + env(safe-area-inset-bottom))}
+  .cards{grid-template-columns:repeat(2,1fr);gap:10px}
+  .card{padding:14px}
+  .card .n{font-size:22px}
+  .topbar{margin-bottom:14px}
+  .topbar h1{font-size:16px}
+  table{font-size:12px;min-width:520px}
+  th,td{padding:10px 12px}
+  .login{margin:8vh 16px;padding:24px}
+}
+</style></head><body>
+<div id="loginBox" class="login">
+<h2>流萤音乐后台</h2>
+<input id="pwd" type="password" placeholder="管理密码">
+<button onclick="login()">登录</button>
+</div>
+<div id="appBox" class="app hidden">
+<div class="side">
+<h2>流萤音乐</h2>
+<button data-t="dash" class="on" onclick="tab('dash')">仪表盘</button>
+<button data-t="users" onclick="tab('users')">用户管理</button>
+<button data-t="tracks" onclick="tab('tracks')">上传歌曲</button>
+<button data-t="collected" onclick="tab('collected')">采集歌曲</button>
+<button data-t="comments" onclick="tab('comments')">评论管理</button>
+</div>
+<div class="main">
+<div class="topbar"><h1 id="title">仪表盘</h1><div><button style="margin-right:8px" onclick="changePwd()">修改密码</button><button onclick="logout()">退出</button></div></div>
+<div id="content"></div>
+</div>
+</div>
+<div id="modal" class="modal hidden">
+<div class="modal-box">
+<div class="modal-h"><span id="mTitle">编辑</span><button onclick="closeModal()">×</button></div>
+<div id="mBody" class="modal-b"></div>
+<div class="modal-f"><button class="mbtn" onclick="closeModal()">取消</button><button class="mbtn m-save" id="mSaveBtn" onclick="mSave()">保存</button></div>
+</div>
+</div>
+<script>
+let token=localStorage.getItem('admin_token')||'';
+function h(){return token}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function fmtTime(ts){if(!ts)return '-';const d=new Date(ts*1000);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function fmtDur(s){if(!s)return '-';s=Math.round(s);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+async function api(path, opts){
+  opts=opts||{};opts.headers=Object.assign({'X-Admin-Token':h()},opts.headers||{});
+  const r=await fetch('/music/api/admin'+path,opts);
+  if(r.status===401){logout();throw new Error('未授权')}
+  return r.json();
+}
+function login(){
+  const pwd=document.getElementById('pwd').value.trim();
+  token=pwd;localStorage.setItem('admin_token',token);
+  document.getElementById('loginBox').classList.add('hidden');
+  document.getElementById('appBox').classList.remove('hidden');
+  loadDash();
+}
+function logout(){token='';localStorage.removeItem('admin_token');location.reload()}
+function tab(t){
+  document.querySelectorAll('.side button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理'};
+  document.getElementById('title').textContent=titles[t];
+  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();
+}
+let curPage={tracks:1,collected:1,comments:1};
+let curTracks=[],curCols=[];
+async function loadDash(){
+  const d=await api('/stats');
+  document.getElementById('content').innerHTML=
+    '<div class="cards">'+
+    '<div class="card"><div class="n">'+d.users+'</div><div class="l">用户总数</div></div>'+
+    '<div class="card"><div class="n">'+d.tracks+'</div><div class="l">用户上传歌曲</div></div>'+
+    '<div class="card"><div class="n">'+d.collected+'</div><div class="l">采集歌曲</div></div>'+
+    '<div class="card"><div class="n">'+d.plays+'</div><div class="l">累计播放次数</div></div>'+
+    '</div>';
+}
+async function loadUsers(){
+  const d=await api('/users');
+  let h='<div class="tablewrap"><table><tr><th>头像</th><th>昵称</th><th>账号</th><th>性别</th><th>年龄</th><th>签名</th><th>IP/地区</th><th>状态</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="9" class="empty">无用户</td></tr>';
+  d.list.forEach(u=>{
+    const av=u.avatar?'<img src="'+location.origin+'/music/api/avatar/'+u.id+'" style="width:36px;height:36px;border-radius:50%;object-fit:cover;background:#222" onerror="this.style.visibility=\\'hidden\\'">':'<div style="width:36px;height:36px;border-radius:50%;background:#2a2a2e;display:flex;align-items:center;justify-content:center;color:#888;font-size:14px">'+esc((u.name||'?')[0])+'</div>';
+    const st=u.banned?'<span class="tag off" title="'+esc(u.ban_reason||'')+'">已封禁</span>':'<span class="tag on">正常</span>';
+    h+='<tr><td>'+av+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.account)+'</td><td>'+(esc(u.gender)||'-')+'</td><td>'+(u.age||'-')+'</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis">'+esc(u.signature||'-')+'</td><td style="font-size:11px;color:#888">'+esc(u.ip||'-')+'</td><td>'+st+'</td><td class="act"><button class="gray" onclick="editUser(\\''+u.id+'\\')">编辑</button> '+(u.banned?'<button class="ok" onclick="unbanUser(\\''+u.id+'\\')">解封</button>':'<button onclick="banUser(\\''+u.id+'\\')">封禁</button>')+' <button onclick="delUser(\\''+u.id+'\\')">删除</button></td></tr>';
+  });
+  document.getElementById('content').innerHTML=h+'</table></div>';
+}
+async function loadComments(page){
+  if(page)curPage.comments=page;else curPage.comments=1;
+  const d=await api('/comments?page='+curPage.comments+'&size=20');
+  let h='<div class="tablewrap"><table><tr><th>评论者</th><th>评论内容</th><th>所属歌曲</th><th>时间</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="5" class="empty">无评论</td></tr>';
+  d.list.forEach(c=>{
+    h+='<tr><td>'+esc(c.user)+'</td><td style="white-space:normal;max-width:260px">'+esc(c.content)+'</td><td>'+esc(c.track_title)+'</td><td style="font-size:11px;color:#888">'+fmtTime(c.created)+'</td><td class="act"><button onclick="delComment('+c.id+')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+=pager(curPage.comments,d.total,'loadComments');
+  document.getElementById('content').innerHTML=h;
+}
+async function loadTracks(page){
+  if(page)curPage.tracks=page;
+  const d=await api('/tracks?page='+curPage.tracks+'&size=20');
+  curTracks=d.list||[];
+  let h='<div class="tablewrap"><table><tr><th>封面</th><th>标题</th><th>歌手</th><th>状态</th><th>上传者</th><th>播放</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="7" class="empty">无歌曲</td></tr>';
+  d.list.forEach(t=>{
+    const st=t.offline?'<span class="tag off">已下架</span>':'<span class="tag on">在售</span>';
+    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\\'hidden\\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td>'+st+'</td><td>'+esc(t.uname||'-')+'</td><td>'+t.play_count+'</td><td class="act"><button class="gray" onclick="editTrack('+t.id+')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineTrack('+t.id+')">上架</button>':'<button onclick="offlineTrack('+t.id+')">下架</button>')+' <button onclick="delTrack('+t.id+')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+=pager(curPage.tracks,d.total,'loadTracks');
+  document.getElementById('content').innerHTML=h;
+}
+async function loadCollected(page){
+  if(page)curPage.collected=page;
+  const d=await api('/collected?page='+curPage.collected+'&size=20');
+  curCols=d.list||[];
+  let h='<div class="tablewrap"><table><tr><th>封面</th><th>标题</th><th>歌手</th><th>来源</th><th>状态</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="6" class="empty">无歌曲</td></tr>';
+  d.list.forEach(t=>{
+    const st=t.offline?'<span class="tag off">已下架</span>':'<span class="tag on">在售</span>';
+    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\\'hidden\\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td><span class="tag '+t.source+'">'+t.source+'</span></td><td>'+st+'</td><td class="act"><button class="gray" onclick="editCol('+t.id+')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineCol('+t.id+')">上架</button>':'<button onclick="offlineCol('+t.id+')">下架</button>')+' <button onclick="delCol('+t.id+')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+=pager(curPage.collected,d.total,'loadCollected');
+  document.getElementById('content').innerHTML=h;
+}
+function pager(page,total,fn){
+  const pages=Math.ceil(total/20);
+  let h='<div style="display:flex;justify-content:center;gap:10px;margin-top:16px;align-items:center">';
+  h+='<button style="background:#2a2a2e;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer" onclick="'+fn+'('+(page>1?page-1:1)+')" '+(page<=1?'disabled':'')+'>上一页</button>';
+  h+='<span style="color:#888;font-size:13px">第 '+page+' / '+pages+' 页（共'+total+'首）</span>';
+  h+='<button style="background:#2a2a2e;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer" onclick="'+fn+'('+(page<pages?page+1:pages)+')" '+(page>=pages?'disabled':'')+'>下一页</button>';
+  return h+'</div>';
+}
+// ---------- 模态框编辑 ----------
+let mState={type:'user',id:'',fields:{},onSave:null};
+function openModal(title,body,state){mState=state;document.getElementById('mTitle').textContent=title;document.getElementById('mBody').innerHTML=body;document.getElementById('modal').classList.remove('hidden');}
+function closeModal(){document.getElementById('modal').classList.add('hidden');}
+async function mSave(){const b=document.getElementById('mSaveBtn');b.disabled=true;try{await mState.onSave()}catch(e){alert('保存失败：'+e)}b.disabled=false;}
+function pickImg(input,key){
+  const f=input.files&&input.files[0];if(!f)return;
+  if(f.size>3*1024*1024){alert('图片不能超过 3MB');input.value='';return}
+  const r=new FileReader();
+  r.onload=()=>{
+    mState.fields[key]=r.result;
+    const img=document.getElementById(key==='avatar'?'pvAvatar':'pvCover');
+    if(img){img.style.visibility='visible';img.src=r.result}
+  };
+  r.readAsDataURL(f);
+}
+async function editUser(id){
+  const u=(await api('/users')).list.find(x=>x.id===id);if(!u)return;
+  openModal('编辑用户 · '+esc(u.account),'<div class="frow"><label>头像</label><div class="avrow"><img id="pvAvatar" src="'+location.origin+'/music/api/avatar/'+id+'"><button type="button" onclick="document.getElementById(\\'fiAvatar\\').click()">更换头像</button></div><input type="file" id="fiAvatar" accept="image/*" class="hidden" onchange="pickImg(this,\\'avatar\\')"><div class="hint">点击更换，支持 jpg/png/webp，≤3MB</div></div><div class="frow"><label>昵称</label><input id="fName" value="'+esc(u.name)+'"></div><div class="frow"><label>性别</label><select id="fGender"><option value="">保密</option><option value="男">男</option><option value="女">女</option></select></div><div class="frow"><label>年龄</label><input id="fAge" type="number" min="1" max="120" value="'+(u.age||'')+'"></div><div class="frow"><label>签名</label><textarea id="fSig" rows="2">'+esc(u.signature||'')+'</textarea></div><div class="frow"><label>新密码</label><input id="fPwd" type="password" placeholder="留空则不修改"><div class="hint">留空保持原密码不变</div></div>',
+    {type:'user',id:id,fields:{avatar:null},onSave:saveUser});
+  document.getElementById('fGender').value=u.gender||'';
+}
+async function saveUser(){
+  const fd={};
+  const nm=document.getElementById('fName').value.trim();
+  const g=document.getElementById('fGender').value;
+  const ag=document.getElementById('fAge').value.trim();
+  const sg=document.getElementById('fSig').value.trim();
+  const pw=document.getElementById('fPwd').value.trim();
+  if(nm)fd.name=nm;
+  if(g)fd.gender=g;
+  if(ag)fd.age=ag;
+  if(sg)fd.signature=sg;
+  if(pw)fd.password=pw;
+  if(mState.fields.avatar)fd.avatar=mState.fields.avatar;
+  if(!Object.keys(fd).length){alert('没有可保存的修改');return}
+  await api('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user',id:mState.id,fields:fd})});
+  closeModal();loadUsers();
+}
+async function editTrack(id){
+  const t=curTracks.find(x=>x.id===id);if(!t)return;
+  openModal('编辑歌曲 · 上传','<div class="frow"><label>封面</label><div class="avrow"><img id="pvCover" src="'+location.origin+'/music/api/cover/'+id+'"><button type="button" onclick="document.getElementById(\\'fiCover\\').click()">更换封面</button></div><input type="file" id="fiCover" accept="image/*" class="hidden" onchange="pickImg(this,\\'cover\\')"><div class="hint">点击更换，支持 jpg/png/webp，≤3MB</div></div><div class="frow"><label>歌曲名称</label><input id="fTitle" value="'+esc(t.title)+'"></div><div class="frow"><label>作者/歌手</label><input id="fArtist" value="'+esc(t.artist)+'"></div>',
+    {type:'track',id:id,fields:{cover:null},onSave:saveTrack});
+}
+async function editCol(id){
+  const t=curCols.find(x=>x.id===id);if(!t)return;
+  openModal('编辑歌曲 · 采集','<div class="frow"><label>封面</label><div class="avrow"><img id="pvCover" src="'+location.origin+'/music/api/cover/'+id+'"><button type="button" onclick="document.getElementById(\\'fiCover\\').click()">更换封面</button></div><input type="file" id="fiCover" accept="image/*" class="hidden" onchange="pickImg(this,\\'cover\\')"><div class="hint">点击更换，支持 jpg/png/webp，≤3MB</div></div><div class="frow"><label>歌曲名称</label><input id="fTitle" value="'+esc(t.title)+'"></div><div class="frow"><label>作者/歌手</label><input id="fArtist" value="'+esc(t.artist)+'"></div>',
+    {type:'collected',id:id,fields:{cover:null},onSave:saveTrack});
+}
+async function saveTrack(){
+  const fd={};
+  const nm=document.getElementById('fTitle').value.trim();
+  const ar=document.getElementById('fArtist').value.trim();
+  if(nm)fd.title=nm;
+  if(ar)fd.artist=ar;
+  if(mState.fields.cover)fd.cover=mState.fields.cover;
+  if(!Object.keys(fd).length){alert('没有可保存的修改');return}
+  await api('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:mState.type,id:mState.id,fields:fd})});
+  closeModal();
+  if(mState.type==='track')loadTracks();else loadCollected();
+}
+async function banUser(id){const r=prompt('请输入封禁原因：');if(r===null)return;await api('/ban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,reason:r,action:'ban'})});loadUsers();}
+async function unbanUser(id){await api('/ban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,action:'unban'})});loadUsers();}
+async function delComment(id){if(!confirm('确认删除这条评论？'))return;await api('/del/comment/'+id,{method:'POST'});loadComments();}
+async function offlineTrack(id){const r=prompt('请输入下架原因：');if(r===null)return;await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'track',id:id,reason:r,action:'off'})});loadTracks();}
+async function onlineTrack(id){await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'track',id:id,action:'on'})});loadTracks();}
+async function offlineCol(id){const r=prompt('请输入下架原因：');if(r===null)return;await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'collected',id:id,reason:r,action:'off'})});loadCollected();}
+async function onlineCol(id){await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'collected',id:id,action:'on'})});loadCollected();}
+async function delUser(id){if(!confirm('确认删除该用户？'))return;await api('/del/user/'+id,{method:'POST'});loadUsers();}
+async function delTrack(id){const r=prompt('请输入删除原因：');if(r===null)return;if(!confirm('确认删除？原因：'+r))return;await api('/del/track/'+id,{method:'POST'});loadTracks();}
+async function delCol(id){const r=prompt('请输入删除原因：');if(r===null)return;if(!confirm('确认删除？原因：'+r))return;await api('/del/collected/'+id,{method:'POST'});loadCollected();}
+async function changePwd(){
+  openModal('修改管理密码','<div class="frow"><label>当前密码</label><input id="pOld" type="password"></div><div class="frow"><label>新密码</label><input id="pNew" type="password" placeholder="6-64 位"></div><div class="frow"><label>确认新密码</label><input id="pNew2" type="password"></div>',{onSave:savePwd});
+}
+async function savePwd(){
+  const o=document.getElementById('pOld').value.trim();
+  const n=document.getElementById('pNew').value.trim();
+  const n2=document.getElementById('pNew2').value.trim();
+  if(!o||!n){alert('请填写完整');return}
+  if(n!==n2){alert('两次新密码不一致');return}
+  const r=await api('/change_pwd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old:o,pwd:n})});
+  if(r&&r.ok){closeModal();alert('密码已修改，请用新密码重新登录');logout();}
+  else{alert((r&&r.err)||'修改失败');}
+}
+if(token){document.getElementById('loginBox').classList.add('hidden');document.getElementById('appBox').classList.remove('hidden');loadDash();}
+</script></body></html>"""
+                body=admin_html.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type","text/html; charset=utf-8")
+                self.send_header("Content-Length",str(len(body)))
+                self.send_header("Access-Control-Allow-Origin","*")
+                self.end_headers();self.wfile.write(body);return
+
+            if u.path == "/api/admin/stats":
+                if not _admin_auth(self): self._err(401,"unauthorized"); return
+                c=db()
+                users=c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                tracks=c.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+                coll=c.execute("SELECT COUNT(*) FROM collected_tracks").fetchone()[0]
+                plays=c.execute("SELECT COALESCE(SUM(play_count),0) FROM tracks").fetchone()[0] + c.execute("SELECT COALESCE(SUM(play_count),0) FROM collected_tracks").fetchone()[0]
+                c.close()
+                self._json(200,{"ok":True,"users":users,"tracks":tracks,"collected":coll,"plays":plays});return
+
+            if u.path == "/api/admin/users":
+                if not _admin_auth(self): self._err(401,"unauthorized"); return
+                c=db()
+                rows=c.execute("""SELECT u.id,u.account,u.name,u.avatar,u.gender,u.age,u.signature,u.ip_address,u.banned,u.ban_reason,u.created,
+                                  (SELECT COUNT(*) FROM tracks t WHERE t.user_id=u.id)
+                                  FROM users u ORDER BY u.created DESC""").fetchall()
+                c.close()
+                self._json(200,{"ok":True,"list":[{"id":r[0],"account":r[1] or "","name":r[2] or "","avatar":r[3] or "","gender":r[4] or "","age":r[5] or 0,"signature":r[6] or "","ip":r[7] or "","banned":r[8] or 0,"ban_reason":r[9] or "","created":r[10] or 0,"track_count":r[11]} for r in rows]});return
+
+            if u.path == "/api/admin/tracks":
+                if not _admin_auth(self): self._err(401,"unauthorized"); return
+                qs = urllib.parse.parse_qs(u.query)
+                page = max(1, int((qs.get("page") or ["1"])[0]))
+                size = min(100, max(5, int((qs.get("size") or ["20"])[0])))
+                c=db()
+                total = c.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+                rows=c.execute("""SELECT t.id,t.title,t.artist,t.dur,t.size,t.play_count,t.created,t.user_id,t.offline,t.offline_reason,COALESCE(u.name,'')
+                                  FROM tracks t LEFT JOIN users u ON u.id=t.user_id
+                                  ORDER BY t.created DESC LIMIT ? OFFSET ?""",(size,(page-1)*size)).fetchall()
+                c.close()
+                self._json(200,{"ok":True,"total":total,"page":page,"size":size,"list":[{"id":r[0],"title":r[1] or "","artist":r[2] or "","dur":r[3] or 0,"size":r[4] or 0,"play_count":r[5] or 0,"created":r[6] or 0,"uname":r[10],"offline":r[8] or 0,"offline_reason":r[9] or ""} for r in rows]});return
+
+            if u.path == "/api/admin/collected":
+                if not _admin_auth(self): self._err(401,"unauthorized"); return
+                qs = urllib.parse.parse_qs(u.query)
+                page = max(1, int((qs.get("page") or ["1"])[0]))
+                size = min(100, max(5, int((qs.get("size") or ["20"])[0])))
+                c=db()
+                total = c.execute("SELECT COUNT(*) FROM collected_tracks").fetchone()[0]
+                rows=c.execute("""SELECT id,title,artist,source,duration,play_url,play_count,created,offline,offline_reason
+                                  FROM collected_tracks ORDER BY created DESC LIMIT ? OFFSET ?""",(size,(page-1)*size)).fetchall()
+                c.close()
+                self._json(200,{"ok":True,"total":total,"page":page,"size":size,"list":[{"id":r[0],"title":r[1] or "","artist":r[2] or "","source":r[3] or "","duration":r[4] or 0,"has_local":bool(r[5] and not str(r[5]).startswith("http")),"play_count":r[6] or 0,"created":r[7] or 0,"offline":r[8] or 0,"offline_reason":r[9] or ""} for r in rows]});return
+
+            if u.path == "/api/admin/comments":
+                if not _admin_auth(self): self._err(401,"unauthorized"); return
+                qs = urllib.parse.parse_qs(u.query)
+                page = max(1, int((qs.get("page") or ["1"])[0]))
+                size = min(100, max(5, int((qs.get("size") or ["20"])[0])))
+                tid = (qs.get("track_id") or [""])[0]
+                c = db()
+                where, args = "", []
+                if tid:
+                    where = " WHERE cm.track_id=?"; args.append(tid)
+                total = c.execute("SELECT COUNT(*) FROM comments cm" + where, args).fetchone()[0]
+                rows = c.execute("""SELECT cm.id,cm.track_id,cm.user_name,cm.content,cm.created,
+                                    COALESCE(t.title,'(已删除)')
+                                    FROM comments cm LEFT JOIN tracks t ON t.id=cm.track_id
+                                    """ + where + " ORDER BY cm.created DESC LIMIT ? OFFSET ?",
+                                    tuple(args + [size, (page-1)*size])).fetchall()
+                c.close()
+                self._json(200, {"ok":True,"total":total,"page":page,"size":size,
+                    "list":[{"id":r[0],"track_id":r[1],"user":r[2] or "","content":r[3] or "","created":r[4] or 0,"track_title":r[5]} for r in rows]});return
 
             if u.path == "/api/tracks":
                 if not rate_limit(self, "tracks"):
@@ -817,8 +1548,8 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 if keyword:
                     like = "%" + keyword + "%"
                     rows = c.execute(
-                        base_sql + """ WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ?
-                                       OR COALESCE(u.name,'') LIKE ?
+                        base_sql + """ WHERE t.offline=0 AND (t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ?
+                                       OR COALESCE(u.name,'') LIKE ?)
                                        GROUP BY t.id ORDER BY RANDOM() LIMIT 10""",
                         (viewer_id, like, like, like, like)).fetchall()
                     if len(rows) < 10:
@@ -827,28 +1558,78 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                         if ids:
                             ph = ",".join("?" * len(ids))
                             extra = c.execute(
-                                base_sql + (" WHERE t.id NOT IN (%s)"
+                                base_sql + (" WHERE t.offline=0 AND t.id NOT IN (%s)"
                                             " GROUP BY t.id ORDER BY RANDOM() LIMIT ?" % ph),
                                 tuple([viewer_id] + ids + [need])).fetchall()
                         else:
                             extra = c.execute(
-                                base_sql + " GROUP BY t.id ORDER BY RANDOM() LIMIT ?",
+                                base_sql + " WHERE t.offline=0 GROUP BY t.id ORDER BY RANDOM() LIMIT ?",
                                 (viewer_id, need)).fetchall()
                         rows = rows + extra
                 else:
                     rows = c.execute(
-                        base_sql + " GROUP BY t.id ORDER BY RANDOM() LIMIT 10",
+                        base_sql + " WHERE t.offline=0 GROUP BY t.id ORDER BY RANDOM() LIMIT 10",
                         (viewer_id,)).fetchall()
+                # ---- 合并采集歌曲（collected_tracks）----
+                # 前端零改动：采集歌曲与用户上传歌曲通过同一个 /api/tracks 下发，
+                # 字段结构与 tracks 完全一致；cover 返回占位 "1" 让前端拼出
+                # /api/cover/{id}，再由后端 302 到第三方封面，不暴露第三方直链。
+                collect_cols = """id,title,artist,album,cover,duration,size,created,
+                                  play_count,like_count,share_count,user_id,lrc"""
+                if keyword:
+                    like = "%" + keyword + "%"
+                    crows = c.execute(
+                        "SELECT " + collect_cols + """ FROM collected_tracks
+                            WHERE offline=0 AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)
+                            ORDER BY RANDOM() LIMIT 10""",
+                        (like, like, like)).fetchall()
+                    if len(crows) < 10:
+                        cids = [r[0] for r in crows]
+                        need = 10 - len(crows)
+                        if cids:
+                            ph = ",".join("?" * len(cids))
+                            crows = crows + c.execute(
+                                "SELECT " + collect_cols + (" FROM collected_tracks"
+                                    " WHERE offline=0 AND id NOT IN (%s) ORDER BY RANDOM() LIMIT ?" % ph),
+                                tuple(cids + [need])).fetchall()
+                        else:
+                            crows = crows + c.execute(
+                                "SELECT " + collect_cols + " FROM collected_tracks WHERE offline=0"
+                                " ORDER BY RANDOM() LIMIT ?", (need,)).fetchall()
+                else:
+                    crows = c.execute(
+                        "SELECT " + collect_cols + " FROM collected_tracks WHERE offline=0"
+                        " ORDER BY RANDOM() LIMIT 10").fetchall()
+                # 采集歌曲归属账号昵称（列表展示用）
+                uname = ""
+                urow = c.execute(
+                    "SELECT name FROM users WHERE id=(SELECT user_id FROM collected_tracks"
+                    " WHERE user_id!='' LIMIT 1)").fetchone()
+                if urow:
+                    uname = urow[0]
+                merged = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                           "cover": "1", "fname": "",
+                           "size": int(r[6]) if r[6] is not None else 0,   # App 端 size 为 Int?，浮点会导致整个列表解码失败
+                           "dur": r[5],
+                           "durText": _fmt_dur(r[5]), "created": r[7],
+                           "playCount": r[8] or 0, "likeCount": r[9] or 0,
+                           "shareCount": r[10] or 0,
+                           "userId": r[11] or "", "userName": uname,
+                           "hasLyric": bool(r[12]),
+                           "commentCount": 0, "isLiked": False} for r in crows]
+                # 用户上传歌曲输出
+                merged += [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                            "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
+                            "durText": _fmt_dur(r[7]), "created": r[8],
+                            "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                            "shareCount": r[11] or 0,
+                            "userId": r[12] or "", "userName": r[14] or "",
+                            "hasLyric": bool(r[13]),
+                            "commentCount": r[15] or 0,
+                            "isLiked": bool(r[16])} for r in rows]
+                random.shuffle(merged)
                 c.close()
-                self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
-                                  "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
-                                  "durText": _fmt_dur(r[7]), "created": r[8],
-                                  "playCount": r[9] or 0, "likeCount": r[10] or 0,
-                                  "shareCount": r[11] or 0,
-                                  "userId": r[12] or "", "userName": r[14] or "",
-                                  "hasLyric": bool(r[13]),
-                                  "commentCount": r[15] or 0,
-                                  "isLiked": bool(r[16])} for r in rows])
+                self._json(200, merged)
                 return
 
             # 采集歌曲列表（独立表 collected_tracks，与用户上传 tracks 分开）
@@ -882,7 +1663,7 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                            "shareCount": r[13] or 0, "hasLyric": bool(r[14])} for r in rows]})
                 return
 
-            # 搜索：按歌名/歌手模糊匹配
+            # 搜索：按歌名/歌手模糊匹配（用户上传 + 采集歌曲统一返回，App 端无差别）
             if u.path == "/api/search":
                 qs = urllib.parse.parse_qs(u.query)
                 keyword = (qs.get("q", [""])[0] or "").strip()
@@ -903,29 +1684,249 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                     FROM tracks t
                                     LEFT JOIN users u ON u.id=t.user_id
                                     LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
-                                    WHERE t.title LIKE ? OR t.artist LIKE ?
+                                    WHERE t.offline=0 AND (t.title LIKE ? OR t.artist LIKE ?)
                                     GROUP BY t.id
                                     ORDER BY t.play_count DESC
                                     LIMIT 50""", (viewer_id, like, like)).fetchall()
+                # 采集歌曲同样参与搜索（字段结构与上传歌曲完全一致）
+                crows = c.execute("""SELECT id,title,artist,album,cover,duration,size,created,
+                                     play_count,like_count,share_count,user_id,lrc
+                                     FROM collected_tracks
+                                     WHERE offline=0 AND (title LIKE ? OR artist LIKE ?)
+                                     ORDER BY play_count DESC
+                                     LIMIT 50""", (like, like)).fetchall()
+                uname = ""
+                urow = c.execute(
+                    "SELECT name FROM users WHERE id=(SELECT user_id FROM collected_tracks"
+                    " WHERE user_id!='' LIMIT 1)").fetchone()
+                if urow:
+                    uname = urow[0]
                 c.close()
-                self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
-                                  "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
-                                  "durText": _fmt_dur(r[7]), "created": r[8],
-                                  "playCount": r[9] or 0, "likeCount": r[10] or 0,
-                                  "shareCount": r[11] or 0,
-                                  "userId": r[12] or "", "userName": r[14] or "",
-                                  "hasLyric": bool(r[13]),
-                                  "commentCount": r[15] or 0,
-                                  "isLiked": bool(r[16])} for r in rows])
+                out = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                        "cover": "1", "fname": "",
+                        "size": int(r[6]) if r[6] is not None else 0,
+                        "dur": r[5], "durText": _fmt_dur(r[5]),
+                        "created": r[7],
+                        "playCount": r[8] or 0, "likeCount": r[9] or 0,
+                        "shareCount": r[10] or 0,
+                        "userId": r[11] or "", "userName": uname,
+                        "hasLyric": bool(r[12]),
+                        "commentCount": 0, "isLiked": False} for r in crows]
+                out += [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                         "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
+                         "durText": _fmt_dur(r[7]), "created": r[8],
+                         "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                         "shareCount": r[11] or 0,
+                         "userId": r[12] or "", "userName": r[14] or "",
+                         "hasLyric": bool(r[13]),
+                         "commentCount": r[15] or 0,
+                         "isLiked": bool(r[16])} for r in rows]
+                out.sort(key=lambda x: -(x["playCount"] or 0))
+                self._json(200, out[:50])
+                return
+
+            # 个性化推荐：基于用户行为（点赞/评论/打开评论/分享/收听时长/搜索/跳过）推荐相关歌曲
+            if u.path == "/api/recommend":
+                if not rate_limit(self, "recommend"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                qs = urllib.parse.parse_qs(u.query)
+                viewer_id = (qs.get("userId", [""])[0] or "").strip()
+                c = db()
+                tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if tok_uid:
+                    viewer_id = tok_uid
+                now = time.time()
+                # 1) 行为打分：事件权重 + 收听阈值/时长/重复 + 时间衰减
+                #    收听规则：进度 < 0.5 不记录；>= 0.5 有效收听（满分约 +2.5）
+                #    同一首歌完整听过多遍（plays>=2）额外加成
+                base, lst = {}, {}
+                if viewer_id:
+                    evs = c.execute(
+                        "SELECT track_id,event,value,meta,created FROM behavior_events"
+                        " WHERE user_id=? ORDER BY created DESC LIMIT 800", (viewer_id,)).fetchall()
+                    for tid, event, value, meta, created in evs:
+                        age_days = max(now - float(created or now), 0) / 86400.0
+                        decay = 1.0 if age_days <= 30 else 0.5
+                        if event == "listen":
+                            try:
+                                m = json.loads(meta or "{}")
+                            except Exception:
+                                m = {}
+                            frac = float(m.get("fraction") or 0)
+                            plays = int(m.get("plays") or 0)
+                            a = lst.setdefault(tid, {"sec": 0.0, "frac": 0.0, "plays": 0, "decay": decay})
+                            a["sec"] += max(float(value or 0), 0.0)
+                            a["frac"] = max(a["frac"], frac)
+                            a["plays"] = max(a["plays"], plays)
+                            a["decay"] = max(a["decay"], decay)
+                        else:
+                            if event == "like":
+                                w = 3.0 if float(value or 0) > 0 else -1.0
+                            elif event == "comment_open":
+                                w = 0.4
+                            elif event == "comment":
+                                w = 2.0
+                            elif event == "share":
+                                w = 2.0
+                            elif event == "search":
+                                w = 1.0
+                            elif event == "skip":
+                                w = -0.5
+                            else:
+                                continue
+                            base[tid] = base.get(tid, 0.0) + w * decay
+                    for tid, a in lst.items():
+                        if a["frac"] >= 0.5 or a["plays"] >= 1:
+                            w = 2.0 + min(a["sec"], 300.0) / 300.0
+                            if a["plays"] >= 2:
+                                w += 0.5
+                            if a["frac"] >= 0.9:
+                                w += 0.5
+                            base[tid] = base.get(tid, 0.0) + w * a["decay"]
+                scores = base
+                # 已强互动的歌曲不再重复推荐（只用它提取关键词），阈值分以上视为已知偏好
+                avoid = {tid for tid, sc in scores.items() if sc >= 2.0}
+                top = sorted(scores.items(), key=lambda kv: -kv[1])[:6] if scores else []
+                # 2) 由高分歌曲提取关键词（歌手/专辑/标题有效片段）
+                def _kw_pieces(s):
+                    s = re.sub(r"[（(【\[].*?[)）】\]]", "", s or "")
+                    pieces = [p.strip() for p in re.split(r"[·\-–/、，,]", s) if p.strip()]
+                    return [p for p in pieces if len(p) >= 2]
+                kw_list = []
+                for tid, sc in top:
+                    row = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        row = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        continue
+                    title, artist, album = row
+                    for kw in (_kw_pieces(title)
+                               + ([artist] if artist and len(artist) >= 2 else [])
+                               + ([album] if album and len(album) >= 2 else [])):
+                        if kw and kw not in ("未知歌手", "未命名"):
+                            kw_list.append((kw, sc))
+                # 用户主动搜索过的关键词也进入推荐池（权重 1.0）
+                if viewer_id:
+                    skws = c.execute(
+                        "SELECT meta FROM behavior_events WHERE user_id=? AND event='search'"
+                        " ORDER BY created DESC LIMIT 50", (viewer_id,)).fetchall()
+                    for (meta_s,) in skws:
+                        try:
+                            _m = json.loads(meta_s or "{}")
+                            _kw = str(_m.get("kw") or "").strip()
+                        except Exception:
+                            _kw = ""
+                        if len(_kw) >= 2:
+                            kw_list.append((_kw, 1.0))
+                seen_kw, dedup = set(), []
+                for kw, sc in kw_list:
+                    k = kw.lower()
+                    if k in seen_kw:
+                        continue
+                    seen_kw.add(k)
+                    dedup.append((kw, sc))
+                # 3) 关键词匹配候选（排除用户自己上传的歌曲与已强互动的歌曲）
+                cand = {}
+                for kw, sc in dedup[:8]:
+                    like_kw = "%" + kw + "%"
+                    tr = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=?"
+                                   " AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)",
+                                   (viewer_id, like_kw, like_kw, like_kw)).fetchall()
+                    cr = c.execute("SELECT id FROM collected_tracks WHERE offline=0"
+                                   " AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)",
+                                   (like_kw, like_kw, like_kw)).fetchall()
+                    for (tid,) in tr + cr:
+                        if tid in avoid:
+                            continue
+                        cand[tid] = cand.get(tid, 0.0) + sc
+                ranked = sorted(cand.items(), key=lambda kv: (-kv[1], kv[0]))
+                chosen = [tid for tid, _ in ranked[:20]]
+                # 4) 候选不足 20 首时随机补齐（上传 + 采集混合，同样排除已强互动）
+                if len(chosen) < 20:
+                    used = set(chosen)
+                    pool = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=?"
+                                     " ORDER BY RANDOM() LIMIT 30", (viewer_id,)).fetchall()
+                    pool += c.execute("SELECT id FROM collected_tracks WHERE offline=0"
+                                      " ORDER BY RANDOM() LIMIT 30").fetchall()
+                    for (tid,) in pool:
+                        if len(chosen) >= 20:
+                            break
+                        if tid not in used and tid not in avoid:
+                            chosen.append(tid)
+                            used.add(tid)
+                if not chosen:
+                    c.close()
+                    self._json(200, [])
+                    return
+                # 5) 组装输出（与 /api/tracks 同一格式，采集/上传无差别）
+                ph = ",".join("?" * len(chosen))
+                trows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                                     t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                                     COALESCE(u.name,''),
+                                     (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                                     MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
+                                     FROM tracks t
+                                     LEFT JOIN users u ON u.id=t.user_id
+                                     LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
+                                     WHERE t.id IN (%s) GROUP BY t.id""" % ph,
+                                   tuple([viewer_id] + chosen)).fetchall()
+                crows = c.execute("""SELECT id,title,artist,album,cover,duration,size,created,
+                                     play_count,like_count,share_count,user_id,lrc
+                                     FROM collected_tracks WHERE id IN (%s)""" % ph, chosen).fetchall()
+                uname = ""
+                urow = c.execute(
+                    "SELECT name FROM users WHERE id=(SELECT user_id FROM collected_tracks"
+                    " WHERE user_id!='' LIMIT 1)").fetchone()
+                if urow:
+                    uname = urow[0]
+                c.close()
+                merged = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                           "cover": "1", "fname": "",
+                           "size": int(r[6]) if r[6] is not None else 0,
+                           "dur": r[5], "durText": _fmt_dur(r[5]), "created": r[7],
+                           "playCount": r[8] or 0, "likeCount": r[9] or 0,
+                           "shareCount": r[10] or 0,
+                           "userId": r[11] or "", "userName": uname,
+                           "hasLyric": bool(r[12]),
+                           "commentCount": 0, "isLiked": False} for r in crows]
+                merged += [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                            "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
+                            "durText": _fmt_dur(r[7]), "created": r[8],
+                            "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                            "shareCount": r[11] or 0,
+                            "userId": r[12] or "", "userName": r[14] or "",
+                            "hasLyric": bool(r[13]),
+                            "commentCount": r[15] or 0,
+                            "isLiked": bool(r[16])} for r in trows]
+                order = {tid: i for i, tid in enumerate(chosen)}
+                merged.sort(key=lambda x: order.get(x["id"], 999))
+                self._json(200, merged)
                 return
 
             if u.path.startswith("/api/cover/"):
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 row = c.execute("SELECT cover FROM tracks WHERE id=?", (tid,)).fetchone()
+                crow = c.execute("SELECT cover FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                 c.close()
                 fp = safe_file_path(row[0] if row else "")
+                if not fp and crow:
+                    fp = safe_file_path(crow[0] or "")
                 if not fp:
+                    # 采集歌曲封面：优先服务本地下载的 files/{id}_cover.jpg（手机端可直接加载）
+                    local = safe_file_path(tid + "_cover.jpg")
+                    if local and os.path.exists(local):
+                        self._serve_file(local)
+                        return
+                    # 本地封面缺失：保留第三方直链 302 兜底（仅当 cover 为 http 地址）
+                    if crow and crow[0] and str(crow[0]).startswith("http"):
+                        self.send_response(302)
+                        self.send_header("Location", crow[0])
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        return
                     self._err(404, "no cover")
                     return
                 self._serve_file(fp)
@@ -935,9 +1936,20 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 row = c.execute("SELECT lrc FROM tracks WHERE id=?", (tid,)).fetchone()
+                # 采集歌曲歌词：库内 lrc 文本直接返回（非文件路径）
+                crow = c.execute("SELECT lrc FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                 c.close()
                 fp = safe_file_path(row[0] if row else "")
                 if not fp:
+                    if crow and crow[0]:
+                        data = crow[0].encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.send_header("Content-Length", str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
                     self._err(404, "no lyric")
                     return
                 with open(fp, "rb") as f:
@@ -993,6 +2005,9 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 exists = c.execute("SELECT 1 FROM tracks WHERE id=?", (tid,)).fetchone()
+                if not exists:
+                    # 采集歌曲同样签发签名（播放链路见 /api/stream 分支）
+                    exists = c.execute("SELECT 1 FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                 c.close()
                 if not exists:
                     self._err(404, "not found")
@@ -1104,9 +2119,23 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
                 row = c.execute("SELECT fname FROM tracks WHERE id=?", (tid,)).fetchone()
+                crow = c.execute("SELECT play_url FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                 c.close()
                 fp = safe_file_path(row[0] if row else "")
+                # 采集歌曲：已下载到本地时 play_url 存本地文件名，走本地流式播放（同 tracks）
+                if not fp and crow and crow[0] and not str(crow[0]).startswith("http"):
+                    local = safe_file_path(str(crow[0]))
+                    if local and os.path.exists(local):
+                        fp = local
                 if not fp:
+                    # 未下载的采集歌曲：保留第三方直链 302 兜底
+                    if crow and crow[0] and str(crow[0]).startswith("http"):
+                        self.send_response(302)
+                        self.send_header("Location", crow[0])
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        return
                     self._err(404, "not found")
                     return
                 size = os.path.getsize(fp)
@@ -1205,6 +2234,411 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
             u = urllib.parse.urlparse(self.path)
             length = int(self.headers.get("Content-Length", 0))
 
+            # ---------- 后台管理：编辑 / 上下架 ----------
+            ADMIN_TOKEN = _admin_token()
+            if u.path == "/api/admin/update":
+                if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 8 * 1024 * 1024))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                typ = data.get("type") or ""
+                rid = data.get("id") or ""
+                fields = data.get("fields") or {}
+                if typ not in ("track","collected","user") or not rid:
+                    self._err(400, "bad params"); return
+                c = db()
+                try:
+                    def _save_img(tid, val, kind):
+                        """保存图片到 files/{tid}_{kind}_{ts}{ext}，返回本地文件名；失败返回 None"""
+                        if not val: return None
+                        val = str(val).strip()
+                        if not val: return None
+                        # base64 data URI
+                        if val.startswith("data:image/"):
+                            try:
+                                hdr, b64 = val.split(",", 1)
+                                ext = ""
+                                m = re.search(r"image/(\w+)", hdr)
+                                if m: ext = "." + m.group(1).lower()
+                                if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"): ext = ".jpg"
+                                data = base64.b64decode(b64)
+                                if len(data) > 3 * 1024 * 1024: return None
+                                if not image_magic_ok(data, ext): return None
+                                fn = "%s_%s_%d%s" % (tid, kind, int(time.time()), ext)
+                                with open(os.path.join(FILES, fn), "wb") as f:
+                                    f.write(data)
+                                return fn
+                            except Exception:
+                                return None
+                        # http 链接：下载到本地
+                        if val.startswith("http"):
+                            try:
+                                req = urllib.request.Request(val, headers={"User-Agent": "Mozilla/5.0"})
+                                with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx()) as r:
+                                    img = r.read()
+                                if not img or len(img) < 500: return None
+                                ext = ".jpg"
+                                if not image_magic_ok(img, ".jpg"):
+                                    if image_magic_ok(img, ".png"): ext = ".png"
+                                    elif image_magic_ok(img, ".webp"): ext = ".webp"
+                                fn = "%s_%s_%d%s" % (tid, kind, int(time.time()), ext)
+                                with open(os.path.join(FILES, fn), "wb") as f:
+                                    f.write(img)
+                                return fn
+                            except Exception:
+                                return None
+                        return None
+
+                    if typ == "track":
+                        sets, vals = [], []
+                        if "title" in fields: sets.append("title=?"); vals.append(str(fields["title"]).strip())
+                        if "artist" in fields: sets.append("artist=?"); vals.append(str(fields["artist"]).strip())
+                        if "user_id" in fields: sets.append("user_id=?"); vals.append(str(fields["user_id"]).strip())
+                        if "cover" in fields:
+                            cf = _save_img(rid, fields.get("cover"), "cover")
+                            if cf is not None:
+                                sets.append("cover=?"); vals.append(cf)
+                        if sets:
+                            vals.append(rid)
+                            c.execute("UPDATE tracks SET "+",".join(sets)+" WHERE id=?", vals)
+                    elif typ == "collected":
+                        sets, vals = [], []
+                        if "title" in fields: sets.append("title=?"); vals.append(str(fields["title"]).strip())
+                        if "artist" in fields: sets.append("artist=?"); vals.append(str(fields["artist"]).strip())
+                        if "cover" in fields:
+                            cf = _save_img(rid, fields.get("cover"), "cover")
+                            if cf is not None:
+                                sets.append("cover=?"); vals.append(cf)
+                        if sets:
+                            vals.append(rid)
+                            c.execute("UPDATE collected_tracks SET "+",".join(sets)+" WHERE id=?", vals)
+                    elif typ == "user":
+                        sets, vals = [], []
+                        field_map = {"name":"name","account":"account",
+                                     "gender":"gender","age":"age","signature":"signature"}
+                        for k, col in field_map.items():
+                            if k in fields:
+                                sets.append(f"{col}=?")
+                                vals.append(str(fields[k]).strip())
+                        if "avatar" in fields:
+                            af = _save_img(rid, fields.get("avatar"), "avatar")
+                            if af is not None:
+                                sets.append("avatar=?"); vals.append(af)
+                        if "password" in fields and str(fields["password"]).strip():
+                            sets.append("password_hash=?")
+                            vals.append(hash_password(str(fields["password"]).strip()))
+                        if sets:
+                            vals.append(rid)
+                            c.execute("UPDATE users SET "+",".join(sets)+" WHERE id=?", vals)
+                    c.commit()
+                finally:
+                    c.close()
+                self._json(200, {"ok": True}); return
+
+            if u.path == "/api/admin/offline":
+                if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 65536))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                typ = data.get("type") or ""
+                rid = data.get("id") or ""
+                reason = str(data.get("reason") or "").strip()
+                action = data.get("action") or "off"  # off / on
+                if typ not in ("track","collected") or not rid:
+                    self._err(400, "bad params"); return
+                tbl = {"track":"tracks","collected":"collected_tracks"}.get(typ)
+                if not tbl:
+                    self._err(400, "bad type"); return
+                c = db()
+                try:
+                    if action == "off":
+                        c.execute(f"UPDATE {tbl} SET offline=1, offline_reason=? WHERE id=?", (reason, rid))
+                    else:
+                        c.execute(f"UPDATE {tbl} SET offline=0, offline_reason='' WHERE id=?", (rid,))
+                    c.commit()
+                finally:
+                    c.close()
+                self._json(200, {"ok": True}); return
+
+            if u.path == "/api/admin/ban":
+                if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 65536))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                rid = data.get("id") or ""
+                reason = str(data.get("reason") or "").strip()
+                action = data.get("action") or "ban"  # ban / unban
+                if not rid:
+                    self._err(400, "bad params"); return
+                c = db()
+                try:
+                    if action == "ban":
+                        c.execute("UPDATE users SET banned=1, ban_reason=? WHERE id=?", (reason, rid))
+                    else:
+                        c.execute("UPDATE users SET banned=0, ban_reason='' WHERE id=?", (rid,))
+                    c.commit()
+                finally:
+                    c.close()
+                self._json(200, {"ok": True}); return
+
+            if u.path == "/api/admin/change_pwd":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 65536))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                old = str(data.get("old") or "").strip()
+                pwd = str(data.get("pwd") or "").strip()
+                if old != _admin_token():
+                    self._err(400, "当前密码不正确"); return
+                if len(pwd) < 6 or len(pwd) > 64:
+                    self._err(400, "新密码长度需在 6-64 位之间"); return
+                try:
+                    with open(ADMIN_PWD_FILE, "w", encoding="utf-8") as _f:
+                        _f.write(pwd)
+                except Exception:
+                    self._err(500, "密码保存失败"); return
+                self._json(200, {"ok": True}); return
+
+            ADMIN_TOKEN = _admin_token()
+            if u.path.startswith("/api/admin/del/"):
+                if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
+                    self._err(401, "unauthorized"); return
+                parts = u.path.split("/")
+                # /api/admin/del/<type>/<id>
+                typ = parts[3] if len(parts) > 3 else ""
+                tid = parts[4] if len(parts) > 4 else ""
+                c = db()
+                try:
+                    if typ == "track":
+                        row = c.execute("SELECT fname FROM tracks WHERE id=?", (tid,)).fetchone()
+                        c.execute("DELETE FROM tracks WHERE id=?", (tid,))
+                        c.execute("DELETE FROM likes WHERE track_id=?", (tid,))
+                        c.execute("DELETE FROM comments WHERE track_id=?", (tid,))
+                        c.commit()
+                        if row and row[0]:
+                            fp = safe_file_path(row[0])
+                            if fp and os.path.exists(fp):
+                                try: os.remove(fp)
+                                except Exception: pass
+                    elif typ == "collected":
+                        row = c.execute("SELECT play_url FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                        c.execute("DELETE FROM collected_tracks WHERE id=?", (tid,))
+                        c.commit()
+                        if row and row[0] and not str(row[0]).startswith("http"):
+                            fp = safe_file_path(row[0])
+                            if fp and os.path.exists(fp):
+                                try: os.remove(fp)
+                                except Exception: pass
+                    elif typ == "user":
+                        c.execute("DELETE FROM users WHERE id=?", (tid,))
+                        c.commit()
+                    elif typ == "comment":
+                        c.execute("DELETE FROM comments WHERE id=?", (tid,))
+                        c.commit()
+                    else:
+                        self._err(400, "bad type"); return
+                finally:
+                    c.close()
+                self._json(200, {"ok": True}); return
+
+            # ---------- 采集控制台：开始/停止（支持自定义目标） ----------
+            if u.path == "/api/collect/start":
+                import subprocess
+                try:
+                    subprocess.check_output(["pgrep", "-f", "collect_v3.py"])
+                    self._json(200, {"ok": True, "running": True, "msg": "已在采集中"})
+                    return
+                except Exception:
+                    pass
+                # 解析目标参数（表单 body 优先，其次 query）
+                try:
+                    raw = self.rfile.read(min(length, 4096)) if length > 0 else b""
+                    qs = raw.decode("utf-8") or u.query
+                    _params = urllib.parse.parse_qs(qs)
+                except Exception:
+                    _params = {}
+                new_tgt = None
+                try:
+                    if _params.get("target"):
+                        _t = int(str(_params["target"][0]).strip())
+                        if _t > 0: new_tgt = _t
+                except Exception:
+                    new_tgt = None
+                c = db()
+                cur = c.execute("SELECT COUNT(*) FROM collected_tracks").fetchone()[0]
+                c.close()
+                tgt_file = "/www/wwwroot/music/source-bridge/collect_target.json"
+                tgt, start_total = None, cur
+                try:
+                    with open(tgt_file, "r", encoding="utf-8") as _tf:
+                        _tj = json.load(_tf)
+                    if isinstance(_tj, dict):
+                        tgt = int(_tj.get("target") or 0)
+                        start_total = int(_tj.get("start_total") or cur)
+                except Exception:
+                    pass
+                # 解析新参数：平台/模式/关键词
+                _plats = [x for x in str(_params.get("platforms", ["kw,wy"])[0]).split(",") if x in ("kw","wy","kg","tx")]
+                if not _plats: _plats = ["kw","wy"]
+                _mode = str(_params.get("mode", ["search"])[0]).strip()
+                if _mode not in ("search","hot"): _mode = "search"
+                _kws = [x for x in str(_params.get("keywords", [""])[0]).split(",") if x.strip()]
+                if new_tgt is not None:
+                    # 重设目标：上次目标未达成则延续起点（已完成数带入新目标）；已达成/无目标则从当前重新累计
+                    prev_done = (tgt is not None) and (cur - start_total >= tgt)
+                    base = start_total if (not prev_done and tgt is not None) else cur
+                    tgt, start_total = new_tgt, base
+                    try:
+                        with open(tgt_file, "w", encoding="utf-8") as _tf:
+                            json.dump({"target": tgt, "start_total": start_total, "updated": time.time(),
+                                       "platforms": _plats, "mode": _mode, "keywords": _kws}, _tf)
+                    except Exception:
+                        pass
+                else:
+                    # 未设置目标：沿用上次目标；无目标或已达成则开启新一轮（默认 500）
+                    done = (tgt is not None) and (cur - start_total >= tgt)
+                    if tgt is None or done:
+                        tgt, start_total = 500, cur
+                    # 把当前平台/模式/关键词刷进配置（无论是否重设目标）
+                    try:
+                        with open(tgt_file, "r", encoding="utf-8") as _tf:
+                            _old = json.load(_tf)
+                        if not isinstance(_old, dict): _old = {}
+                    except Exception:
+                        _old = {}
+                    _old["target"] = tgt
+                    _old["start_total"] = start_total
+                    _old["updated"] = time.time()
+                    _old["platforms"] = _plats
+                    _old["mode"] = _mode
+                    _old["keywords"] = _kws
+                    try:
+                        with open(tgt_file, "w", encoding="utf-8") as _tf:
+                            json.dump(_old, _tf)
+                    except Exception:
+                        pass
+                remaining = tgt - (cur - start_total)
+                if remaining <= 0:
+                    # 已完成数已覆盖新目标：视为已达成，不启动采集
+                    try:
+                        with open("/www/wwwroot/music/source-bridge/collect_run.json", "w", encoding="utf-8") as _sf:
+                            json.dump({"started": None, "collected": []}, _sf)
+                    except Exception:
+                        pass
+                    self._json(200, {"ok": True, "running": False,
+                                     "target": tgt, "start_total": start_total,
+                                     "completed": max(0, cur - start_total), "remaining": 0,
+                                     "achieved": True, "msg": "目标已完成"})
+                    return
+                try:
+                    with open("/www/wwwroot/music/source-bridge/collect_run.json", "w", encoding="utf-8") as _sf:
+                        json.dump({"started": None, "collected": []}, _sf)
+                except Exception:
+                    pass
+                logf = open("/www/wwwroot/music/source-bridge/collect_v3.log", "ab")
+                subprocess.Popen(["python3", "/www/wwwroot/music/source-bridge/collect_v3.py", "--target", str(remaining)],
+                                 stdout=logf, stderr=subprocess.STDOUT,
+                                 cwd="/www/wwwroot/music/source-bridge", stdin=subprocess.DEVNULL)
+                self._json(200, {"ok": True, "running": True,
+                                 "target": tgt, "start_total": start_total,
+                                 "completed": max(0, cur - start_total), "remaining": max(0, remaining)})
+                return
+
+            if u.path == "/api/collect/stop":
+                import subprocess
+                subprocess.run(["pkill", "-f", "collect_v3.py"])
+                time.sleep(0.5)
+                self._json(200, {"ok": True, "running": False})
+                return
+
+            # ---------- 单首采集入库（H5 搜索后点采集按钮） ----------
+            if u.path == "/api/collect/one":
+                try:
+                    raw = self.rfile.read(min(length, 65536)) if length > 0 else b""
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                _src = (data.get("source") or "wy").strip()
+                _mid = (data.get("songmid") or "").strip()
+                _name = (data.get("name") or "").strip()
+                if not _mid or not _name:
+                    self._err(400, "songmid/name required"); return
+                _singer = (data.get("singer") or "").strip()
+                _album = (data.get("album") or "").strip()
+                _interval = data.get("interval") or ""
+                _img = data.get("img") or ""
+                c = db()
+                _dup = c.execute("SELECT title FROM collected_tracks WHERE source=? AND source_id=?", (_src, _mid)).fetchone()
+                if _dup:
+                    c.close(); self._json(200, {"ok": False, "err": "已存在：" + _dup[0]}); return
+                _tid = hashlib.md5((_src + ":" + _mid).encode()).hexdigest()
+                try:
+                    _br = ("http://127.0.0.1:8789/song?source=" + urllib.parse.quote(_src) +
+                           "&songmid=" + urllib.parse.quote(_mid) +
+                           "&name=" + urllib.parse.quote(_name) +
+                           "&singer=" + urllib.parse.quote(_singer) +
+                           "&album=" + urllib.parse.quote(_album) +
+                           "&interval=" + urllib.parse.quote(str(_interval)) +
+                           "&img=" + urllib.parse.quote(_img))
+                    with urllib.request.urlopen(_br, timeout=60) as _r:
+                        _info = json.loads(_r.read().decode())
+                    if not _info.get("ok"):
+                        c.close(); self._json(200, {"ok": False, "err": "音源解析失败"}); return
+                    _url = str(_info.get("url") or "")
+                    _lrc = _info.get("lyric") or ""
+                    _pic = _info.get("pic") or _img
+                except Exception as e:
+                    c.close(); self._json(200, {"ok": False, "err": "音源错误:" + str(e)}); return
+                # 下封面
+                _cover = ""
+                if _pic and str(_pic).startswith("http"):
+                    try:
+                        _req = urllib.request.Request(_pic, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(_req, timeout=15, context=ssl._create_unverified_context()) as _r:
+                            _imgdata = _r.read()
+                        if len(_imgdata) > 500:
+                            with open(os.path.join(FILES, _tid + "_cover.jpg"), "wb") as _f:
+                                _f.write(_imgdata)
+                            _cover = _tid + "_cover.jpg"
+                    except Exception:
+                        pass
+                # 下音频
+                _audio, _asize, _aok = "", 0, False
+                if _url.startswith("http"):
+                    try:
+                        _req = urllib.request.Request(_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(_req, timeout=60, context=ssl._create_unverified_context()) as _r:
+                            _adata = _r.read()
+                        if len(_adata) >= 300 * 1024:
+                            with open(os.path.join(FILES, _tid + ".mp3"), "wb") as _f:
+                                _f.write(_adata)
+                            _audio = _tid + ".mp3"; _asize = len(_adata); _aok = True
+                    except Exception:
+                        pass
+                _m = re.match(r"^(\d+):(\d{2})$", str(_interval or "").strip())
+                _dur = int(_m.group(1)) * 60 + int(_m.group(2)) if _m else 0
+                c.execute(
+                    """INSERT OR IGNORE INTO collected_tracks
+                       (id,title,artist,album,cover,duration,source,source_id,play_url,size,created,user_id,lrc)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (_tid, _name, _singer, _album, _cover, _dur, _src, _mid,
+                     _audio, _asize, time.time(),
+                     "a334105a8a2f4401a19001ee4ce66929", _lrc))
+                c.commit(); c.close()
+                self._json(200, {"ok": True, "title": _name, "artist": _singer, "audio": _aok}); return
+
             # ---------- 音乐源采集入库（采集器批量写入 collected_tracks） ----------
             if u.path == "/api/collect/add":
                 if not rate_limit(self, "collect_add"):
@@ -1236,13 +2670,31 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                     if not title or not src or not sid:
                         continue
                     tid = hashlib.md5(("%s:%s" % (src, sid)).encode()).hexdigest()
+                    # 封面：若为第三方 http 链接则下载到本地 files/{tid}_cover.jpg（手机端可直接加载），
+                    # 下载失败则存空（App 显示占位封面）；已入库歌曲跳过下载。
+                    cover_val = (it.get("cover") or "").strip()
+                    local_cover = ""
+                    if cover_val.startswith("http"):
+                        try:
+                            req = urllib.request.Request(cover_val, headers={"User-Agent": "Mozilla/5.0"})
+                            with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx()) as r:
+                                img = r.read()
+                            if img and len(img) >= 500:
+                                with open(os.path.join(FILES, tid + "_cover.jpg"), "wb") as f:
+                                    f.write(img)
+                                local_cover = tid + "_cover.jpg"
+                        except Exception:
+                            local_cover = ""
+                    elif cover_val:
+                        local_cover = cover_val   # 已是本地文件名
+                    # 播放链接不再采集入库（外部第三方直链时效短且手机端不可用）
                     cur = c.execute(
                         """INSERT OR IGNORE INTO collected_tracks
                            (id,title,artist,album,cover,duration,source,source_id,play_url,size,created,user_id,lrc)
                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (tid, title, (it.get("artist") or "").strip(), (it.get("album") or "").strip(),
-                         it.get("cover") or "", float(it.get("duration") or 0), src, sid,
-                         it.get("play_url") or "", float(it.get("size") or 0), now, owner, it.get("lrc") or ""))
+                         local_cover, float(it.get("duration") or 0), src, sid,
+                         "", float(it.get("size") or 0), now, owner, it.get("lrc") or ""))
                     if cur.rowcount and cur.rowcount > 0:
                         ins += 1
                     else:
@@ -1351,12 +2803,16 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                     password = fields.get("password") or ""
                     c = db()
                     row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
-                                     gender,age,background_image,signature,ip_address
+                                     gender,age,background_image,signature,ip_address,banned,ban_reason
                                      FROM users WHERE account=?""",
                                     (account,)).fetchone()
                     if not row or not verify_password(password, row[2]):
                         c.close()
                         self._err(401, "账号或密码错误")
+                        return
+                    if row[11]:
+                        c.close()
+                        self._err(403, "账号已被封禁：" + (row[12] or "联系管理员"))
                         return
                     # 旧版哈希（v1，120000 轮）自动迁移升级
                     if is_legacy_hash(row[2]):
@@ -1505,6 +2961,9 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                   (uid, tid, time.time()))
                         c.execute("UPDATE tracks SET like_count=like_count+1 WHERE id=?", (tid,))
                         liked = True
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
+                                 VALUES(?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, "like", 1.0 if liked else 0.0, "", time.time()))
                     c.commit()
                     row = c.execute("SELECT like_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -1527,6 +2986,9 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                         self._err(401, "未登录或登录已过期")
                         return
                     c.execute("UPDATE tracks SET share_count=share_count+1 WHERE id=?", (tid,))
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
+                                 VALUES(?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, "share", 1.0, "", time.time()))
                     c.commit()
                     row = c.execute("SELECT share_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -1568,11 +3030,66 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                     c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,created)
                                  VALUES(?,?,?,?,?,?)""",
                               (cid, tid, uid, uname, content, time.time()))
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
+                                 VALUES(?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, "comment", 1.0, "", time.time()))
                     c.commit()
                     c.close()
                     self._json(200, {"id": cid})
                 except Exception as e:
                     self._internal_error(e)
+                return
+
+            # ---------- 用户行为上报（点赞/打开评论/评论/分享/收听/搜索/跳过） ----------
+            if u.path == "/api/behavior":
+                if not rate_limit(self, "behavior"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                try:
+                    raw = self.rfile.read(min(length, 256 * 1024)) if length > 0 else b""
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json")
+                    return
+                c = db()
+                uid, via_token = self.auth_user(c, data)
+                if not uid:
+                    c.close()
+                    self._err(401, "未登录或登录已过期")
+                    return
+                evs = data.get("events") or []
+                if not isinstance(evs, list) or not evs or len(evs) > 30:
+                    c.close()
+                    self._err(400, "events must be 1..30")
+                    return
+                ALLOW = ("like", "comment_open", "comment", "share", "listen", "search", "skip")
+                now = time.time()
+                ins = 0
+                for it in evs:
+                    tid = str(it.get("trackId") or "").strip()
+                    ev = str(it.get("event") or "").strip()
+                    if not tid and ev != "search":
+                        continue
+                    if ev not in ALLOW:
+                        continue
+                    try:
+                        val = float(it.get("value") or 0)
+                    except Exception:
+                        val = 0.0
+                    meta = it.get("meta")
+                    if isinstance(meta, dict):
+                        meta_s = json.dumps(meta, ensure_ascii=False)[:500]
+                    elif isinstance(meta, str):
+                        meta_s = meta[:500]
+                    else:
+                        meta_s = ""
+                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,created)
+                                 VALUES(?,?,?,?,?,?,?)""",
+                              (uuid.uuid4().hex, uid, tid, ev, val, meta_s, now))
+                    ins += 1
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "count": ins})
                 return
 
             # ---------- 歌曲上传 ----------

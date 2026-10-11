@@ -62,6 +62,21 @@ final class PlayerManager: NSObject, ObservableObject {
     private var endObserver: NSObjectProtocol?
     private var failObserver: NSObjectProtocol?
 
+    // MARK: - 收听行为追踪（个性化推荐数据源）
+
+    /// 单曲收听状态：按 trackId 归属，切歌/重播时更新
+    private struct ListenState {
+        var trackId: String = ""
+        var seconds: Double = 0      // 本次会话累计收听秒数（真实出声才累计）
+        var reported: Double = 0     // 已上报基线（每次只上报差值，避免重复计数）
+        var completedPlays: Int = 0  // 完整听完整首的次数（同一首歌听了几遍）
+    }
+    private var listen = ListenState()
+    private var listenTimer: Timer?
+
+    /// 收听结算触发原因：switchTrack 用于快速切走的“跳过”负向信号判定
+    private enum ListenFlushReason { case switchTrack, pause, complete, heartbeat, background }
+
     override init() {
         super.init()
         let session = AVAudioSession.sharedInstance()
@@ -103,7 +118,13 @@ final class PlayerManager: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.next()
+            guard let self else { return }
+            // 完整听完一首：累计“听了几遍”，并结算收听时长
+            if self.listen.trackId == self.current?.id {
+                self.listen.completedPlays += 1
+            }
+            self.flushListen(.complete)
+            self.next()
         }
 
         // 音频流加载失败（网络中断/资源损坏/服务器返回错误）：UI 展示重试，避免 App 静默卡死
@@ -115,12 +136,36 @@ final class PlayerManager: NSObject, ObservableObject {
             self?.loadFailed = true
             self?.isBuffering = false
         }
+
+        // 收听心跳：每秒累计真实播放秒数，每 30s 自动上报一次（防 App 被杀丢失数据）
+        listenTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.listenTick()
+        }
+        // 退后台/切应用前结算一次收听时长
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushListen(.background)
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushListen(.background)
+        }
     }
 
-    /// 切换音效后重新加载当前歌曲以应用新音效
+    deinit {
+        listenTimer?.invalidate()
+    }
+
+    /// 切换音效后重新加载当前歌曲以应用新音效（同曲重载，不算切歌/跳过）
     func reloadCurrent() {
         guard current != nil else { return }
-        playCurrent()
+        playCurrent(flushReason: .heartbeat)
     }
 
     var current: Track? {
@@ -213,8 +258,16 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - Private
 
-    private func playCurrent() {
+    private func playCurrent(flushReason: ListenFlushReason? = nil) {
         guard let current = current else { return }
+        // 先结算上一首的收听：真正切歌才可能产生“跳过”负向信号；
+        // 同一首歌重播（单曲循环/音效重载）只结算有效收听，不算跳过
+        let sameTrack = (listen.trackId == current.id)
+        flushListen(flushReason ?? (sameTrack ? .heartbeat : .switchTrack))
+        // 新歌：重置收听状态；同一首歌重播：保留累计（用于“听了几遍”）
+        if !sameTrack {
+            listen = ListenState(trackId: current.id)
+        }
         usingEngine = (selectedEQ == "3D 环绕")
         // 状态立即重置，UI 先反馈（避免切歌后旧状态残留）
         isPlaying = true
@@ -252,7 +305,13 @@ final class PlayerManager: NSObject, ObservableObject {
                         self.updateNowPlaying()
                     }
                     self.enginePlayer.onCompletion = { [weak self] in
-                        self?.next()
+                        guard let self else { return }
+                        // 完整听完一首：累计“听了几遍”，并结算收听时长
+                        if self.listen.trackId == self.current?.id {
+                            self.listen.completedPlays += 1
+                        }
+                        self.flushListen(.complete)
+                        self.next()
                     }
                     self.enginePlayer.onLoadingChanged = { [weak self] loading in
                         self?.isBuffering = loading
@@ -366,6 +425,8 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     private func pausePlayback() {
+        // 暂停前结算一次收听时长（不触发“跳过”信号）
+        flushListen(.pause)
         if usingEngine {
             enginePlayer.pause()
         } else {
@@ -373,6 +434,45 @@ final class PlayerManager: NSObject, ObservableObject {
         }
         isPlaying = false
         updateNowPlaying()
+    }
+
+    // MARK: - 收听结算
+
+    /// 每秒心跳：仅在真实出声时累计收听秒数（缓冲/加载/暂停不计入）
+    private func listenTick() {
+        guard current != nil, isPlaying, !loadFailed, !isBuffering else { return }
+        listen.seconds += 1
+        // 每 30s 自动上报一次，避免 App 被杀导致收听数据丢失
+        if listen.seconds - listen.reported >= 30 {
+            flushListen(.heartbeat)
+        }
+    }
+
+    /// 结算当前收听段：进度 ≥ 50%（或完整听完）记为有效收听；
+    /// 切走时进度 < 30% 且听了 ≥ 5 秒记为“跳过”（负向信号）；
+    /// 30% ~ 50% 之间不记录（听 1/3 不算偏好，听 2/3 才算）
+    private func flushListen(_ reason: ListenFlushReason) {
+        guard !listen.trackId.isEmpty else { return }
+        let delta = listen.seconds - listen.reported
+        guard delta >= 1 else { return }
+        let frac = duration > 0 ? min(listen.seconds / duration, 1.0) : 0
+        if frac >= 0.5 || listen.completedPlays >= 1 {
+            let meta = API.BehaviorEvent.metaJSON([
+                "fraction": (frac * 100).rounded() / 100,
+                "plays": listen.completedPlays,
+                "seconds": Int(listen.seconds)
+            ])
+            let ev = API.BehaviorEvent(trackId: listen.trackId, event: "listen",
+                                       value: delta, meta: meta)
+            Task { await API.reportBehavior([ev]) }
+            listen.reported = listen.seconds
+        } else if reason == .switchTrack && delta >= 5 && frac < 0.3 {
+            let meta = API.BehaviorEvent.metaJSON(["fraction": (frac * 100).rounded() / 100])
+            let ev = API.BehaviorEvent(trackId: listen.trackId, event: "skip",
+                                       value: 0, meta: meta)
+            Task { await API.reportBehavior([ev]) }
+            listen.reported = listen.seconds
+        }
     }
 
     private func updateNowPlaying() {

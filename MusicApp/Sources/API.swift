@@ -137,6 +137,57 @@ enum API {
         return obj["shareCount"] as? Int ?? 0
     }
 
+    // MARK: - 行为采集与个性化推荐
+
+    /// 用户行为事件（批量上报，失败静默不打断播放流程）
+    /// event: like / comment_open / comment / share / listen / search / skip
+    /// value: listen 为本次新增收听秒数；meta 为 JSON 字符串（listen 携带 {fraction, plays, seconds}）
+    struct BehaviorEvent: Encodable {
+        let trackId: String
+        let event: String
+        var value: Double = 0
+        var meta: String? = nil
+
+        /// 生成 JSON 字符串形式的 meta
+        static func metaJSON(_ dict: [String: Any]) -> String? {
+            guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+    }
+
+    /// 批量上报行为事件到 /api/behavior（401 静默清理登录态，不抛错）
+    static func reportBehavior(_ events: [BehaviorEvent]) async {
+        guard !events.isEmpty else { return }
+        var req = URLRequest(url: base.appendingPathComponent("behavior"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let payload = ["events": events.map { try? JSONEncoder().encode($0) }
+            .compactMap { $0 }.compactMap { try? JSONSerialization.jsonObject(with: $0) }]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        let (_, resp) = (try? await URLSession.shared.data(for: req)) ?? (Data(), nil)
+        noticeAuthFailure(resp)
+    }
+
+    /// 个性化推荐：基于用户行为返回 20 首相关歌曲（未登录/无行为时后端返回随机兜底）
+    static func recommend(userId: String? = nil) async throws -> [Track] {
+        var components = URLComponents(url: base.appendingPathComponent("recommend"),
+                                       resolvingAgainstBaseURL: false)!
+        let uid = userId ?? AuthManager.shared.currentUser?.id
+        if let uid, !uid.isEmpty {
+            components.queryItems = [URLQueryItem(name: "userId", value: uid)]
+        }
+        var req = URLRequest(url: components.url!)
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode([Track].self, from: data)
+    }
+
     struct Comment: Codable, Identifiable, Hashable {
         let id: String
         let userId: String

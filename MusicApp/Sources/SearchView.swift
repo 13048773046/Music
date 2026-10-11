@@ -110,6 +110,10 @@ struct SearchView: View {
         guard !kw.isEmpty else { return }
         hasSearched = true
         searching = true
+        // 搜索关键词上报（个性化推荐信号：搜过什么 → 推相关歌曲）
+        let ev = API.BehaviorEvent(trackId: "", event: "search", value: 0,
+                                   meta: API.BehaviorEvent.metaJSON(["kw": kw]))
+        Task { await API.reportBehavior([ev]) }
         Task {
             do {
                 let found = try await API.search(kw)
