@@ -147,20 +147,31 @@ struct LyricPreview: View {
         return lo - 1
     }
 
+    /// 每帧推进滚动状态：切句（当前行变化）时重置单调进度；
+    /// 否则滚动进度只增不减，AVPlayer 时间抖动不会让位移回退（无回弹）。
+    /// 返回 Void，在 TimelineView 内以 `let _ = advanceTracker(...)` 声明形式调用
+    /// （ViewBuilder 不允许直接写赋值语句）。
+    private func advanceTracker(c: Int, display: Double) {
+        if c != tracker.lastC {
+            tracker.lastC = c
+            tracker.maxT = 0
+        }
+        let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
+        if tRaw > tracker.maxT {
+            tracker.maxT = tRaw
+        }
+    }
+
     var body: some View {
         TimelineView(.animation) { _ in
             let display = displayTime()
             let c = currentIndex(display)
-            // 切句（当前行变化）：重置单调进度，开启新一轮平滑滚动
-            if c != tracker.lastC {
-                tracker.lastC = c
-                tracker.maxT = 0
-            }
+            // 切句重置 + 滚动进度单调化（副作用在辅助函数中完成，闭包内只用声明）
+            let _ = advanceTracker(c: c, display: display)
             // 滚动进度：切句瞬间（display 刚过当前行 start）为 0，0.28s 后为 1。
             // 单调化：只增不减，AVPlayer 时间抖动不会让位移回退（无回弹）。
-            let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-            let t = max(tRaw, tracker.maxT)
-            tracker.maxT = t
+            let t = max(c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1,
+                        tracker.maxT)
             let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0   // easeOutCubic：起快收慢，跟手不拖沓
             // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
             let scrolling = c > 0 && t < 1
@@ -172,8 +183,8 @@ struct LyricPreview: View {
                     let li = base + idx
                     if lines.indices.contains(li) {
                         let line = lines[li]
-                        // 当前行：随滚动放大到满字号 + 逐字高亮；
-                        // 旧行（仅滚动期间）：已唱完全白，同步淡出缩小；
+                        // 当前行：随滚动放大到满字号 + 整句点亮；
+                        // 旧行（仅滚动期间）：整句白色，同步淡出缩小；
                         // 预备行：恒灰小字。
                         let isCurrent = li == c
                         let isOld = li == c - 1
