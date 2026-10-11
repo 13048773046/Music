@@ -85,21 +85,25 @@ final class AudioEnginePlayer {
             band.bandwidth = 0.5
             band.gain = 0
         }
-        // 左右微延迟制造相位差立体感（不要混响/回声）
+        // 左右微延迟制造相位差立体感（不要混响/回声）。
+        // 注意：wetDryMix 必须保持低值——干湿信号叠加会形成梳状滤波，
+        // 某些频段随音乐时变被增强/抵消，听感就是声音时大时小、飘忽。
         delayLow.delayTime = 0.018   // 低频略偏左
         delayLow.feedback = 0
-        delayLow.wetDryMix = 50
+        delayLow.wetDryMix = 12
         delayHigh.delayTime = 0.012  // 高频略偏右
         delayHigh.feedback = 0
-        delayHigh.wetDryMix = 50
+        delayHigh.wetDryMix = 12
         // 小房间自然反射（不是大厅环绕感）：近场音响在房间里的听感
         reverb.loadFactoryPreset(.smallRoom)
-        reverb.wetDryMix = 12
+        reverb.wetDryMix = 8
 
-        // 分频声像
-        mixLow.outputVolume = 0.9
-        mixMid.outputVolume = 1.0
-        mixHigh.outputVolume = 0.9
+        // 分频声像：三条分频路信号叠加输出，若各路增益保持 0.9/1.0/0.9 会整体过载
+        // （总响度约为原音的 1.6~2.8 倍，切到 3D 模式瞬间音量猛增）。
+        // 补偿为 0.55/0.6/0.55，三路 RMS 叠加 ≈ 1.0，与「原音」响度基本一致。
+        mixLow.outputVolume = 0.55
+        mixMid.outputVolume = 0.6
+        mixHigh.outputVolume = 0.55
     }
 
     private func buildGraph() {
@@ -285,12 +289,13 @@ final class AudioEnginePlayer {
             mixHigh.outputVolume = 0
             reverb.wetDryMix = 0
         case .surround3D:
-            // 3D 立体：直通关，分频链开，小房间自然反射
+            // 3D 立体：直通关，分频链开，小房间自然反射。
+            // 增益已按三路叠加补偿（见 configureNodes），响度与原音一致，不会时大时小
             directMix.outputVolume = 0
-            mixLow.outputVolume = 0.9
-            mixMid.outputVolume = 1.0
-            mixHigh.outputVolume = 0.9
-            reverb.wetDryMix = 12
+            mixLow.outputVolume = 0.55
+            mixMid.outputVolume = 0.6
+            mixHigh.outputVolume = 0.55
+            reverb.wetDryMix = 8
         }
     }
 

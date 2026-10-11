@@ -68,6 +68,10 @@ final class PlayerManager: NSObject, ObservableObject {
         try? session.setCategory(.playback, mode: .default)
         try? session.setActive(true)
 
+        // 显式固定播放音量：App 不提供音量调节，确保任何情况下输出增益恒为 1.0，
+        // 避免被异常状态（如流中断重建、模式切换残留）影响导致忽大忽小
+        player.volume = 1.0
+
         setupRemoteCommands()
         setupInterruptionHandling()
 
@@ -228,6 +232,7 @@ final class PlayerManager: NSObject, ObservableObject {
         // 2) 3D 环绕引擎：取消正在进行的整曲下载任务并停止引擎
         // 这样即使新歌的签名 URL 还在网络请求中，上一首也已经不再发声、不再占用带宽
         player.pause()
+        player.volume = 1.0   // 切歌时音量增益复位，防止残留状态影响新歌
         player.replaceCurrentItem(with: nil)
         enginePlayer.stop()
 
