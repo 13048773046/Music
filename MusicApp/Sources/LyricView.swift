@@ -23,7 +23,8 @@ struct KRCLine: Equatable, Identifiable {
 /// - KRC：以毫秒级逐字时间戳驱动卡拉OK式逐字高亮（每字独立 start/end）。
 /// - LRC：整句退化为一个字（start=行时间，end 由下一行决定）。
 /// 元信息行（[offset:]/[ti:]/[ar:]/[al:]/[by:]）自动跳过。
-/// 注：UI 采用整句高亮模式（整句跟随行时间点亮/切换），逐字时间戳仅保留原始解析结果。
+/// 注：UI 采用逐字卡拉OK填充（每个字在自身 start/end 区间内从左到右填充绘制），
+/// 逐字时间戳按原始解析结果使用。
 func parseLyrics(_ text: String) -> [KRCLine] {
     guard !text.isEmpty else { return [] }
     let rowRegex = try! NSRegularExpression(pattern: "\\[(\\d+):(\\d+)(?:[.:](\\d+))?(?:,(\\d+))?\\]")
@@ -89,7 +90,7 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
-/// 平滑滚动过渡 + 整句高亮全部由 `TimelineView(.animation)` 帧驱动，单一时间源：
+/// 平滑滚动过渡 + 逐字卡拉OK填充全部由 `TimelineView(.animation)` 帧驱动，单一时间源：
 ///
 /// **切句平滑滚动（保留原过渡动画，去除结尾回弹）**
 /// 滚动进度 `t` = 距当前行 start 的时间 / 0.28s，每帧按时间戳插值：
@@ -100,9 +101,9 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 ///   最大进度（class 属性不触发 SwiftUI 重绘），进度只增不减；切句（当前行变化）时
 ///   重置，保证每次滚动平滑单向、无回弹。
 ///
-/// **整句高亮（无逐字扫描）**
-/// 当前句整句白色、下一句灰色小字，行切换由行标签时间驱动（到点整句切换），
-/// 单 Text 渲染，无 mask、无字宽测量，最轻量。
+/// **逐字卡拉OK填充（还原原始效果）**
+/// 已唱完的字全白；正在唱的字在它自己的 [start, end] 区间内从左到右填充绘制；
+/// 未到的字灰色。整行单 mask 裁剪 + 预测量字宽，视觉效果与逐字 mask 一致且更轻量。
 ///
 /// 性能：行视图 Equatable 局部刷新；二分定位当前行；每帧仅一次 AVPlayer 时间查询。
 struct LyricPreview: View {
@@ -183,8 +184,8 @@ struct LyricPreview: View {
                     let li = base + idx
                     if lines.indices.contains(li) {
                         let line = lines[li]
-                        // 当前行：随滚动放大到满字号 + 整句点亮；
-                        // 旧行（仅滚动期间）：整句白色，同步淡出缩小；
+                        // 当前行：随滚动放大到满字号 + 逐字填充；
+                        // 旧行（仅滚动期间）：已唱完全白，同步淡出缩小；
                         // 预备行：恒灰小字。
                         let isCurrent = li == c
                         let isOld = li == c - 1
@@ -194,7 +195,7 @@ struct LyricPreview: View {
                         let opacity = isOld ? 1 - eased : 1.0
                         LyricRowView(
                             line: line,
-                            isActive: isCurrent || isOld,   // 当前句与滑出中的旧句都整句点亮
+                            currentTime: isCurrent ? display : (isOld ? display : -1),
                             scale: scale,
                             opacity: opacity,
                             tint: tint
@@ -210,39 +211,88 @@ struct LyricPreview: View {
     }
 }
 
-// MARK: - 单行歌词（整句高亮）
+// MARK: - 单行歌词（卡拉OK式逐字填充）
 
-/// 整句跟随歌词文件的行时间点亮：当前句（及滚出中的旧句）整句白色，
-/// 未到的句子灰色小字；行切换由行标签时间驱动（到点整句切换），
-/// 无逐字扫描、无 mask、无测量，单 Text 渲染，最轻量。
+/// 逐字卡拉OK填充：已唱完的字全白；正在唱的字从左到右填充绘制（每个字到它的
+/// 开始/结束时间区间内从左扫到右）；未到的字灰色。
+/// 白色整行文字用**一个**左对齐矩形 mask 裁剪，mask 宽度 = 已唱完字宽之和 +
+/// 正在唱的字宽 × 字内进度，视觉效果与逐字 mask 完全一致，但每帧只更新一个
+/// CGFloat 宽度（无 GeometryReader）；每个字的渲染宽度在行出现时用 UIFont
+/// 一次性测量缓存，零布局开销。
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    /// 是否整句点亮（当前句 / 滚动中正在滑出的旧句）
-    let isActive: Bool
+    /// 当前播放秒数；-1 = 非高亮行（全灰），旧行传 display（已唱完 → 全白淡出）
+    let currentTime: Double
     let scale: Double       // 当前句固定 1.0；下一句固定 0.8 小字
     let opacity: Double     // 旧句滚动淡出
     let tint: Color
 
+    /// 逐字渲染宽度缓存（onAppear 一次性测量）
+    @State private var charWidths: [CGFloat] = []
+
+    /// 手动实现 Equatable：排除 @State 缓存属性（自动合成会被 State 包装器阻断）。
+    /// 未变化的行（如预备行）由 SwiftUI 跳过重建，当前行/旧行因 currentTime 每帧变化而重建。
     static func == (lhs: LyricRowView, rhs: LyricRowView) -> Bool {
         lhs.line == rhs.line &&
-        lhs.isActive == rhs.isActive &&
+        lhs.currentTime == rhs.currentTime &&
         lhs.scale == rhs.scale &&
         lhs.opacity == rhs.opacity &&
         lhs.tint == rhs.tint
     }
 
+    /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
+    private var filledWidth: CGFloat {
+        guard currentTime >= 0 else { return 0 }
+        var w: CGFloat = 0
+        for (i, word) in line.words.enumerated() {
+            let cw = charWidths.indices.contains(i) ? charWidths[i] : 0
+            if currentTime >= word.end {
+                w += cw
+            } else if currentTime >= word.start {
+                let span = max(word.end - word.start, 0.001)
+                let p = min(max((currentTime - word.start) / span, 0), 1)
+                w += cw * p
+                break
+            } else {
+                break
+            }
+        }
+        return w
+    }
+
     var body: some View {
-        Text(line.text)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundColor(isActive ? .white : tint.opacity(baseOpacity))
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .scaleEffect(CGFloat(scale), anchor: .leading)
-            .opacity(opacity)
+        ZStack(alignment: .leading) {
+            // 底色：未唱部分（灰）
+            Text(line.text)
+                .foregroundColor(tint.opacity(baseOpacity))
+            // 已唱区间：白色整行 + 单个左对齐矩形 mask（宽度=已唱区间），无 GeometryReader
+            if currentTime >= 0 {
+                Text(line.text)
+                    .foregroundColor(.white)
+                    .mask(alignment: .leading) {
+                        Rectangle()
+                            .frame(width: filledWidth)
+                    }
+            }
+        }
+        .font(.system(size: 20, weight: .medium))
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .scaleEffect(CGFloat(scale), anchor: .leading)
+        .opacity(opacity)
+        .onAppear { measure() }
     }
 
     private var baseOpacity: Double {
         let t = (scale - 0.8) / 0.2
         return 0.4 + 0.1 * min(max(t, 0), 1)
+    }
+
+    /// 用与 SwiftUI 同款字体一次性测量每个字的渲染宽度
+    private func measure() {
+        let font = UIFont.systemFont(ofSize: 20, weight: .medium)
+        charWidths = line.words.map { w in
+            (w.text as NSString).size(withAttributes: [.font: font]).width
+        }
     }
 }
