@@ -20,7 +20,8 @@ struct KRCLine: Equatable, Identifiable {
 }
 
 /// 解析歌词文本：自动识别 KRC（含 `<起始ms,持续ms>` 逐字时间戳）与标准 LRC。
-/// - KRC：以毫秒级逐字时间戳驱动卡拉OK式逐字高亮（每字独立 start/end）。
+/// - KRC：`<st,dur>` 是**相对该行标签时间**的毫秒偏移，字的绝对时间 = 行时间 + st/1000，
+///   行的展示开始时间 = 行标签时间；逐字卡拉OK高亮由每字绝对时间驱动。
 /// - LRC：整句退化为一个字（start=行时间，end 由下一行决定）。
 /// 元信息行（[offset:]/[ti:]/[ar:]/[al:]/[by:]）自动跳过。
 func parseLyrics(_ text: String) -> [KRCLine] {
@@ -53,7 +54,11 @@ func parseLyrics(_ text: String) -> [KRCLine] {
             let durMs = Double(bodyNS.substring(with: m.range(at: 2))) ?? 0
             let txt = bodyNS.substring(with: m.range(at: 3))
             guard !txt.isEmpty else { return }
-            words.append(KRWord(text: txt, start: stMs / 1000, end: (stMs + durMs) / 1000))
+            // 关键：KRC 的 <st,dur> 是相对本行标签时间的毫秒偏移，须换算为绝对秒数，
+            // 否则各行时间轴重叠错乱（歌词填充一半就跳句/乱切句）
+            words.append(KRWord(text: txt,
+                                start: rowStart + stMs / 1000,
+                                end: rowStart + (stMs + durMs) / 1000))
             wordFound = true
         }
 
@@ -69,8 +74,9 @@ func parseLyrics(_ text: String) -> [KRCLine] {
         if joined.contains("滚动歌词") || joined.contains("翻译贡献者") || joined.contains("贡献者") {
             continue
         }
+        // 行展示开始时间 = 行标签时间（到点即切句）；行结束 = 最后字绝对结束时间
         lines.append(KRCLine(words: words,
-                             start: words.first?.start ?? rowStart,
+                             start: rowStart,
                              end: words.last?.end ?? rowStart))
     }
 
@@ -86,15 +92,10 @@ func parseLyrics(_ text: String) -> [KRCLine] {
     return lines
 }
 
-// MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
+// MARK: - 两句固定歌词预览（歌名/作者下方，互动行上方）
 
-/// 滚动 + 逐字高亮全部由 `TimelineView(.animation)` 帧驱动，单一时间源，丝滑无跳变：
-///
-/// **切句滚动（无 withAnimation / 无 asyncAfter）**
-/// 滚动进度 `t` = 距当前行 start 的时间 / 0.28s，纯派生、每帧按时间戳插值：
-/// - 滚动期间行集合为 `[旧行, 当前行, 预备行]`，容器上滑 `-step * easeOutCubic(t)`
-/// - 旧行同步淡出并轻微缩小，当前行从 0.8 放大到 1.0，全部由同一 `t` 驱动，天然同步
-/// - 滚动结束帧与复位帧视口逐像素一致，无闪跳；连续快速切句会被直接打断并重新插值，不跳变
+/// **固定模式**：当前句永远显示在第 1 行、下一句在第 2 行，位置完全固定，
+/// 无位移动画、无缩放动画、无滚动回弹；切句瞬间仅做极短淡入（0.12s，帧驱动）。
 ///
 /// **逐字卡拉OK高亮（整行单 mask，无 GeometryReader）**
 /// 白色整行文字用**一个**左对齐矩形 mask 裁剪，mask 宽度 = 已唱完字宽之和 + 正在唱的字宽×进度。
@@ -111,12 +112,10 @@ struct LyricPreview: View {
     // 固定排版尺寸（字号 20 行高约 26，间距 8）
     private static let rowHeight: CGFloat = 26
     private static let rowGap: CGFloat = 8
-    private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
-    // 视口只露两行：当前句 + 下一句。第三行（预备行）在 frame 外被 clipped，
-    // 在页面上自然被点赞/评论/分享按钮挡住，滚动时从下方滑上来接替下一句。
+    // 视口固定两行：当前句 + 下一句
     private static let viewHeight: CGFloat = rowHeight * 2 + rowGap
-    /// 切句滚动时长（秒）：滚动进度 = 距当前行 start 的时间 / 该值
-    private static let scrollDuration: Double = 0.28
+    /// 切句后当前行的淡入时长（秒）：仅透明度过渡，位置不动
+    private static let fadeDuration: Double = 0.12
 
     /// 播放跟随：每帧直接实时查询 AVPlayer 当前时间（毫秒级），逐字高亮逐帧推进
     private func displayTime() -> Double {
@@ -140,40 +139,33 @@ struct LyricPreview: View {
         TimelineView(.animation) { _ in
             let display = displayTime()
             let c = currentIndex(display)
-            // 滚动进度：切句瞬间（display 刚过当前行 start）为 0，0.28s 后为 1。
-            // 纯时间派生：无 asyncAfter 复位、可被下一次切句打断、帧同步。
-            let t = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-            let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0   // easeOutCubic：起快收慢，跟手不拖沓
-            // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
-            let scrolling = c > 0 && t < 1
-            let base = scrolling ? c - 1 : c
-            let offsetY = scrolling ? -Self.step * eased : 0
+            // 切句淡入：距当前行 start 0.12s 内透明度 0.25 → 1.0（smoothstep），
+            // 之后恒定 1.0。位置固定，无位移无缩放无回弹。
+            let fadeT = c >= 0 ? min(max((display - lines[c].start) / Self.fadeDuration, 0), 1) : 1
+            let fade = fadeT * fadeT * (3 - 2 * fadeT)
 
             VStack(spacing: Self.rowGap) {
-                ForEach(0..<3, id: \.self) { idx in
-                    let li = base + idx
-                    if lines.indices.contains(li) {
-                        let line = lines[li]
-                        // 当前行：随滚动放大到满字号 + 逐字高亮；
-                        // 旧行（仅滚动期间）：已唱完全白，同步淡出缩小；
-                        // 预备行：恒灰小字。
-                        let isCurrent = li == c
-                        let isOld = li == c - 1
-                        let scale: Double = isCurrent
-                            ? (scrolling ? 0.8 + 0.2 * eased : 1.0)
-                            : (isOld ? 1.0 - 0.15 * eased : 0.8)
-                        let opacity = isOld ? 1 - eased : 1.0
-                        LyricRowView(
-                            line: line,
-                            currentTime: isCurrent ? display : (isOld ? display : -1),
-                            scale: scale,
-                            opacity: opacity,
-                            tint: tint
-                        )
-                    }
+                // 当前句：固定第 1 行，逐字高亮
+                if c >= 0, lines.indices.contains(c) {
+                    LyricRowView(
+                        line: lines[c],
+                        currentTime: display,
+                        scale: 1.0,
+                        opacity: 0.25 + 0.75 * fade,
+                        tint: tint
+                    )
+                }
+                // 下一句：固定第 2 行，灰字
+                if lines.indices.contains(c + 1) {
+                    LyricRowView(
+                        line: lines[c + 1],
+                        currentTime: -1,
+                        scale: 0.8,
+                        opacity: 1.0,
+                        tint: tint
+                    )
                 }
             }
-            .offset(y: offsetY)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: Self.viewHeight, alignment: .top)
@@ -187,10 +179,10 @@ struct LyricPreview: View {
 /// 每个字的渲染宽度在行出现时一次性测量缓存，每帧只更新一个 CGFloat 宽度，零布局开销。
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    /// 当前播放秒数；-1 = 非高亮行（全灰），但旧行传 display（已唱完 → 全白淡出）
+    /// 当前播放秒数；当前句传实时 display（逐字高亮），下一句传 -1（全灰）
     let currentTime: Double
-    let scale: Double       // 0.8...1.0：当前行在滚动期间同步放大到 20pt
-    let opacity: Double     // 旧行滚动淡出
+    let scale: Double       // 当前句固定 1.0；下一句固定 0.8 小字
+    let opacity: Double     // 当前句切句淡入用
     let tint: Color
 
     /// 逐字渲染宽度缓存（onAppear 一次性测量）
