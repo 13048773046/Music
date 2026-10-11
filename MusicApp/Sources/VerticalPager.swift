@@ -534,6 +534,8 @@ struct PlayerCard: View {
         player.playerCardBackgroundLight = true
         guard let url = track.coverURL else { return }
         let ui = await CoverPalette.color(for: track.id, from: url)
+        // 共享原始封面主色给侧边栏（侧边栏自行压暗到 0.3，比播放页更暗）
+        player.playerCardDominant = ui
         // 把提取出的主色压暗到约 40%，作为播放页背景（深底白字更沉浸）
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         ui.getRed(&r, green: &g, blue: &b, alpha: &a)

@@ -59,6 +59,9 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var playMode: PlayMode = .listLoop
     /// 首页播放页背景是否偏浅（供透明导航栏决定文字颜色）
     @Published var playerCardBackgroundLight: Bool = true
+    /// 当前歌曲封面提取的主色（原始值未压暗）；nil = 加载中/无封面。
+    /// 播放页背景 = 主色×0.4，侧边栏背景 = 主色×0.3（比播放页再暗一档）
+    @Published var playerCardDominant: UIColor? = nil
     /// 已缓冲进度 0...1（取 currentItem.loadedTimeRanges 中包含当前播放点的一段）
     @Published var bufferProgress: Double = 0
     /// 是否正在缓冲（等待网络数据，用于进度条加载动画）

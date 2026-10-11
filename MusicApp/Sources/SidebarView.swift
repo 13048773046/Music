@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - 播放页左侧抽屉侧边栏（参照汽水音乐风格）
 
@@ -22,7 +23,7 @@ struct SidebarView: View {
                 Spacer(minLength: 0)
             }
             .frame(width: panelWidth)
-            .background(Color(red: 0.11, green: 0.11, blue: 0.12))
+            .background(panelBackground)
 
             // 右侧填充，把遮罩露出来
             Color.clear
@@ -35,6 +36,20 @@ struct SidebarView: View {
                     if v.translation.width < -50 { onClose() }
                 }
         )
+    }
+
+    // MARK: - 背景色：跟随当前歌曲封面主色（比播放页再暗一档）
+
+    /// 播放页背景 = 封面主色×0.4；侧边栏再压暗到 0.3，更沉浸。
+    /// 封面加载中/无封面时回退到固定深灰。
+    private var panelBackground: Color {
+        if let ui = player.playerCardDominant {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+            let factor: CGFloat = 0.3
+            return Color(red: r * factor, green: g * factor, blue: b * factor)
+        }
+        return Color(red: 0.11, green: 0.11, blue: 0.12)
     }
 
     // MARK: - 顶部标题
