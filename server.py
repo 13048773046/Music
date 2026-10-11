@@ -133,6 +133,14 @@ def db():
     scols = [r[1] for r in c.execute("PRAGMA table_info(share_tokens)")]
     if "short_code" not in scols:
         c.execute("ALTER TABLE share_tokens ADD COLUMN short_code TEXT DEFAULT ''")
+    # 采集歌曲表：与用户上传表 tracks 分开，只存歌曲信息+上游播放地址，不落盘音频
+    c.execute("""CREATE TABLE IF NOT EXISTS collected_tracks(
+        id TEXT PRIMARY KEY, title TEXT, artist TEXT, album TEXT,
+        cover TEXT, duration REAL, source TEXT, source_id TEXT,
+        play_url TEXT, size REAL, created REAL, user_id TEXT,
+        play_count INTEGER DEFAULT 0, like_count INTEGER DEFAULT 0,
+        share_count INTEGER DEFAULT 0, lrc TEXT DEFAULT '',
+        UNIQUE(source, source_id))""")
     c.commit()
     return c
 
@@ -259,7 +267,12 @@ RATE_LIMITS = {
     "upload":    (30, 3600),  # 上传 30 次/小时
     "stream":    (300, 60),   # 流请求（含签名签发）300 次/分
     "share_url": (60, 60),    # 分享 token 签发/分享页 60 次/分
+    "collect":   (60, 60),    # 采集歌曲列表 60 次/分
+    "collect_add": (20, 60),  # 采集入库 20 次/分
 }
+
+# 采集入库接口密钥（音乐源采集器调用 POST /api/collect/add 时携带）
+COLLECT_KEY = os.environ.get("COLLECT_KEY", "liuying-collect-7f3a9c2e")
 
 
 def rate_key(handler, name, extra=""):
@@ -838,6 +851,37 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                   "isLiked": bool(r[16])} for r in rows])
                 return
 
+            # 采集歌曲列表（独立表 collected_tracks，与用户上传 tracks 分开）
+            if u.path == "/api/collect/list":
+                if not rate_limit(self, "collect"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                qs = urllib.parse.parse_qs(u.query)
+                page = max(1, int(qs.get("page", ["1"])[0] or 1))
+                limit = min(50, max(1, int(qs.get("limit", ["20"])[0] or 20)))
+                keyword = (qs.get("q", [""])[0] or "").strip()
+                c = db()
+                where = ""
+                args = []
+                if keyword:
+                    like = "%" + keyword + "%"
+                    where = " WHERE title LIKE ? OR artist LIKE ? OR album LIKE ?"
+                    args = [like, like, like]
+                total = c.execute("SELECT COUNT(*) FROM collected_tracks" + where, args).fetchone()[0]
+                rows = c.execute(
+                    "SELECT id,title,artist,album,cover,duration,source,source_id,play_url,created,user_id,play_count,like_count,share_count,lrc FROM collected_tracks"
+                    + where + " ORDER BY created DESC LIMIT ? OFFSET ?",
+                    args + [limit, (page - 1) * limit]).fetchall()
+                c.close()
+                self._json(200, {"total": total, "page": page, "limit": limit,
+                                 "list": [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
+                                           "cover": r[4], "dur": r[5] or 0, "durText": _fmt_dur(r[5] or 0),
+                                           "source": r[6], "sourceId": r[7], "playUrl": r[8],
+                                           "created": r[9], "userId": r[10] or "",
+                                           "playCount": r[11] or 0, "likeCount": r[12] or 0,
+                                           "shareCount": r[13] or 0, "hasLyric": bool(r[14])} for r in rows]})
+                return
+
             # 搜索：按歌名/歌手模糊匹配
             if u.path == "/api/search":
                 qs = urllib.parse.parse_qs(u.query)
@@ -1160,6 +1204,53 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
         try:
             u = urllib.parse.urlparse(self.path)
             length = int(self.headers.get("Content-Length", 0))
+
+            # ---------- 音乐源采集入库（采集器批量写入 collected_tracks） ----------
+            if u.path == "/api/collect/add":
+                if not rate_limit(self, "collect_add"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                if self.headers.get("X-Collect-Key", "").strip() != COLLECT_KEY:
+                    self._err(403, "forbidden")
+                    return
+                try:
+                    raw = self.rfile.read(min(length, 2 * 1024 * 1024)) if length > 0 else b""
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json")
+                    return
+                items = data.get("items") or []
+                if not isinstance(items, list) or not items or len(items) > 50:
+                    self._err(400, "items must be 1..50")
+                    return
+                c = db()
+                # 归属：数据库中的唯一账号（仅当 users 表只有 1 个用户时）
+                urows = c.execute("SELECT id FROM users ORDER BY created LIMIT 2").fetchall()
+                owner = urows[0][0] if len(urows) == 1 else ""
+                now = time.time()
+                ins = skip = 0
+                for it in items:
+                    title = (it.get("title") or "").strip()
+                    src = (it.get("source") or "").strip()
+                    sid = (it.get("source_id") or "").strip()
+                    if not title or not src or not sid:
+                        continue
+                    tid = hashlib.md5(("%s:%s" % (src, sid)).encode()).hexdigest()
+                    cur = c.execute(
+                        """INSERT OR IGNORE INTO collected_tracks
+                           (id,title,artist,album,cover,duration,source,source_id,play_url,size,created,user_id,lrc)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (tid, title, (it.get("artist") or "").strip(), (it.get("album") or "").strip(),
+                         it.get("cover") or "", float(it.get("duration") or 0), src, sid,
+                         it.get("play_url") or "", float(it.get("size") or 0), now, owner, it.get("lrc") or ""))
+                    if cur.rowcount and cur.rowcount > 0:
+                        ins += 1
+                    else:
+                        skip += 1
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "inserted": ins, "skipped": skip, "owner": owner})
+                return
 
             # ---------- 用户注册 ----------
             if u.path == "/api/register":
