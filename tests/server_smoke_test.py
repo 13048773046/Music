@@ -220,6 +220,19 @@ def run_all(port, root, strict_port, strict_root):
     check("tracks 200 且含新歌", s == 200 and any(t["id"] == tid for t in tracks), body[:100])
     check("tracks 返回 isLiked", all("isLiked" in t for t in tracks))
 
+    print("== 10.5 搜索相关流 tracks?q= ==")
+    # 测试歌曲 title=测试歌曲 / artist=测试歌手，q=测试 应命中
+    s, body, _ = req("GET", "/api/tracks?q=%E6%B5%8B%E8%AF%95", headers=AUTH)
+    tracks_q = json.loads(body)
+    check("tracks?q= 200", s == 200, f"s={s}")
+    check("相关歌曲（歌名/歌手匹配）在结果中", any(t["id"] == tid for t in tracks_q), body[:100])
+    check("相关流 isLiked 字段完整", all("isLiked" in t for t in tracks_q))
+    # 完全不存在的关键词：无相关歌曲时补全随机（接口不报错、仍返回列表）
+    s, body, _ = req("GET", "/api/tracks?q=%E4%B8%8D%E5%AD%98%E5%9C%A8%E7%9A%84%E8%AF%8D", headers=AUTH)
+    tracks_none = json.loads(body)
+    check("无相关歌曲时补全随机返回", s == 200 and isinstance(tracks_none, list)
+          and len(tracks_none) > 0, f"s={s} {body[:100]}")
+
     print("== 11. 流式 Range ==")
     s, body, hdrs = req("GET", f"/api/stream/{tid}", headers={"Range": "bytes=0-99"})
     check("Range 206", s == 206 and len(body) == 100, f"s={s} len={len(body)}")

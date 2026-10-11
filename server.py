@@ -789,17 +789,43 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if tok_uid:
                     viewer_id = tok_uid
-                rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
-                                    t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
-                                    COALESCE(u.name,''),
-                                    (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
-                                    MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
-                                    FROM tracks t
-                                    LEFT JOIN users u ON u.id=t.user_id
-                                    LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
-                                    GROUP BY t.id
-                                    ORDER BY RANDOM()
-                                    LIMIT 10""", (viewer_id,)).fetchall()
+                # 可选 q 参数：构建「相关歌曲流」——按歌名/歌手/专辑/上传者昵称匹配，
+                # 命中歌曲随机取 10 首；不足 10 首时用全量随机补足（无相关即全随机）。
+                # 不传 q 时保持原有全量随机 10 首行为。
+                keyword = (qs.get("q", [""])[0] or "").strip()
+                base_sql = """SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                              t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                              COALESCE(u.name,''),
+                              (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                              MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
+                              FROM tracks t
+                              LEFT JOIN users u ON u.id=t.user_id
+                              LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?"""
+                if keyword:
+                    like = "%" + keyword + "%"
+                    rows = c.execute(
+                        base_sql + """ WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ?
+                                       OR COALESCE(u.name,'') LIKE ?
+                                       GROUP BY t.id ORDER BY RANDOM() LIMIT 10""",
+                        (viewer_id, like, like, like, like)).fetchall()
+                    if len(rows) < 10:
+                        ids = [r[0] for r in rows]
+                        need = 10 - len(rows)
+                        if ids:
+                            ph = ",".join("?" * len(ids))
+                            extra = c.execute(
+                                base_sql + (" WHERE t.id NOT IN (%s)"
+                                            " GROUP BY t.id ORDER BY RANDOM() LIMIT ?" % ph),
+                                tuple([viewer_id] + ids + [need])).fetchall()
+                        else:
+                            extra = c.execute(
+                                base_sql + " GROUP BY t.id ORDER BY RANDOM() LIMIT ?",
+                                (viewer_id, need)).fetchall()
+                        rows = rows + extra
+                else:
+                    rows = c.execute(
+                        base_sql + " GROUP BY t.id ORDER BY RANDOM() LIMIT 10",
+                        (viewer_id,)).fetchall()
                 c.close()
                 self._json(200, [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
                                   "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],

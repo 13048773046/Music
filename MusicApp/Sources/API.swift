@@ -3,11 +3,20 @@ import Foundation
 enum API {
     static let base = URL(string: "https://www.dbmt999.asia/music/api")!
 
-    static func tracks(userId: String? = nil) async throws -> [Track] {
+    /// 歌曲列表：可传 userId（拿点赞态）；keyword 非空时返回「相关歌曲流」
+    /// （歌名/歌手/专辑/上传者匹配，随机 10 首，不足补全随机）
+    static func tracks(userId: String? = nil, keyword: String? = nil) async throws -> [Track] {
         var components = URLComponents(url: base.appendingPathComponent("tracks"),
                                        resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = []
         if let userId, !userId.isEmpty {
-            components.queryItems = [URLQueryItem(name: "userId", value: userId)]
+            items.append(URLQueryItem(name: "userId", value: userId))
+        }
+        if let keyword, !keyword.isEmpty {
+            items.append(URLQueryItem(name: "q", value: keyword))
+        }
+        if !items.isEmpty {
+            components.queryItems = items
         }
         var req = URLRequest(url: components.url!)
         req.timeoutInterval = 15

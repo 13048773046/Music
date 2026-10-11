@@ -122,13 +122,19 @@ struct SearchView: View {
     }
 
     private func play(track: Track) {
-        // 搜索结果与首页曲库（library.tracks）不是同一份队列：
-        // 先把歌曲并入全局曲库，再以 library.tracks 作为播放队列，
-        // 保证首页竖滑播放器（tracks=library.tracks）与 PlayerManager 的队列/索引完全同步
-        if !library.tracks.contains(where: { $0.id == track.id }) {
-            library.tracks.append(track)
+        let kw = keyword.trimmingCharacters(in: .whitespaces)
+        if kw.isEmpty {
+            // 无关键词（例如点击默认结果）：并入全局曲库，以 library.tracks 作为播放队列
+            if !library.tracks.contains(where: { $0.id == track.id }) {
+                library.tracks.append(track)
+            }
+            player.play(track, in: library.tracks)
+        } else {
+            // 建立搜索相关流：以当前歌曲立即播放，后台拉取第一批相关歌曲
+            // （每次 10 首随机，歌名/歌手/专辑/上传者相关优先，不足补全随机），
+            // 首页上下滑动即可在相关歌曲间切换，滑到末尾自动续拉下一批
+            library.startSearchStream(keyword: kw, first: track)
         }
-        player.play(track, in: library.tracks)
         // 播放后关闭搜索页，回到首页播放页查看同步的歌曲信息
         dismiss()
     }
