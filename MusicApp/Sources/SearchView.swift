@@ -124,7 +124,8 @@ struct SearchView: View {
     private func play(track: Track) {
         let kw = keyword.trimmingCharacters(in: .whitespaces)
         if kw.isEmpty {
-            // 无关键词（例如点击默认结果）：并入全局曲库，以 library.tracks 作为播放队列
+            // 无关键词（例如点击默认结果）：切回普通流，并入全局曲库播放
+            library.searchContext = nil
             if !library.tracks.contains(where: { $0.id == track.id }) {
                 library.tracks.append(track)
             }

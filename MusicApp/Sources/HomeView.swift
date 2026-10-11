@@ -38,26 +38,34 @@ struct HomeView: View {
                 )
 
             case .loaded:
-                if !library.tracks.isEmpty {
-                    // 竖滑页直接绑定播放器全局索引：
-                    // 无论从发现页/我的页切回首页，还是通知栏/锁屏切歌，
-                    // 首页都会自动跳到当前正在播放的那一首
+                if !player.queue.isEmpty {
+                    // 竖滑页直接绑定播放器全局队列与索引：
+                    // 无论普通全随机流、搜索相关流、发现页/搜索点击播放、
+                    // 还是通知栏/锁屏切歌，首页都会自动同步到当前正在播放的那一首；
+                    // 队列被整体替换（普通流↔相关流）时由 VerticalPager 重建页面
                     VerticalPager(
                         currentIndex: Binding(
                             get: { player.currentIndex },
                             set: { player.currentIndex = $0 }
                         ),
-                        tracks: library.tracks,
+                        tracks: player.queue,
                         onPageChanged: { index in
-                            guard library.tracks.indices.contains(index) else { return }
-                            player.play(library.tracks[index], in: library.tracks)
-                            // 滑到倒数第二首附近，提前预取下一批随机歌单
-                            if index >= library.tracks.count - 2 {
+                            guard player.queue.indices.contains(index) else { return }
+                            player.play(player.queue[index], in: player.queue)
+                            // 滑到倒数第二首附近，提前预取下一批（相关流/全随机由 Library 决定）
+                            if index >= player.queue.count - 2 {
                                 Task { await library.loadMore() }
                             }
                         }
                     )
                     .ignoresSafeArea()
+                } else {
+                    // 队列为空（曲库加载完成但无歌）：提示上传
+                    StatusPlaceholder(
+                        icon: "music.note.list",
+                        title: "还没有歌曲",
+                        message: "去「我的」页面上传你的第一首歌"
+                    )
                 }
             }
         }

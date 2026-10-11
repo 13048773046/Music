@@ -68,7 +68,7 @@ struct DiscoverView: View {
                         HStack(spacing: 14) {
                             ForEach(recommended) { track in
                                 RecommendCard(track: track) {
-                                    player.play(track, in: library.tracks)
+                                    library.playFromDiscover(track)
                                 }
                             }
                         }
@@ -82,7 +82,7 @@ struct DiscoverView: View {
                         HStack(spacing: 14) {
                             ForEach(latest) { track in
                                 LatestCard(track: track) {
-                                    player.play(track, in: library.tracks)
+                                    library.playFromDiscover(track)
                                 }
                             }
                         }
@@ -94,7 +94,7 @@ struct DiscoverView: View {
                 LazyVStack(spacing: 10) {
                     ForEach(library.tracks) { track in
                         TrackRow(track: track) {
-                            player.play(track, in: library.tracks)
+                            library.playFromDiscover(track)
                         }
                         .softCard(radius: 14, padding: 8)
                     }

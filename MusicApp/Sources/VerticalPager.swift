@@ -38,9 +38,21 @@ struct VerticalPager: UIViewControllerRepresentable {
 
     func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
         context.coordinator.parent = self
-        // 歌曲追加（滑到末尾自动加载下一批）时，只给新 track 补建控制器，
-        // 不重建已有页——否则会把当前翻页位置重置到首页。
-        context.coordinator.syncControllers(for: tracks)
+        // 同步控制器：追加场景只补建新页；数据源整体替换（普通流↔相关流）时重建。
+        let rebuilt = context.coordinator.syncControllers(for: tracks)
+        // 整体替换后旧控制器已不在新列表中，必须立即定位到当前播放索引，
+        // 否则 UIPageViewController 仍持有已废弃的页面
+        if rebuilt {
+            if context.coordinator.controllers.indices.contains(currentIndex) {
+                pvc.setViewControllers(
+                    [context.coordinator.controllers[currentIndex]],
+                    direction: .forward,
+                    animated: false,
+                    completion: nil
+                )
+            }
+            return
+        }
         // 用户正在手势翻页时，禁止程序化 setViewControllers 回跳：
         // 播放器 0.1s timeObserver 会高频触发本方法，若在手势进行中
         // 按 player.currentIndex 强制回跳，会与 didFinishAnimating 的新索引打架，
@@ -63,6 +75,8 @@ struct VerticalPager: UIViewControllerRepresentable {
     final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         var parent: VerticalPager
         var controllers: [UIViewController] = []
+        /// 与 controllers 一一对应的歌曲 id（用于识别队列来源是否整体替换）
+        private var trackIDs: [String] = []
         /// 用户手势正在翻页（willTransitionTo 置位、didFinishAnimating 复位）。
         /// 期间 updateUIViewController 不得程序化回跳，否则会与手势索引打架。
         var isUserPaging = false
@@ -94,10 +108,17 @@ struct VerticalPager: UIViewControllerRepresentable {
                 hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
                 return hosting
             }
+            trackIDs = tracks.map { $0.id }
         }
 
-        /// 歌曲追加时只为新增 track 补建控制器（不重建已有页，避免翻页位置跳动）
-        func syncControllers(for newTracks: [Track]) {
+        /// 同步控制器。返回 true 表示整体重建（数据源切换：普通流 ↔ 相关流）。
+        /// - 追加：只给新增 track 补建控制器，不重建已有页（避免翻页位置跳动）
+        /// - 替换：新队列变短，或新第一首已不在旧队列中 → 重建全部页
+        func syncControllers(for newTracks: [Track]) -> Bool {
+            if shouldRebuild(for: newTracks) {
+                rebuild(tracks: newTracks)
+                return true
+            }
             let total = newTracks.count
             let top = Self.windowSafeAreaTop
             let bottom = Self.windowSafeAreaBottom
@@ -114,6 +135,16 @@ struct VerticalPager: UIViewControllerRepresentable {
                 hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
                 controllers.append(hosting)
             }
+            trackIDs = newTracks.map { $0.id }
+            return false
+        }
+
+        /// 判断队列来源是否被整体替换（如搜索相关流 ↔ 发现页普通流）。
+        /// 追加场景新第一首仍在旧队列中且长度不减；替换场景反之。
+        private func shouldRebuild(for newTracks: [Track]) -> Bool {
+            guard !controllers.isEmpty else { return !newTracks.isEmpty }
+            guard let firstNew = newTracks.first?.id else { return true }
+            return newTracks.count < trackIDs.count || !trackIDs.contains(firstNew)
         }
 
         /// 从 keyWindow 读取真实安全区高度（顶部状态栏 / 底部 Home 指示条）
