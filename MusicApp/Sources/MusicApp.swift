@@ -85,13 +85,16 @@ struct MainTabView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // 全局顶部栏（与底部 TabBar 平级，悬浮在内容区上方）
-                GlobalTopBar()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .alignmentGuide(.top) { d in d[.top] }
-                    .frame(maxHeight: .infinity, alignment: .top)
+                // 顶部栏只在首页（播放页）展示：切到发现/我的后隐藏，
+                // 内容区完全沉浸，不残留全局顶部栏
+                if selection == 1 {
+                    GlobalTopBar()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .alignmentGuide(.top) { d in d[.top] }
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
 
                 AppTabBar(selection: $selection)
             }
@@ -164,7 +167,6 @@ struct GlobalTopBar: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(textPrimary)
                     .padding(10)
-                    .background(Color.black.opacity(0.25), in: Circle())
             }
             .buttonStyle(.plain)
         }

@@ -122,7 +122,15 @@ struct SearchView: View {
     }
 
     private func play(track: Track) {
-        player.play(track, in: results)
+        // 搜索结果与首页曲库（library.tracks）不是同一份队列：
+        // 先把歌曲并入全局曲库，再以 library.tracks 作为播放队列，
+        // 保证首页竖滑播放器（tracks=library.tracks）与 PlayerManager 的队列/索引完全同步
+        if !library.tracks.contains(where: { $0.id == track.id }) {
+            library.tracks.append(track)
+        }
+        player.play(track, in: library.tracks)
+        // 播放后关闭搜索页，回到首页播放页查看同步的歌曲信息
+        dismiss()
     }
 }
 
