@@ -4,10 +4,11 @@ import UIKit
 // MARK: - 播放页左侧抽屉侧边栏（参照汽水音乐风格）
 
 /// 播放页右滑 / 点左上角音符打开的侧边栏：
-/// 顶部「听歌模式」标题 + 三个模式大按钮 + 3 列功能入口网格。
-/// 深色极简，无阴影渐变，与 App 整体主题一致。
+/// 顶部品牌区（Logo + 登录态）→「听歌模式」三个模式大按钮 →「场景音乐」网格 → 底部版本。
+/// 背景跟随当前歌曲封面主色（比播放页更暗一档），深色极简，无阴影渐变，与 App 整体主题一致。
 struct SidebarView: View {
     @EnvironmentObject private var player: PlayerManager
+    @EnvironmentObject private var auth: AuthManager
     /// 点遮罩 / 左滑关闭
     var onClose: () -> Void
 
@@ -17,10 +18,13 @@ struct SidebarView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                header
+                brandHeader
+                sectionTitle("听歌模式")
                 modeButtons
+                sectionTitle("场景音乐")
                 grid
                 Spacer(minLength: 0)
+                footer
             }
             .frame(width: panelWidth)
             .background(panelBackground)
@@ -52,27 +56,76 @@ struct SidebarView: View {
         return Color(red: 0.11, green: 0.11, blue: 0.12)
     }
 
-    // MARK: - 顶部标题
+    // MARK: - 顶部品牌区
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("听歌模式")
-                .font(.system(size: 28, weight: .heavy))
-                .foregroundColor(.white)
-            Text("登录后推荐更精准 ›")
-                .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.5))
+    private var brandHeader: some View {
+        HStack(spacing: 12) {
+            Image("AppLogo")
+                .resizable()
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("流萤音乐")
+                    .font(.system(size: 20, weight: .heavy))
+                    .foregroundColor(.white)
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+
+            Spacer(minLength: 0)
+
+            // 已登录：右侧显示用户头像；未登录保持空白对齐
+            if let u = auth.currentUser {
+                CachedCoverImage(
+                    url: u.avatarURL,
+                    title: u.name,
+                    placeholder: avatarPlaceholder
+                )
+                .frame(width: 40, height: 40)
+                .clipShape(Circle())
+                .overlay(
+                    Circle().stroke(Color.white.opacity(0.15), lineWidth: 1)
+                )
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
         .padding(.top, 54)
-        .padding(.bottom, 24)
+        .padding(.bottom, 26)
+    }
+
+    private var subtitle: String {
+        if let u = auth.currentUser {
+            if let sig = u.signature, !sig.isEmpty { return sig }
+            return u.name.isEmpty ? "已登录" : u.name
+        }
+        return "登录后推荐更精准"
+    }
+
+    private var avatarPlaceholder: some View {
+        ZStack {
+            Color(red: 0.22, green: 0.22, blue: 0.24)
+            Image(systemName: "person.fill")
+                .font(.system(size: 16))
+                .foregroundColor(.white.opacity(0.5))
+        }
+    }
+
+    // MARK: - 分区小标题
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundColor(.white.opacity(0.45))
+            .padding(.horizontal, 22)
+            .padding(.bottom, 10)
     }
 
     // MARK: - 三个模式大按钮
 
     private var modeButtons: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             ForEach(ListenMode.allCases, id: \.self) { mode in
                 SidebarModeButton(
                     title: mode.rawValue,
@@ -89,63 +142,71 @@ struct SidebarView: View {
         .padding(.horizontal, 20)
     }
 
-    // MARK: - 3 列功能入口网格
+    // MARK: - 场景音乐网格
 
     private var grid: some View {
         ScrollView(showsIndicators: false) {
             LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 0),
-                    GridItem(.flexible(), spacing: 0),
-                    GridItem(.flexible(), spacing: 0)
-                ],
-                spacing: 26
+                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
+                spacing: 22
             ) {
-                // 第一行
-                gridItem(icon: "crown", title: "会员专区") {}
-                gridItem(icon: "play.rectangle", title: "音乐视频") {}
-                gridItem(icon: "waveform", title: "超清全景声") {}
-                // 第二行
                 gridItem(icon: "bus", title: "通勤必听") {}
                 gridItem(icon: "car", title: "驾车") {}
                 gridItem(icon: "sun.max", title: "起床") {}
-                // 第三行
                 gridItem(icon: "moon.zzz", title: "深夜 EMO") {}
                 gridItem(icon: "hifispeaker", title: "DJ 模式") {}
                 gridItem(icon: "moon.stars", title: "助眠模式") {}
-                // 第四行
                 gridItem(icon: "figure.run", title: "动感健身") {}
                 gridItem(icon: "music.note", title: "抖音漫游") {}
                 gridItem(icon: "drop.fill", title: "洗澡") {}
-
-                // 第五行
                 gridItem(icon: "leaf", title: "Chill 放松") {}
                 gridItem(icon: "face.smiling", title: "快乐时光") {}
                 gridItem(icon: "music.mic", title: "电音") {}
             }
             .padding(.horizontal, 16)
-            .padding(.top, 30)
+            .padding(.top, 2)
+            .padding(.bottom, 8)
         }
     }
 
     private func gridItem(icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 10) {
+            VStack(spacing: 9) {
                 Image(systemName: icon)
-                    .font(.system(size: 26))
-                    .foregroundColor(.white.opacity(0.9))
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(.white.opacity(0.92))
+                    .frame(width: 46, height: 46)
+                    .background(
+                        Color.white.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    )
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white.opacity(0.9))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.75))
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
     }
+
+    // MARK: - 底部版本信息
+
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Text("流萤音乐")
+            Text("·")
+            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")")
+        }
+        .font(.system(size: 11))
+        .foregroundColor(.white.opacity(0.35))
+        .padding(.horizontal, 22)
+        .padding(.bottom, 18)
+    }
 }
 
 // MARK: - 模式大按钮
 
+/// 选中态：薄荷绿图标底 + 整行淡绿底 + 右侧对勾；未选中：半透明白图标底 + 弱化整行底
 private struct SidebarModeButton: View {
     let title: String
     let icon: String
@@ -154,17 +215,34 @@ private struct SidebarModeButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(selected ? Color(hex: 0x121214) : .white.opacity(0.85))
+                    .frame(width: 38, height: 38)
+                    .background(
+                        selected ? Theme.accent : Color.white.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    )
+
                 Text(title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 16, weight: selected ? .bold : .semibold))
+                    .foregroundColor(.white)
+
+                Spacer(minLength: 0)
+
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(Theme.accent)
+                }
             }
-            .foregroundColor(selected ? .black : .white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 56)
-            .background(selected ? Color.white : Color.white.opacity(0.1),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 14)
+            .frame(height: 58)
+            .background(
+                selected ? Theme.accent.opacity(0.16) : Color.white.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
         }
         .buttonStyle(.plain)
     }

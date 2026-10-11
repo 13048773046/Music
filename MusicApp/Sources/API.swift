@@ -243,12 +243,24 @@ enum API {
         base.appendingPathComponent("lyric").appendingPathComponent(id)
     }
 
+    /// 歌词内存缓存：听歌模式切换恢复、切回同一首歌时歌词秒出，不重复请求
+    private static let lyricLock = NSLock()
+    private static var lyricCache: [String: String] = [:]
+
     static func fetchLyric(_ id: String) async throws -> String {
+        lyricLock.lock()
+        let cached = lyricCache[id]
+        lyricLock.unlock()
+        if let cached { return cached }
         let (data, resp) = try await URLSession.shared.data(from: lyricURL(id))
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        let text = String(data: data, encoding: .utf8) ?? ""
+        lyricLock.lock()
+        lyricCache[id] = text
+        lyricLock.unlock()
+        return text
     }
 
     static func avatarURL(_ id: String) -> URL {

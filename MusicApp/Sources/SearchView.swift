@@ -133,7 +133,7 @@ struct SearchView: View {
             if !library.tracks.contains(where: { $0.id == track.id }) {
                 library.tracks.append(track)
             }
-            player.play(track, in: library.tracks)
+            player.playInNormalMode(track, in: library.tracks)
         } else {
             // 建立搜索相关流：以当前歌曲立即播放，后台拉取第一批相关歌曲
             // （每次 10 首随机，歌名/歌手/专辑/上传者相关优先，不足补全随机），

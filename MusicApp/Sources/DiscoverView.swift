@@ -186,7 +186,7 @@ struct DiscoverView: View {
         if !library.tracks.contains(where: { $0.id == track.id }) {
             library.tracks.append(track)
         }
-        player.play(track, in: recommended)
+        player.playInNormalMode(track, in: recommended)
     }
 
     /// 最新 = 按入库时间倒序前 6；猜你喜欢区块由 loadRecommended() 异步填充

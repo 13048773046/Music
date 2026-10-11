@@ -45,20 +45,22 @@ final class Library: ObservableObject {
     func playFromDiscover(_ track: Track) {
         searchContext = nil
         // 发现页数据源就是 tracks，歌曲必然在队列中
-        PlayerManager.shared.play(track, in: tracks)
+        PlayerManager.shared.playInNormalMode(track, in: tracks)
     }
 
     /// 建立搜索相关流：以当前点击的歌曲为首播（立即播放），
     /// 随后台拉取第一批相关歌曲（10 首随机，相关优先），滑到末尾自动续拉。
     func startSearchStream(keyword: String, first: Track) {
         searchContext = keyword
-        PlayerManager.shared.play(first, in: [first])
+        PlayerManager.shared.playInNormalMode(first, in: [first])
         Task { await loadMore() }
     }
 
     /// 拉取下一批歌曲并追加到播放队列末尾（后端每次返回随机 10 首，去重后拼接）。
     /// 有搜索上下文时取相关流，否则取全量随机流。
+    /// 仅在默认模式下续拉：喜欢/新鲜模式的队列是固定会话，滑到末尾不混入随机歌。
     func loadMore() async {
+        guard PlayerManager.shared.listenMode == .normal else { return }
         guard !isLoadingMore else { return }
         isLoadingMore = true
         do {

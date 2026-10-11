@@ -205,6 +205,16 @@ final class PlayerManager: NSObject, ObservableObject {
         playCurrent()
     }
 
+    /// 从搜索/发现页直接播放普通流歌曲：若当前处于「我的喜欢/新鲜」模式，
+    /// 先保存该模式会话并切回默认模式，保证界面显示的模式与实际播放流一致。
+    func playInNormalMode(_ track: Track, in tracks: [Track]) {
+        if listenMode != .normal {
+            saveSession(for: listenMode)
+            listenMode = .normal
+        }
+        play(track, in: tracks)
+    }
+
     func toggle() {
         guard current != nil else { return }
         if isPlaying {
@@ -253,31 +263,100 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - 侧边栏听歌模式（默认 / 我的喜欢 / 新鲜）
 
+    /// 每种听歌模式独立维护一份播放会话：切走时缓存「队列 + 当前歌曲 + 播放状态」，
+    /// 切回该模式时恢复队列，并播放「切走时那首歌的下一首」——不重复听刚听过的那首，
+    /// 也不重新随机打乱（列表循环播到末尾则回绕第一首）。
+    private struct ModeSession {
+        var queue: [Track] = []
+        var currentIndex: Int = -1     // 切走时正在播放的歌曲索引
+        var wasPlaying: Bool = false
+        var searchContext: String? = nil  // 默认模式下的相关流关键词（仅 normal 会话使用）
+        var mode: ListenMode = .normal
+    }
+
+    private var sessions: [ListenMode: ModeSession] = [:]
+
     /// 切换侧边栏听歌模式。
+    /// 切走前保存当前模式会话；目标模式有缓存则恢复缓存，无缓存才全新加载；
+    /// 目标模式加载失败/无内容时回退上一模式，保证「听到的歌 = 看到的模式」。
     /// - 默认模式：恢复默认全随机流 + 用户自选循环模式
     /// - 我的喜欢：只播用户点赞过的歌曲，播完回到第一首循环
     /// - 新鲜模式：完全随机（队列打乱 + 随机播放）
     func applyListenMode(_ mode: ListenMode) {
         guard mode != listenMode || mode == .liked else {
-            // 同模式重复点击默认/新鲜：不重复切换（我的喜欢每次都重新拉取最新点赞）
+            // 同模式重复点击默认/新鲜：不重复切换；我的喜欢每次尝试恢复/刷新缓存
             return
         }
+        let previous = listenMode
+        saveSession(for: previous)
+        listenMode = mode
         switch mode {
         case .normal:
-            listenMode = .normal
             restoreNormalStream()
         case .liked:
-            listenMode = .liked
-            switchToLiked()
+            switchToLiked(fallback: previous)
         case .fresh:
-            listenMode = .fresh
-            switchToFresh()
+            switchToFresh(fallback: previous)
         }
     }
 
-    /// 默认模式：切回 Library 默认全随机流，恢复保存的循环模式
+    /// 保存当前模式会话快照（切走前调用）
+    private func saveSession(for mode: ListenMode) {
+        guard !queue.isEmpty else { return }
+        sessions[mode] = ModeSession(
+            queue: queue,
+            currentIndex: currentIndex,
+            wasPlaying: isPlaying,
+            searchContext: mode == .normal ? Library.shared.searchContext : nil,
+            mode: mode
+        )
+    }
+
+    /// 恢复模式会话：换回该模式的队列，播放「切走时那首的下一首」（从头开始）。
+    /// normal 会话恢复时同步发现页数据源，保证首页列表与播放流一致。
+    private func restoreSession(_ s: ModeSession) {
+        guard !s.queue.isEmpty, s.queue.indices.contains(s.currentIndex) else { return }
+        if s.mode == .normal {
+            let lib = Library.shared
+            lib.tracks = s.queue
+            lib.searchContext = s.searchContext
+        }
+        // 切走时在最后一首：下一首回绕到第一首（列表循环语义）
+        let resumeIndex = s.queue.indices.contains(s.currentIndex + 1) ? s.currentIndex + 1 : 0
+        play(s.queue[resumeIndex], in: s.queue)
+        if !s.wasPlaying { pausePlayback() }
+    }
+
+    /// 目标模式加载失败/无内容：回退到上一个模式。
+    /// 上一模式无会话可恢复时回落到默认模式（曲库流保底），避免空队列挂起。
+    private func handleFailedSwitch(fallback: ListenMode) {
+        guard fallback != listenMode else { return }
+        let hasSession: Bool
+        switch fallback {
+        case .normal: hasSession = sessions[.normal] != nil
+        case .liked: hasSession = sessions[.liked] != nil
+        case .fresh: hasSession = sessions[.fresh] != nil
+        }
+        guard hasSession else {
+            listenMode = .normal
+            restoreNormalStream()
+            return
+        }
+        listenMode = fallback
+        switch fallback {
+        case .normal: restoreNormalStream()
+        case .liked: switchToLiked(fallback: nil)
+        case .fresh: switchToFresh(fallback: nil)
+        }
+    }
+
+    /// 默认模式：优先恢复缓存会话；无缓存才切回 Library 默认全随机流，恢复保存的循环模式
     private func restoreNormalStream() {
         playMode = savedNormalMode
+        if let s = sessions[.normal], !s.queue.isEmpty {
+            restoreSession(s)
+            return
+        }
         let lib = Library.shared
         // 队列不在默认流中（如喜欢/新鲜/搜索流）时切回；未加载则先加载，加载完自动切回
         if queue != lib.tracks {
@@ -303,33 +382,58 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
-    /// 我的喜欢：拉取点赞歌曲列表，只播这些歌（列表循环，播完回第一首）
-    private func switchToLiked() {
+    /// 我的喜欢：有缓存恢复缓存；无缓存拉取点赞列表（列表循环，播完回第一首）。
+    /// 拉取失败或列表为空时回退上一模式，不出现「模式已切、歌曲没换」。
+    private func switchToLiked(fallback: ListenMode?) {
+        if let s = sessions[.liked], !s.queue.isEmpty {
+            restoreSession(s)
+            return
+        }
         savedNormalMode = playMode
         playMode = .listLoop
-        guard let uid = AuthManager.shared.currentUser?.id else { return }
+        guard let uid = AuthManager.shared.currentUser?.id else {
+            if let fb = fallback { handleFailedSwitch(fallback: fb) }
+            return
+        }
         Task {
-            guard let list = try? await API.likedTracks(userId: uid), !list.isEmpty else { return }
+            let list = (try? await API.likedTracks(userId: uid)) ?? []
             await MainActor.run {
                 guard listenMode == .liked else { return }   // 期间用户又切走了：丢弃
-                play(list[0], in: list)
+                guard !list.isEmpty else {
+                    if let fb = fallback { handleFailedSwitch(fallback: fb) }
+                    return
+                }
+                let s = ModeSession(queue: list, currentIndex: 0,
+                                    wasPlaying: true, mode: .liked)
+                sessions[.liked] = s
+                restoreSession(s)
             }
         }
     }
 
-    /// 新鲜模式：队列打乱 + 随机播放（当前歌保持在首位继续播，避免切模式瞬间换歌）
-    private func switchToFresh() {
+    /// 新鲜模式：有缓存恢复缓存；无缓存基于曲库打乱（当前歌保持在首位继续播，避免切模式瞬间换歌）
+    private func switchToFresh(fallback: ListenMode?) {
+        if let s = sessions[.fresh], !s.queue.isEmpty {
+            restoreSession(s)
+            return
+        }
         savedNormalMode = playMode
         playMode = .shuffle
         let lib = Library.shared
         let base = lib.tracks.isEmpty ? queue : lib.tracks
-        guard !base.isEmpty else { return }
+        guard !base.isEmpty else {
+            if let fb = fallback { handleFailedSwitch(fallback: fb) }
+            return
+        }
         var fresh = base.shuffled()
         if let cur = current, let idx = fresh.firstIndex(where: { $0.id == cur.id }) {
             fresh.remove(at: idx)
             fresh.insert(cur, at: 0)
         }
-        play(fresh[0], in: fresh)
+        let s = ModeSession(queue: fresh, currentIndex: 0,
+                            wasPlaying: true, mode: .fresh)
+        sessions[.fresh] = s
+        restoreSession(s)
     }
 
     private func randomIndex(excluding current: Int) -> Int {
