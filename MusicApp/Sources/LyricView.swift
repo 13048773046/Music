@@ -196,6 +196,16 @@ private struct LyricRowView: View, Equatable {
     /// 逐字渲染宽度缓存（onAppear 一次性测量）
     @State private var charWidths: [CGFloat] = []
 
+    /// 手动实现 Equatable：排除 @State 缓存属性（自动合成会被 State 包装器阻断）。
+    /// 未变化的行（如预备行）由 SwiftUI 跳过重建，当前行/旧行因 currentTime 每帧变化而重建。
+    static func == (lhs: LyricRowView, rhs: LyricRowView) -> Bool {
+        lhs.line == rhs.line &&
+        lhs.currentTime == rhs.currentTime &&
+        lhs.scale == rhs.scale &&
+        lhs.opacity == rhs.opacity &&
+        lhs.tint == rhs.tint
+    }
+
     /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
     private var filledWidth: CGFloat {
         guard currentTime >= 0 else { return 0 }
