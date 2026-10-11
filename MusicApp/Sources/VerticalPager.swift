@@ -64,10 +64,12 @@ struct VerticalPager: UIViewControllerRepresentable {
               context.coordinator.controllers.indices.contains(currentIndex) else {
             return
         }
+        // 自动切歌（播放完/下一首/锁屏切歌）时用翻页动画平滑过渡到下一首，
+        // 而不是直接闪现新歌页面：旧页滚出、新页滚入，体验连续不跳变。
         pvc.setViewControllers(
             [context.coordinator.controllers[currentIndex]],
             direction: visibleIndex < currentIndex ? .forward : .reverse,
-            animated: false,
+            animated: true,
             completion: nil
         )
     }

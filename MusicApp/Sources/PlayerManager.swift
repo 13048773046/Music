@@ -26,6 +26,21 @@ enum PlayMode: CaseIterable {
     }
 }
 
+/// 侧边栏「听歌模式」：默认模式（默认随机流）/ 我的喜欢（点赞列表循环）/ 新鲜模式（完全随机）
+enum ListenMode: String, CaseIterable {
+    case normal = "默认模式"
+    case liked = "我的喜欢"
+    case fresh = "新鲜模式"
+
+    var icon: String {
+        switch self {
+        case .normal: return "list.bullet"
+        case .liked: return "heart"
+        case .fresh: return "sparkles"
+        }
+    }
+}
+
 final class PlayerManager: NSObject, ObservableObject {
     static let shared = PlayerManager()
 
@@ -54,6 +69,10 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var selectedEQ: String = "原音"
     /// 全局左侧抽屉侧边栏开关（放在 PlayerManager 里因为它是跨页面全局状态）
     @Published var sidebarOpen: Bool = false
+    /// 侧边栏听歌模式：默认模式 / 我的喜欢 / 新鲜模式
+    @Published var listenMode: ListenMode = .normal
+    /// 切到「我的喜欢/新鲜模式」前记住的循环模式，切回默认模式时恢复
+    private var savedNormalMode: PlayMode = .listLoop
 
     private var pendingArtwork: UIImage?
     /// 已构建好的锁屏 artwork 对象（切歌时重建一次，进度刷新不再重复创建，降低 0.1s 刷新开销）
@@ -227,6 +246,87 @@ final class PlayerManager: NSObject, ObservableObject {
         let all = PlayMode.allCases
         let idx = all.firstIndex(of: playMode) ?? 0
         playMode = all[(idx + 1) % all.count]
+    }
+
+    // MARK: - 侧边栏听歌模式（默认 / 我的喜欢 / 新鲜）
+
+    /// 切换侧边栏听歌模式。
+    /// - 默认模式：恢复默认全随机流 + 用户自选循环模式
+    /// - 我的喜欢：只播用户点赞过的歌曲，播完回到第一首循环
+    /// - 新鲜模式：完全随机（队列打乱 + 随机播放）
+    func applyListenMode(_ mode: ListenMode) {
+        guard mode != listenMode || mode == .liked else {
+            // 同模式重复点击默认/新鲜：不重复切换（我的喜欢每次都重新拉取最新点赞）
+            return
+        }
+        switch mode {
+        case .normal:
+            listenMode = .normal
+            restoreNormalStream()
+        case .liked:
+            listenMode = .liked
+            switchToLiked()
+        case .fresh:
+            listenMode = .fresh
+            switchToFresh()
+        }
+    }
+
+    /// 默认模式：切回 Library 默认全随机流，恢复保存的循环模式
+    private func restoreNormalStream() {
+        playMode = savedNormalMode
+        let lib = Library.shared
+        // 队列不在默认流中（如喜欢/新鲜/搜索流）时切回；未加载则先加载，加载完自动切回
+        if queue != lib.tracks {
+            if !lib.isLoaded {
+                Task {
+                    await lib.load()
+                    await MainActor.run {
+                        guard listenMode == .normal else { return }
+                        if let cur = current, lib.tracks.contains(where: { $0.id == cur.id }) {
+                            play(cur, in: lib.tracks)
+                        } else if let first = lib.tracks.first {
+                            play(first, in: lib.tracks)
+                        }
+                    }
+                }
+                return
+            }
+            if let cur = current, lib.tracks.contains(where: { $0.id == cur.id }) {
+                play(cur, in: lib.tracks)
+            } else if let first = lib.tracks.first {
+                play(first, in: lib.tracks)
+            }
+        }
+    }
+
+    /// 我的喜欢：拉取点赞歌曲列表，只播这些歌（列表循环，播完回第一首）
+    private func switchToLiked() {
+        savedNormalMode = playMode
+        playMode = .listLoop
+        guard let uid = AuthManager.shared.currentUser?.id else { return }
+        Task {
+            guard let list = try? await API.likedTracks(userId: uid), !list.isEmpty else { return }
+            await MainActor.run {
+                guard listenMode == .liked else { return }   // 期间用户又切走了：丢弃
+                play(list[0], in: list)
+            }
+        }
+    }
+
+    /// 新鲜模式：队列打乱 + 随机播放（当前歌保持在首位继续播，避免切模式瞬间换歌）
+    private func switchToFresh() {
+        savedNormalMode = playMode
+        playMode = .shuffle
+        let lib = Library.shared
+        let base = lib.tracks.isEmpty ? queue : lib.tracks
+        guard !base.isEmpty else { return }
+        var fresh = base.shuffled()
+        if let cur = current, let idx = fresh.firstIndex(where: { $0.id == cur.id }) {
+            fresh.remove(at: idx)
+            fresh.insert(cur, at: 0)
+        }
+        play(fresh[0], in: fresh)
     }
 
     private func randomIndex(excluding current: Int) -> Int {

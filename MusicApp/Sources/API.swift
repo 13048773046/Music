@@ -188,6 +188,24 @@ enum API {
         return try JSONDecoder().decode([Track].self, from: data)
     }
 
+    /// 我的喜欢：用户点赞过的歌曲列表（上传+采集混合，按点赞时间倒序）
+    static func likedTracks(userId: String? = nil) async throws -> [Track] {
+        var components = URLComponents(url: base.appendingPathComponent("likes"),
+                                       resolvingAgainstBaseURL: false)!
+        let uid = userId ?? AuthManager.shared.currentUser?.id
+        if let uid, !uid.isEmpty {
+            components.queryItems = [URLQueryItem(name: "userId", value: uid)]
+        }
+        var req = URLRequest(url: components.url!)
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode([Track].self, from: data)
+    }
+
     struct Comment: Codable, Identifiable, Hashable {
         let id: String
         let userId: String

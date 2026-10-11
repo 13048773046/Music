@@ -6,10 +6,9 @@ import SwiftUI
 /// 顶部「听歌模式」标题 + 三个模式大按钮 + 3 列功能入口网格。
 /// 深色极简，无阴影渐变，与 App 整体主题一致。
 struct SidebarView: View {
+    @EnvironmentObject private var player: PlayerManager
     /// 点遮罩 / 左滑关闭
     var onClose: () -> Void
-    /// 点击「我的喜欢」按钮
-    var onLiked: () -> Void
 
     /// 侧边栏宽度（约屏宽 85%）
     private let panelWidth = UIScreen.main.bounds.width * 0.85
@@ -59,24 +58,18 @@ struct SidebarView: View {
 
     private var modeButtons: some View {
         VStack(spacing: 12) {
-            SidebarModeButton(
-                title: "默认模式",
-                icon: "list.bullet",
-                selected: true,
-                action: {}
-            )
-            SidebarModeButton(
-                title: "我的喜欢",
-                icon: "heart",
-                selected: false,
-                action: onLiked
-            )
-            SidebarModeButton(
-                title: "新鲜模式",
-                icon: "sparkles",
-                selected: false,
-                action: {}
-            )
+            ForEach(ListenMode.allCases, id: \.self) { mode in
+                SidebarModeButton(
+                    title: mode.rawValue,
+                    icon: mode.icon,
+                    selected: player.listenMode == mode
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        player.applyListenMode(mode)
+                    }
+                    onClose()
+                }
+            }
         }
         .padding(.horizontal, 20)
     }

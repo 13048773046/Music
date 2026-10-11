@@ -55,9 +55,6 @@ struct MainTabView: View {
                 SidebarView(
                     onClose: {
                         withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
-                    },
-                    onLiked: {
-                        withAnimation(.easeInOut(duration: 0.3)) { player.sidebarOpen = false }
                     }
                 )
                 .transition(.move(edge: .leading))
