@@ -63,12 +63,13 @@ struct DiscoverView: View {
                 header
 
                 if !recommended.isEmpty {
-                    sectionTitle("为你推荐", subtitle: "根据你的喜好精选")
+                    // 默认推荐位 = 猜你喜欢：基于听歌行为的个性化推荐（未登录/无行为时后端随机兜底）
+                    sectionTitle("猜你喜欢", subtitle: "根据你的听歌行为推荐")
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 14) {
                             ForEach(recommended) { track in
                                 RecommendCard(track: track) {
-                                    library.playFromDiscover(track)
+                                    playRecommended(track)
                                 }
                             }
                         }
@@ -164,14 +165,34 @@ struct DiscoverView: View {
             buildSections(from: library.tracks)
             state = .loaded
         }
+        // 默认推荐位 = 猜你喜欢：始终拉取个性化推荐（未登录/无行为时后端返回随机兜底）
+        Task { await loadRecommended() }
     }
 
-    /// 最新 = 按入库时间倒序前 6；推荐 = 其余歌曲随机 6 首
+    /// 拉取个性化推荐填充「猜你喜欢」区块（失败静默，区块自动隐藏）
+    private func loadRecommended() async {
+        do {
+            let tracks = try await API.recommend()
+            guard !Task.isCancelled else { return }
+            recommended = Array(tracks.prefix(6))
+        } catch {
+            // 静默：接口不可用或网络失败时不展示该区块
+        }
+    }
+
+    /// 播放「猜你喜欢」推荐歌曲：以推荐列表为队列（后续续拉切回普通全随机流）
+    private func playRecommended(_ track: Track) {
+        library.searchContext = nil
+        if !library.tracks.contains(where: { $0.id == track.id }) {
+            library.tracks.append(track)
+        }
+        player.play(track, in: recommended)
+    }
+
+    /// 最新 = 按入库时间倒序前 6；猜你喜欢区块由 loadRecommended() 异步填充
     private func buildSections(from list: [Track]) {
         let sorted = list.sorted { ($0.created ?? 0) > ($1.created ?? 0) }
         latest = Array(sorted.prefix(6))
-        let rest = list.filter { !latest.contains($0) }
-        recommended = Array(rest.shuffled().prefix(6))
     }
 }
 
