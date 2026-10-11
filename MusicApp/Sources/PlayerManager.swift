@@ -223,6 +223,14 @@ final class PlayerManager: NSObject, ObservableObject {
         pendingArtwork = nil
         currentArtwork = nil
 
+        // 关键：切歌瞬间同步终止上一首的播放与加载，而不是等新歌 URL 就绪后再替换——
+        // 1) AVPlayer：清空当前 item，立刻断开旧音频流（正在进行的缓冲/播放立即停止）
+        // 2) 3D 环绕引擎：取消正在进行的整曲下载任务并停止引擎
+        // 这样即使新歌的签名 URL 还在网络请求中，上一首也已经不再发声、不再占用带宽
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        enginePlayer.stop()
+
         Task {
             // 优先获取签名时效播放 URL（防链接泄露/盗链），失败自动回退普通 URL
             let url = await API.signedStreamURL(for: current.id)
@@ -231,7 +239,6 @@ final class PlayerManager: NSObject, ObservableObject {
                 // 切歌后旧任务迟到响应直接丢弃，防止覆盖新歌状态
                 guard self.current?.id == current.id else { return }
                 if self.usingEngine {
-                    self.enginePlayer.stop()
                     self.enginePlayer.onProgress = { [weak self] cur, dur in
                         guard let self = self else { return }
                         self.currentTime = cur
@@ -247,9 +254,7 @@ final class PlayerManager: NSObject, ObservableObject {
                         if !loading { self?.bufferProgress = 1 }
                     }
                     self.enginePlayer.load(url: url, mode: .surround3D)
-                    self.player.pause()
                 } else {
-                    self.enginePlayer.stop()
                     self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
                     self.player.play()
                 }

@@ -50,7 +50,10 @@ enum API {
     /// 先向 /api/stream-url/{id} 签发短效签名；接口不可用（老服务）时回退普通 URL
     static func signedStreamURL(for id: String) async -> URL {
         let signURL = base.appendingPathComponent("stream-url").appendingPathComponent(id)
-        if let (data, _) = try? await URLSession.shared.data(from: signURL),
+        var req = URLRequest(url: signURL)
+        // 网络差时快速回退普通 URL：避免切歌后长时间卡在签名请求，新歌迟迟无法开始加载
+        req.timeoutInterval = 6
+        if let (data, _) = try? await URLSession.shared.data(for: req),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let exp = obj["exp"] as? Int, let sig = obj["sig"] as? String {
             var comps = URLComponents(url: streamURL(id), resolvingAgainstBaseURL: false)
