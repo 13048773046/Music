@@ -88,19 +88,20 @@ func parseLyrics(_ text: String) -> [KRCLine] {
 
 // MARK: - 两句滚动歌词预览（歌名/作者下方，互动行上方）
 
-/// 只显示「当前播放的一句 + 下一句」的滚动歌词：
-/// - **整句从左到右平滑填满**：`TimelineView(.animation)` 按屏幕刷新率**逐帧**驱动填充进度，
-///   填充用**遮罩矩形裁剪**（白色文字纹理只渲染一次，矩形宽度=进度×整句宽，GPU合成伸展），
-///   进度每帧直接实时查询 AVPlayer（毫秒级），高帧率且开销小、流畅不卡；
-/// - **滚动与字号同步过渡**：下一句用 `scaleEffect(0.8)` 呈现 16pt，**放大进度直接绑定滚动
-///   位移（offsetY 插值驱动 scale）**，往上滚动的同时文字同步放大到 20pt，
-///   滚动结束即放大到位，复位后无缝衔接为当前句，无先后之分、无跳变；
-/// - **连续滚动**：三行渲染（当前句+下一句+再下一句），切句时容器上滑一个行块，
-///   滑动结束帧与复位帧视口逐像素一致；行视图以歌词内容为 identity，实例跨切句保留。
+/// 滚动 + 逐字高亮全部由 `TimelineView(.animation)` 帧驱动，单一时间源，丝滑无跳变：
 ///
-/// 性能：行视图 Equatable 局部刷新；二分定位当前行（O(log n)）；每帧仅一次 AVPlayer 时间查询；
-/// 逐字着色：每个 KRWord 独立判断是否已开始播放，已播白色、未播灰色，
-/// 无 mask / GeometryReader / drawingGroup，字形一次性栅格化，最流畅。
+/// **切句滚动（无 withAnimation / 无 asyncAfter）**
+/// 滚动进度 `t` = 距当前行 start 的时间 / 0.28s，纯派生、每帧按时间戳插值：
+/// - 滚动期间行集合为 `[旧行, 当前行, 预备行]`，容器上滑 `-step * easeOutCubic(t)`
+/// - 旧行同步淡出并轻微缩小，当前行从 0.8 放大到 1.0，全部由同一 `t` 驱动，天然同步
+/// - 滚动结束帧与复位帧视口逐像素一致，无闪跳；连续快速切句会被直接打断并重新插值，不跳变
+///
+/// **逐字卡拉OK高亮（整行单 mask，无 GeometryReader）**
+/// 白色整行文字用**一个**左对齐矩形 mask 裁剪，mask 宽度 = 已唱完字宽之和 + 正在唱的字宽×进度。
+/// 每个字的渲染宽度在行出现时用 UIFont 一次性测量缓存，每帧只更新一个 CGFloat 宽度，
+/// 不做任何布局测量；已唱完白、正在唱从左扫到右、未到灰。
+///
+/// 性能：行视图 Equatable 局部刷新；二分定位当前行；每帧仅一次 AVPlayer 时间查询 + 一次宽度累加。
 struct LyricPreview: View {
     let lines: [KRCLine]
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
@@ -114,63 +115,62 @@ struct LyricPreview: View {
     // 视口只露两行：当前句 + 下一句。第三行（预备行）在 frame 外被 clipped，
     // 在页面上自然被点赞/评论/分享按钮挡住，滚动时从下方滑上来接替下一句。
     private static let viewHeight: CGFloat = rowHeight * 2 + rowGap
-
-    /// 当前渲染的三行内容锚点（滚动动画期间不更新，动画结束后更新并复位位移）
-    @State private var anchor: Int = 0
-    @State private var offsetY: CGFloat = 0
-    @State private var isScrolling = false
+    /// 切句滚动时长（秒）：滚动进度 = 距当前行 start 的时间 / 该值
+    private static let scrollDuration: Double = 0.28
 
     /// 播放跟随：每帧直接实时查询 AVPlayer 当前时间（毫秒级），逐字高亮逐帧推进
-    private var displayProgress: Double {
+    private func displayTime() -> Double {
         let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
         let safe = now.isFinite ? now : 0
         return abs(progress - safe) < 0.6 ? safe : progress
     }
 
     /// 当前行索引（-1 = 尚未到第一行歌词）
-    private var currentIndex: Int {
+    private func currentIndex(_ display: Double) -> Int {
         guard !lines.isEmpty else { return -1 }
-        let p = displayProgress
         var lo = 0, hi = lines.count
         while lo < hi {
             let mid = (lo + hi) / 2
-            if lines[mid].start <= p { lo = mid + 1 } else { hi = mid }
+            if lines[mid].start <= display { lo = mid + 1 } else { hi = mid }
         }
         return lo - 1
     }
 
-    /// 渲染的三行：anchor 起的三句（不足则少）
-    private var visibleLines: [KRCLine] {
-        guard !lines.isEmpty else { return [] }
-        var out: [KRCLine] = []
-        for i in anchor..<min(anchor + 3, lines.count) {
-            out.append(lines[i])
-        }
-        return out
-    }
-
-    /// 滚动进度 0...1（滚动动画期间随 offsetY 逐帧插值，同步驱动下一句放大）
-    private var scrollProgress: Double {
-        guard Self.step > 0 else { return 0 }
-        return min(Double(-offsetY / Self.step), 1)
-    }
-
     var body: some View {
         TimelineView(.animation) { _ in
-            let p = displayProgress
+            let display = displayTime()
+            let c = currentIndex(display)
+            // 滚动进度：切句瞬间（display 刚过当前行 start）为 0，0.28s 后为 1。
+            // 纯时间派生：无 asyncAfter 复位、可被下一次切句打断、帧同步。
+            let t = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
+            let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0   // easeOutCubic：起快收慢，跟手不拖沓
+            // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
+            let scrolling = c > 0 && t < 1
+            let base = scrolling ? c - 1 : c
+            let offsetY = scrolling ? -Self.step * eased : 0
+
             VStack(spacing: Self.rowGap) {
-                ForEach(0..<visibleLines.count, id: \.self) { idx in
-                    let line = visibleLines[idx]
-                    // 第 0 行 = 当前句（逐字高亮）；第 1 行（下一句）放大进度绑定滚动进度；
-                    // 第 2 行（再下一句）恒为小字灰色。非当前行 currentTime 传 -1 → 全部字灰色。
-                    let scale = idx == 0 ? 1.0
-                        : (idx == 1 ? 0.8 + 0.2 * scrollProgress : 0.8)
-                    LyricRowView(
-                        line: line,
-                        currentTime: idx == 0 ? p : -1,
-                        scale: scale,
-                        tint: tint
-                    )
+                ForEach(0..<3, id: \.self) { idx in
+                    let li = base + idx
+                    if lines.indices.contains(li) {
+                        let line = lines[li]
+                        // 当前行：随滚动放大到满字号 + 逐字高亮；
+                        // 旧行（仅滚动期间）：已唱完全白，同步淡出缩小；
+                        // 预备行：恒灰小字。
+                        let isCurrent = li == c
+                        let isOld = li == c - 1
+                        let scale: Double = isCurrent
+                            ? (scrolling ? 0.8 + 0.2 * eased : 1.0)
+                            : (isOld ? 1.0 - 0.15 * eased : 0.8)
+                        let opacity = isOld ? 1 - eased : 1.0
+                        LyricRowView(
+                            line: line,
+                            currentTime: isCurrent ? display : (isOld ? display : -1),
+                            scale: scale,
+                            opacity: opacity,
+                            tint: tint
+                        )
+                    }
                 }
             }
             .offset(y: offsetY)
@@ -178,76 +178,77 @@ struct LyricPreview: View {
         }
         .frame(height: Self.viewHeight, alignment: .top)
         .clipped()
-        .onChange(of: currentIndex) { newIdx in
-            scrollIfNeeded(to: newIdx)
-        }
-    }
-
-    /// 切句滚动：整体上滑一个行块；位移逐帧插值时下一句同步放大（见 scrollProgress）
-    private func scrollIfNeeded(to newIdx: Int) {
-        let target = newIdx < 0 ? 0 : newIdx
-        guard target != anchor, !isScrolling, !lines.isEmpty else { return }
-        isScrolling = true
-        withAnimation(.easeInOut(duration: 0.25)) {
-            offsetY = -Self.step
-        }
-        // 动画结束后换内容 + 无动画复位（结束帧与复位帧视口内容一致；此时下一句已放大到位）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.27) {
-            anchor = target
-            offsetY = 0
-            isScrolling = false
-        }
     }
 }
 
-// MARK: - 单行歌词（卡拉OK式逐字高亮）
-// 已唱完的字全白；正在唱的字从左扫到右（渐变填充）；未到的字灰色。
+// MARK: - 单行歌词（卡拉OK式逐字高亮，整行单 mask 裁剪）
 
+/// 已唱完的字全白；正在唱的字从左扫到右（mask 宽度推进）；未到的字灰色。
+/// 每个字的渲染宽度在行出现时一次性测量缓存，每帧只更新一个 CGFloat 宽度，零布局开销。
 private struct LyricRowView: View, Equatable {
     let line: KRCLine
-    /// 当前播放秒数；-1 = 非当前行，所有字灰色
+    /// 当前播放秒数；-1 = 非高亮行（全灰），但旧行传 display（已唱完 → 全白淡出）
     let currentTime: Double
-    let scale: Double       // 0.8...1.0：下一句在滚动期间同步放大到 20pt
+    let scale: Double       // 0.8...1.0：当前行在滚动期间同步放大到 20pt
+    let opacity: Double     // 旧行滚动淡出
     let tint: Color
+
+    /// 逐字渲染宽度缓存（onAppear 一次性测量）
+    @State private var charWidths: [CGFloat] = []
+
+    /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
+    private var filledWidth: CGFloat {
+        guard currentTime >= 0 else { return 0 }
+        var w: CGFloat = 0
+        for (i, word) in line.words.enumerated() {
+            let cw = charWidths.indices.contains(i) ? charWidths[i] : 0
+            if currentTime >= word.end {
+                w += cw
+            } else if currentTime >= word.start {
+                let span = max(word.end - word.start, 0.001)
+                let p = min(max((currentTime - word.start) / span, 0), 1)
+                w += cw * p
+                break
+            } else {
+                break
+            }
+        }
+        return w
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // 底色：未唱部分（灰）
+            Text(line.text)
+                .foregroundColor(tint.opacity(baseOpacity))
+            // 已唱区间：白色整行 + 单个左对齐矩形 mask（宽度=已唱区间），无 GeometryReader
+            if currentTime >= 0 {
+                Text(line.text)
+                    .foregroundColor(.white)
+                    .mask(alignment: .leading) {
+                        Rectangle()
+                            .frame(width: filledWidth)
+                    }
+            }
+        }
+        .font(.system(size: 20, weight: .medium))
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .scaleEffect(CGFloat(scale), anchor: .leading)
+        .opacity(opacity)
+        .onAppear { measure() }
+    }
 
     private var baseOpacity: Double {
         let t = (scale - 0.8) / 0.2
         return 0.4 + 0.1 * min(max(t, 0), 1)
     }
 
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(line.words) { w in
-                wordView(w)
-            }
-        }
-        .font(.system(size: 20, weight: .medium))
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .scaleEffect(scale, anchor: .leading)
-    }
-
-    @ViewBuilder
-    private func wordView(_ w: KRWord) -> some View {
-        if currentTime >= w.end {
-            // 已唱完：全白
-            Text(w.text).foregroundColor(.white)
-        } else if currentTime >= w.start {
-            // 正在唱：灰底 + 白字从左扫到右
-            let span = max(w.end - w.start, 0.001)
-            let p = min(max((currentTime - w.start) / span, 0), 1)
-            ZStack(alignment: .leading) {
-                Text(w.text).foregroundColor(tint.opacity(baseOpacity))
-                Text(w.text).foregroundColor(.white)
-                    .mask(alignment: .leading) {
-                        GeometryReader { g in
-                            Rectangle().frame(width: g.size.width * p)
-                        }
-                    }
-            }
-        } else {
-            // 未到：灰
-            Text(w.text).foregroundColor(tint.opacity(baseOpacity))
+    /// 用与 SwiftUI 同款字体一次性测量每个字的渲染宽度
+    private func measure() {
+        let font = UIFont.systemFont(ofSize: 20, weight: .medium)
+        charWidths = line.words.map { w in
+            (w.text as NSString).size(withAttributes: [.font: font]).width
         }
     }
 }
