@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// 分页加载状态容器：管理某个列表的「已加载项 + 当前页 + 总数 + 是否还有更多」
@@ -37,6 +38,17 @@ struct MineView: View {
 
     private static let pageSize = 20
 
+    /// 状态栏高度：背景图延伸到状态栏后面需要用它铺满顶部
+    private static var statusBarHeight: CGFloat {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let ws = scene as? UIWindowScene,
+                  let window = ws.keyWindow else { continue }
+            let top = window.safeAreaInsets.top
+            if top > 0 { return top }
+        }
+        return 44
+    }
+
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
@@ -46,16 +58,15 @@ struct MineView: View {
             ZStack {
                 Theme.background.ignoresSafeArea()
 
-                // 沉浸式：读取顶部安全区，让背景图延伸到状态栏后面
-                GeometryReader { geo in
-                    let topInset = geo.safeAreaInsets.top
-                    VStack(spacing: 0) {
-                        userHeader(topInset: topInset)
-                        tabIndicator
-                        tabPages
-                        bottomBar
-                    }
+                // 沉浸式（与首页一致）：内容延伸到状态栏，背景图铺到屏幕最顶部，
+                // 状态栏直接悬浮在背景图上
+                VStack(spacing: 0) {
+                    userHeader(topInset: Self.statusBarHeight)
+                    tabIndicator
+                    tabPages
+                    bottomBar
                 }
+                .ignoresSafeArea(edges: .top)
             }
             .navigationBarHidden(true)
             .task { await initialLoad() }
@@ -112,6 +123,7 @@ struct MineView: View {
                             .frame(height: 160 + topInset)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .top)
                 .clipShape(BottomRoundedShape(radius: 24))
 
                 // 右上角：上传 + 编辑按钮（背景图右上角）
