@@ -56,6 +56,10 @@ struct MainTabView: View {
     @State private var sidebarDrag: CGFloat = 0
     /// 稳定闭包容器（见 SidebarHandlers 注释）
     @State private var handlers = SidebarHandlers()
+    /// 松手落位中：拦截迟到的 onChanged（快速滑动时手势系统可能晚于 onEnded 派发
+    /// 最后一个 onChanged，若让它覆盖 sidebarDrag 会把进行中的落位动画跳回再重启，
+    /// 表现为「动画中间小停顿」）
+    @State private var isSettling = false
 
     /// 侧边栏宽度（约屏宽 85%）
     private let panelWidth = UIScreen.main.bounds.width * 0.85
@@ -140,12 +144,21 @@ struct MainTabView: View {
         }
     }
 
-    /// 跟手拖拽手势：onChanged 实时更新露出宽度；onEnded 超过阈值（位移/速度）落位，否则回弹
+    /// 跟手拖拽手势。
+    /// - onChanged：实时跟随手指；新手势起点自动解除落位锁
+    /// - onEnded：先用「预测终点」无动画接管位置（消除手指速度与动画初速 0 的落差），
+    ///   再用 interactiveSpring 快速完成剩余距离——快速甩动时预测终点已贴近目标，
+    ///   动画几乎不启动，自然无停顿；慢速拖动则平滑回弹
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { v in
                 let dx = v.translation.width
                 let dy = v.translation.height
+                // 新手势刚开始（位移≈0）时解除上次落位锁，恢复跟手
+                if isSettling && abs(dx) < 6 && abs(dy) < 6 {
+                    isSettling = false
+                }
+                guard !isSettling else { return }
                 // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑（竖滑切歌不受影响）
                 guard abs(dx) > abs(dy) * 1.5 else { return }
                 // 以「当前开合状态 + 本次拖动位移」计算目标露出宽度，钳制在 0...panelWidth
@@ -153,25 +166,25 @@ struct MainTabView: View {
                 sidebarDrag = min(panelWidth, max(0, base + dx))
             }
             .onEnded { v in
+                isSettling = true
                 let dx = v.translation.width
                 let vel = v.predictedEndTranslation.width
-                if player.sidebarOpen {
-                    // 展开状态：向左拖超 1/4 宽度或快速左滑 → 关闭，否则回弹到全开
-                    if dx < -panelWidth * 0.25 || vel < -80 {
-                        closeSidebar()
-                    } else {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
-                            sidebarDrag = panelWidth
-                        }
-                    }
-                } else {
-                    // 收起状态：向右拖超 1/4 宽度或快速右滑 → 打开，否则回弹到全关
-                    if dx > panelWidth * 0.25 || vel > 80 {
-                        openSidebar()
-                    } else {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
-                            sidebarDrag = 0
-                        }
+                let base = player.sidebarOpen ? panelWidth : 0
+                // 预测终点（按手指速度外推 50%，避免接管位置跳得太远；钳制在有效范围）
+                let predicted = min(panelWidth, max(0, base + vel * 0.5))
+                // 落位方向：超过 1/4 宽度或快速甩动 → 打开/关闭；否则回弹当前状态
+                let shouldOpen = player.sidebarOpen
+                    ? !(dx < -panelWidth * 0.25 || vel < -80)
+                    : (dx > panelWidth * 0.25 || vel > 80)
+                let target: CGFloat = shouldOpen ? panelWidth : 0
+                player.sidebarOpen = shouldOpen
+                // 先无动画接管到预测终点（与手指落点自然衔接），再动画补完剩余距离
+                sidebarDrag = predicted
+                if abs(target - predicted) > 0.5 {
+                    withAnimation(.interactiveSpring(response: 0.34,
+                                                     dampingFraction: 0.86,
+                                                     blendDuration: 0.25)) {
+                        sidebarDrag = target
                     }
                 }
             }
