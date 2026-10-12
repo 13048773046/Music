@@ -916,6 +916,24 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                  "forceUpdate": row[4] or 0, "downloadUrl": row[5] or ""})
                 return
 
+            # 我的统计：总听歌时长（秒）、听过的歌曲数
+            if u.path == "/api/my-stats":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"totalSeconds": 0, "trackCount": 0})
+                    return
+                row = c.execute("SELECT COALESCE(SUM(value),0) FROM behavior_events"
+                                " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
+                total_sec = int(row[0]) if row else 0
+                row2 = c.execute("SELECT COUNT(DISTINCT track_id) FROM behavior_events"
+                                " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
+                track_cnt = int(row2[0]) if row2 else 0
+                c.close()
+                self._json(200, {"totalSeconds": total_sec, "trackCount": track_cnt})
+                return
+
             # ---------- 采集控制台 H5 页面 ----------
             if u.path == "/collect.html":
                 html = """<!doctype html>

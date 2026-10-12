@@ -5,6 +5,7 @@ struct MineView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var auth: AuthManager
     @State private var trackCount: Int?
+    @State private var listenSeconds: Int = 0
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
     @State private var showUploadSheet = false
@@ -42,6 +43,7 @@ struct MineView: View {
                 if trackCount == nil {
                     await loadCount()
                 }
+                await loadListenStats()
             }
         }
         .fileImporter(
@@ -219,6 +221,12 @@ struct MineView: View {
     private var statsRow: some View {
         HStack(spacing: 14) {
             statCard(
+                icon: "clock.fill",
+                value: listenHoursText,
+                label: "听歌时长",
+                iconColor: Theme.sky
+            )
+            statCard(
                 icon: "music.note.list",
                 value: trackCount.map(String.init) ?? "--",
                 label: "歌曲总数",
@@ -324,5 +332,29 @@ struct MineView: View {
         } catch {
             trackCount = 0
         }
+    }
+
+    private func loadListenStats() async {
+        guard let token = auth.authToken else { return }
+        guard let url = URL(string: "https://www.dbmt999.asia/music/api/my-stats") else { return }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
+            let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            listenSeconds = (obj?["totalSeconds"] as? Int) ?? 0
+        } catch {}
+    }
+
+    /// 听歌时长格式化：不足1小时显示分钟，否则显示小时
+    private var listenHoursText: String {
+        guard listenSeconds > 0 else { return "0" }
+        let hours = Double(listenSeconds) / 3600.0
+        if hours < 1 {
+            let mins = Int(listenSeconds / 60)
+            return "\(mins)分"
+        }
+        return String(format: "%.1f", hours)
     }
 }
