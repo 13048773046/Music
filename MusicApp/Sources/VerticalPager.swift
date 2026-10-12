@@ -3,6 +3,11 @@ import UIKit
 
 /// 竖向翻页容器：模仿抖音 / 汽水音乐的上下滑动切歌体验。
 /// 基于 UIPageViewController（iOS 16 兼容），滑动停止后回调当前页。
+///
+/// 性能关键：控制器**懒创建**（滑到哪页才创建哪页），不再一次性为整个队列
+/// （可达数百首）预建 UIHostingController + 触发每页的背景主色/歌词网络任务。
+/// UIPageViewController 本身只需可见页 + 前后各一页；已创建的页缓存在字典中，
+/// 翻回时直接复用（保留点赞/评论等 @State）。
 struct VerticalPager: UIViewControllerRepresentable {
     @Binding var currentIndex: Int
     let tracks: [Track]
@@ -25,9 +30,9 @@ struct VerticalPager: UIViewControllerRepresentable {
         context.coordinator.rebuild(tracks: tracks)
         if !tracks.isEmpty {
             // 起始页跟随播放器当前索引；越界（如尚未播放）时兜底到第 0 页
-            let start = context.coordinator.controllers.indices.contains(currentIndex) ? currentIndex : 0
+            let start = context.coordinator.hasController(at: currentIndex) ? currentIndex : 0
             pvc.setViewControllers(
-                [context.coordinator.controllers[start]],
+                [context.coordinator.controller(for: start)],
                 direction: .forward,
                 animated: false,
                 completion: nil
@@ -38,14 +43,14 @@ struct VerticalPager: UIViewControllerRepresentable {
 
     func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
         context.coordinator.parent = self
-        // 同步控制器：追加场景只补建新页；数据源整体替换（普通流↔相关流）时重建。
+        // 同步控制器：追加场景无需补建（懒创建）；数据源整体替换（普通流↔相关流）时重建。
         let rebuilt = context.coordinator.syncControllers(for: tracks)
         // 整体替换后旧控制器已不在新列表中，必须立即定位到当前播放索引，
         // 否则 UIPageViewController 仍持有已废弃的页面
         if rebuilt {
-            if context.coordinator.controllers.indices.contains(currentIndex) {
+            if context.coordinator.hasController(at: currentIndex) {
                 pvc.setViewControllers(
-                    [context.coordinator.controllers[currentIndex]],
+                    [context.coordinator.controller(for: currentIndex)],
                     direction: .forward,
                     animated: false,
                     completion: nil
@@ -59,15 +64,15 @@ struct VerticalPager: UIViewControllerRepresentable {
         // 导致"滑到下一首不播、再滑一首才播上一首"的滞后一首 bug。
         guard !context.coordinator.isUserPaging else { return }
         guard let visible = pvc.viewControllers?.first,
-              let visibleIndex = context.coordinator.controllers.firstIndex(of: visible),
+              let visibleIndex = context.coordinator.index(of: visible),
               visibleIndex != currentIndex,
-              context.coordinator.controllers.indices.contains(currentIndex) else {
+              context.coordinator.hasController(at: currentIndex) else {
             return
         }
         // 自动切歌（播放完/下一首/锁屏切歌）时用翻页动画平滑过渡到下一首，
         // 而不是直接闪现新歌页面：旧页滚出、新页滚入，体验连续不跳变。
         pvc.setViewControllers(
-            [context.coordinator.controllers[currentIndex]],
+            [context.coordinator.controller(for: currentIndex)],
             direction: visibleIndex < currentIndex ? .forward : .reverse,
             animated: true,
             completion: nil
@@ -76,8 +81,11 @@ struct VerticalPager: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         var parent: VerticalPager
-        var controllers: [UIViewController] = []
-        /// 与 controllers 一一对应的歌曲 id（用于识别队列来源是否整体替换）
+        /// 已创建的页面缓存：索引 → 控制器（懒创建，滑到才建）
+        private(set) var controllers: [Int: UIViewController] = [:]
+        /// 控制器 → 索引 反向表（before/after 定位用，O(1) 查询）
+        private var indexByController: [ObjectIdentifier: Int] = [:]
+        /// 与队列一一对应的歌曲 id（用于识别队列来源是否整体替换）
         private var trackIDs: [String] = []
         /// 用户手势正在翻页（willTransitionTo 置位、didFinishAnimating 复位）。
         /// 期间 updateUIViewController 不得程序化回跳，否则会与手势索引打架。
@@ -87,55 +95,66 @@ struct VerticalPager: UIViewControllerRepresentable {
             self.parent = parent
         }
 
-        func rebuild(tracks: [Track]) {
-            let total = tracks.count
-            let top = Self.windowSafeAreaTop
-            let bottom = Self.windowSafeAreaBottom
-            controllers = tracks.enumerated().map { index, track in
-                let hosting = UIHostingController(
-                    rootView: PlayerCard(track: track, index: index, total: total,
-                                         topInset: top, bottomInset: bottom)
-                        .environmentObject(PlayerManager.shared)
-                        .environmentObject(AuthManager.shared)
-                )
-                // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
+        /// 获取/懒创建指定索引的页面控制器
+        func controller(for index: Int) -> UIViewController {
+            if let existing = controllers[index] { return existing }
+            guard parent.tracks.indices.contains(index) else {
+                // 索引越界（极端竞态）：返回一个空白占位页避免崩溃
+                let hosting = UIHostingController(rootView: Color.clear)
                 hosting.view.backgroundColor = .clear
-                // 关键：取消 UIHostingController 桥接层的自动安全区避让。
-                // 之前直接在 PlayerCard 里读 geo.safeAreaInsets 加 padding 没效果，
-                // 是因为嵌套在 UIPageViewController 里时该值恒为 0——
-                // 桥接层已经悄悄处理过安全区，靠读值拿不到状态栏高度。
-                // 这里用负的 additionalSafeAreaInsets 把安全区抵消为 0，
-                // SwiftUI 内容从屏幕原点（状态栏正后方）开始布局，
-                // 顶部/底部安全区一律由 keyWindow 真实值显式注入（iOS 16.0 全版本兼容）。
-                hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
+                controllers[index] = hosting
+                indexByController[ObjectIdentifier(hosting)] = index
                 return hosting
             }
+            let track = parent.tracks[index]
+            let top = Self.windowSafeAreaTop
+            let bottom = Self.windowSafeAreaBottom
+            let hosting = UIHostingController(
+                rootView: PlayerCard(track: track, index: index,
+                                     topInset: top, bottomInset: bottom)
+                    .environmentObject(PlayerManager.shared)
+                    .environmentObject(AuthManager.shared)
+            )
+            // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
+            hosting.view.backgroundColor = .clear
+            // 关键：取消 UIHostingController 桥接层的自动安全区避让。
+            // 之前直接在 PlayerCard 里读 geo.safeAreaInsets 加 padding 没效果，
+            // 是因为嵌套在 UIPageViewController 里时该值恒为 0——
+            // 桥接层已经悄悄处理过安全区，靠读值拿不到状态栏高度。
+            // 这里用负的 additionalSafeAreaInsets 把安全区抵消为 0，
+            // SwiftUI 内容从屏幕原点（状态栏正后方）开始布局，
+            // 顶部/底部安全区一律由 keyWindow 真实值显式注入（iOS 16.0 全版本兼容）。
+            hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
+            controllers[index] = hosting
+            indexByController[ObjectIdentifier(hosting)] = index
+            return hosting
+        }
+
+        /// 控制器反查索引（O(1)）
+        func index(of vc: UIViewController) -> Int? {
+            indexByController[ObjectIdentifier(vc)]
+        }
+
+        /// 指定索引是否在队列范围内（可创建页面）。不依赖已创建缓存：
+        /// 整体重建后旧缓存已清空，但当前索引仍应能定位到新队列对应页。
+        func hasController(at index: Int) -> Bool {
+            parent.tracks.indices.contains(index)
+        }
+
+        func rebuild(tracks: [Track]) {
+            controllers.removeAll()
+            indexByController.removeAll()
             trackIDs = tracks.map { $0.id }
         }
 
         /// 同步控制器。返回 true 表示整体重建（数据源切换：普通流 ↔ 相关流）。
-        /// - 追加：只给新增 track 补建控制器，不重建已有页（避免翻页位置跳动）
+        /// - 追加：无需补建（懒创建），保留已建页面（避免翻页位置跳动）
         /// - 替换：新队列变短，或新第一首已不在旧队列中 → 重建全部页
         func syncControllers(for newTracks: [Track]) -> Bool {
-            if shouldRebuild(for: newTracks) {
+            let rebuild = shouldRebuild(for: newTracks)
+            if rebuild {
                 rebuild(tracks: newTracks)
                 return true
-            }
-            let total = newTracks.count
-            let top = Self.windowSafeAreaTop
-            let bottom = Self.windowSafeAreaBottom
-            while controllers.count < newTracks.count {
-                let index = controllers.count
-                let track = newTracks[index]
-                let hosting = UIHostingController(
-                    rootView: PlayerCard(track: track, index: index, total: total,
-                                         topInset: top, bottomInset: bottom)
-                        .environmentObject(PlayerManager.shared)
-                        .environmentObject(AuthManager.shared)
-                )
-                hosting.view.backgroundColor = .clear
-                hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
-                controllers.append(hosting)
             }
             trackIDs = newTracks.map { $0.id }
             return false
@@ -165,15 +184,14 @@ struct VerticalPager: UIViewControllerRepresentable {
 
         func pageViewController(_ pvc: UIPageViewController,
                                 viewControllerBefore viewController: UIViewController) -> UIViewController? {
-            guard let index = controllers.firstIndex(of: viewController), index > 0 else { return nil }
-            return controllers[index - 1]
+            guard let index = index(of: viewController), index > 0 else { return nil }
+            return controller(for: index - 1)
         }
 
         func pageViewController(_ pvc: UIPageViewController,
                                 viewControllerAfter viewController: UIViewController) -> UIViewController? {
-            guard let index = controllers.firstIndex(of: viewController),
-                  index < controllers.count - 1 else { return nil }
-            return controllers[index + 1]
+            guard let index = index(of: viewController), index < parent.tracks.count - 1 else { return nil }
+            return controller(for: index + 1)
         }
 
         // MARK: Delegate
@@ -192,7 +210,7 @@ struct VerticalPager: UIViewControllerRepresentable {
             isUserPaging = false
             guard completed,
                   let visible = pvc.viewControllers?.first,
-                  let index = controllers.firstIndex(of: visible) else { return }
+                  let index = index(of: visible) else { return }
             parent.currentIndex = index
             parent.onPageChanged(index)
         }
@@ -205,16 +223,18 @@ struct EQOption: Identifiable {
     let id = UUID().uuidString
     let name: String
     let icon: String
+    /// 是否已实现真实音效：仅「原音 / 3D 环绕」有引擎实现，其余为占位（禁用置灰）
+    let implemented: Bool
 }
 
 private let eqOptions: [EQOption] = [
-    EQOption(name: "原音", icon: "speaker.fill"),
-    EQOption(name: "3D 环绕", icon: "wave.3.right.circle.fill"),
-    EQOption(name: "360 环绕", icon: "arrow.triangle.2.circlepath.circle.fill"),
-    EQOption(name: "复古", icon: "clock.arrow.circlepath"),
-    EQOption(name: "现场", icon: "music.mic"),
-    EQOption(name: "流行", icon: "music.note"),
-    EQOption(name: "摇滚", icon: "guitars"),
+    EQOption(name: "原音", icon: "speaker.fill", implemented: true),
+    EQOption(name: "3D 环绕", icon: "wave.3.right.circle.fill", implemented: true),
+    EQOption(name: "360 环绕", icon: "arrow.triangle.2.circlepath.circle.fill", implemented: false),
+    EQOption(name: "复古", icon: "clock.arrow.circlepath", implemented: false),
+    EQOption(name: "现场", icon: "music.mic", implemented: false),
+    EQOption(name: "流行", icon: "music.note", implemented: false),
+    EQOption(name: "摇滚", icon: "guitars", implemented: false),
 ]
 
 private struct EQBSheet: View {
@@ -238,6 +258,11 @@ private struct EQBSheet: View {
                                     .font(.system(size: 22))
                                 Text(opt.name)
                                     .font(.system(size: 14, weight: .medium))
+                                if !opt.implemented {
+                                    Text("敬请期待")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                }
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 18)
@@ -253,6 +278,9 @@ private struct EQBSheet: View {
                             )
                             .foregroundColor(selected == opt.name ? Color.accentColor : .primary)
                         }
+                        // 未实现的音效置灰禁用，避免「选了没效果」的误导
+                        .disabled(!opt.implemented)
+                        .opacity(opt.implemented ? 1 : 0.4)
                     }
                 }
                 .padding(16)
@@ -275,7 +303,6 @@ struct PlayerCard: View {
     @EnvironmentObject private var auth: AuthManager
     let track: Track
     let index: Int
-    let total: Int
     /// 真实安全区高度（由 Coordinator 从 keyWindow 注入，不依赖桥接层）
     var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
@@ -295,11 +322,10 @@ struct PlayerCard: View {
     /// 音效选择弹窗
     @State private var showEQ = false
 
-    init(track: Track, index: Int, total: Int,
+    init(track: Track, index: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
         self.track = track
         self.index = index
-        self.total = total
         self.topInset = topInset
         self.bottomInset = bottomInset
         _liked = State(initialValue: track.isLiked ?? false)
@@ -536,9 +562,11 @@ struct PlayerCard: View {
     }
 
     /// 异步提取当前歌曲封面主色，并同步背景亮度给透明导航栏
+    /// 切歌瞬间背景回退深色渐变 → 文字保持白色，避免「浅色文字配深色背景」闪烁；
+    /// 主色提取完成后按亮度动态切换文字颜色。
     private func loadBackground() async {
         bgColor = nil
-        player.playerCardBackgroundLight = true
+        player.playerCardBackgroundLight = false
         guard let url = track.coverURL else { return }
         let ui = await CoverPalette.color(for: track.id, from: url)
         // 共享原始封面主色给侧边栏（侧边栏自行压暗到 0.3，比播放页更暗）
@@ -550,7 +578,8 @@ struct PlayerCard: View {
         let dark = UIColor(red: r * factor, green: g * factor, blue: b * factor, alpha: a)
         let color = Color(uiColor: dark)
         bgColor = color
-        player.playerCardBackgroundLight = false
+        // 背景色就绪后才更新导航栏亮度（深底白字 / 浅底深字）
+        player.playerCardBackgroundLight = luminance(of: color) > 0.55
     }
 
     // MARK: - 亮度与动态文字色

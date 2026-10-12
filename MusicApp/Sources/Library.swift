@@ -9,6 +9,7 @@ import SwiftUI
 /// - 搜索相关流：搜索点击播放后建立（`searchContext` 记录关键词），
 ///   每次向后端取 10 首相关随机歌曲（相关优先，不足补全随机），
 ///   追加到播放队列；从发现页点击歌曲则切回普通全随机流。
+@MainActor
 final class Library: ObservableObject {
     static let shared = Library()
 
@@ -19,25 +20,49 @@ final class Library: ObservableObject {
     @Published var searchContext: String? = nil
     /// 是否正在拉取下一批，防止重复触发
     private var isLoadingMore = false
+    /// 进行中的首屏加载任务（class box 提供身份比较）：
+    /// 并发调用者（启动页/首页/发现页）共享同一次加载并等待结果，
+    /// 避免「双请求」或「第二个调用因防重入直接返回 → 页面永久停在 loading」。
+    private final class LoadBox {
+        let task: Task<Void, Never>
+        init(_ task: Task<Void, Never>) { self.task = task }
+    }
+    private var inFlightLoad: LoadBox?
 
     private init() {}
 
-    /// 普通全随机流：清空搜索上下文，拉取随机 10 首
-    func load() async {
-        searchContext = nil
-        do {
-            // 带上当前登录用户 id，让后端返回每首歌的 commentCount 与 isLiked
-            let list = try await API.tracks(userId: AuthManager.shared.currentUser?.id)
-            await MainActor.run {
+    /// 普通全随机流：清空搜索上下文，拉取随机 10 首。
+    /// - 已加载成功时直接返回（避免重复请求）；`force=true` 时强制重新拉取
+    ///   （上传新歌后调用，让首页/发现页立即可见新歌）。
+    /// - 加载进行中时等待同一任务完成，不重复发请求。
+    /// - 加载失败不置 `isLoaded`，下次进入可自动重试。
+    func load(force: Bool = false) async {
+        if !force && isLoaded { return }
+        if let pending = inFlightLoad {
+            await pending.task.value
+            return
+        }
+        let box = LoadBox(Task { [weak self] in
+            guard let self else { return }
+            self.searchContext = nil
+            do {
+                // 带上当前登录用户 id，让后端返回每首歌的 commentCount 与 isLiked
+                let list = try await API.tracks(userId: AuthManager.shared.currentUser?.id)
                 self.tracks = list
                 self.isLoaded = true
                 // 首次拿到列表且播放器还没有队列时，自动播第一首
                 if PlayerManager.shared.queue.isEmpty, !list.isEmpty {
                     PlayerManager.shared.play(list[0], in: list)
                 }
+            } catch {
+                // 失败静默：保持未加载状态，下次进入页面自动重试
             }
-        } catch {
-            await MainActor.run { self.isLoaded = true }
+        })
+        inFlightLoad = box
+        await box.task.value
+        // 只清理自己发起的加载任务（期间可能有新的 force 加载替换了 inFlightLoad）
+        if inFlightLoad === box {
+            inFlightLoad = nil
         }
     }
 
@@ -63,20 +88,18 @@ final class Library: ObservableObject {
         guard PlayerManager.shared.listenMode == .normal else { return }
         guard !isLoadingMore else { return }
         isLoadingMore = true
+        defer { isLoadingMore = false }
         do {
             let list = try await API.tracks(userId: AuthManager.shared.currentUser?.id,
                                             keyword: searchContext)
-            await MainActor.run {
-                let queue = PlayerManager.shared.queue
-                let existing = Set(queue.map { $0.id })
-                let fresh = list.filter { !existing.contains($0.id) }
-                if !fresh.isEmpty {
-                    PlayerManager.shared.queue.append(contentsOf: fresh)
-                }
+            let queue = PlayerManager.shared.queue
+            let existing = Set(queue.map { $0.id })
+            let fresh = list.filter { !existing.contains($0.id) }
+            if !fresh.isEmpty {
+                PlayerManager.shared.queue.append(contentsOf: fresh)
             }
         } catch {
             // 失败静默，下次滑动再试
         }
-        isLoadingMore = false
     }
 }

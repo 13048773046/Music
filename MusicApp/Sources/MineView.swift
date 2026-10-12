@@ -100,7 +100,11 @@ struct MineView: View {
         .sheet(isPresented: $showUploadSheet) {
             if let url = pickedFileURL {
                 UploadSheet(fileURL: url) {
-                    await loadWorks(reset: true)
+                    // 刷新「我的作品」列表 + 强制刷新全局曲库：
+                    // 否则首页竖滑/发现页看不到新上传的歌（只有重启 App 才会出现）
+                    async let w: Void = loadWorks(reset: true)
+                    async let lib: Void = Library.shared.load(force: true)
+                    _ = await (w, lib)
                 }
                 .environmentObject(auth)
             }
@@ -546,11 +550,17 @@ struct MineView: View {
         }
     }
 
-    private static func dateString(_ ts: Double) -> String {
-        guard ts > 0 else { return "--" }
+    /// 日期格式化：DateFormatter 创建开销大，列表多行复用同一实例。
+    /// 仅在主线程（视图渲染上下文）使用。
+    private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: Date(timeIntervalSince1970: ts))
+        return f
+    }()
+
+    private static func dateString(_ ts: Double) -> String {
+        guard ts > 0 else { return "--" }
+        return dateFormatter.string(from: Date(timeIntervalSince1970: ts))
     }
 
     /// 听歌时长格式化：不足 1 小时显示分钟，否则显示小时
@@ -631,13 +641,9 @@ struct MineView: View {
 
     @MainActor
     private func loadStats() async {
-        guard let token = auth.authToken else { return }
-        var req = URLRequest(url: API.base.appendingPathComponent("my-stats"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        listenSeconds = (obj["totalSeconds"] as? Int) ?? 0
+        if let seconds = try? await API.myStats() {
+            listenSeconds = seconds
+        }
     }
 
     @MainActor

@@ -54,7 +54,7 @@ struct MusicApp: App {
     }
 
     private func fetchAnnouncement() async {
-        guard let url = URL(string: "https://www.dbmt999.asia/music/api/announcement") else { return }
+        let url = API.base.appendingPathComponent("announcement")
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
@@ -78,7 +78,7 @@ struct MusicApp: App {
     }
 
     private func fetchUpdate() async {
-        guard let url = URL(string: "https://www.dbmt999.asia/music/api/check-update") else { return }
+        let url = API.base.appendingPathComponent("check-update")
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
@@ -150,7 +150,7 @@ struct AnnouncementSheet: View {
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color(hex: 0x2a6df4))
+                    .background(Theme.accent)
                     .cornerRadius(12)
             }
         }
@@ -195,7 +195,7 @@ struct UpdateSheet: View {
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color(hex: 0x2a6df4))
+                    .background(Theme.accent)
                     .cornerRadius(12)
             }
             // 非强制更新才显示取消按钮

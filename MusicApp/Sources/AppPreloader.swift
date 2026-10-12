@@ -41,38 +41,36 @@ final class AppPreloader: ObservableObject {
 
     private func loadMine() async {
         defer { mineLoaded = true }
-        guard let token = AuthManager.shared.authToken else { return }
-        async let s: Void = fetchStats(token)
-        async let w: Void = fetchWorks(token)
-        async let l: Void = fetchLikes(token)
-        async let c: Void = fetchComments(token)
+        // 未登录没有我的页数据：直接返回（stats/likes/comments 均需鉴权）
+        guard AuthManager.shared.authToken != nil else { return }
+        async let s: Void = fetchStats()
+        async let w: Void = fetchWorks()
+        async let l: Void = fetchLikes()
+        async let c: Void = fetchComments()
         _ = await (s, w, l, c)
     }
 
-    private func fetchStats(_ token: String) async {
-        var req = URLRequest(url: API.base.appendingPathComponent("my-stats"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        mineStatsSeconds = (obj["totalSeconds"] as? Int) ?? 0
+    private func fetchStats() async {
+        if let seconds = try? await API.myStats() {
+            mineStatsSeconds = seconds
+        }
     }
 
-    private func fetchWorks(_ token: String) async {
+    private func fetchWorks() async {
         if let r = try? await API.myTracks(page: 1, pageSize: 20) {
             works = r.list
             worksTotal = r.total
         }
     }
 
-    private func fetchLikes(_ token: String) async {
+    private func fetchLikes() async {
         if let r = try? await API.myLikes(page: 1, pageSize: 20) {
             likes = r.list
             likesTotal = r.total
         }
     }
 
-    private func fetchComments(_ token: String) async {
+    private func fetchComments() async {
         if let r = try? await API.myComments(page: 1, pageSize: 20) {
             comments = r.list
             commentsTotal = r.total

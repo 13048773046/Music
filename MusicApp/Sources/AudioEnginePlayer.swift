@@ -56,6 +56,15 @@ final class AudioEnginePlayer {
     var onCompletion: (() -> Void)?
     var onLoadingChanged: ((Bool) -> Void)?
 
+    /// 整曲下载用共享会话：避免每次切歌新建 URLSession（每个 session 自带连接池与资源，
+    /// 频繁新建会造成资源浪费与潜在泄漏）。downloadTask 会把整曲下载到临时文件，缓存策略仅影响 URL 缓存命中。
+    private static let downloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
+
     // MARK: - 配置
 
     init() {
@@ -154,11 +163,7 @@ final class AudioEnginePlayer {
         onLoadingChanged?(true)
         pendingURL = url
 
-        let config = URLSessionConfiguration.default
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        let session = URLSession(configuration: config)
-
-        let task = session.downloadTask(with: url) { [weak self] tempURL, _, error in
+        let task = Self.downloadSession.downloadTask(with: url) { [weak self] tempURL, _, error in
             guard let self = self else { return }
             // 切歌后旧任务迟到响应：直接丢弃，防止旧歌覆盖新歌的音频/状态
             guard self.pendingURL == url else { return }

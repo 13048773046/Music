@@ -106,7 +106,9 @@ struct DiscoverView: View {
             .padding(.bottom, 120)
         }
         .refreshable {
-            await load()
+            // 下拉刷新：强制重拉曲库（新上传的歌立即可见），再重建区块
+            await library.load(force: true)
+            applySections()
         }
     }
 
@@ -185,12 +187,10 @@ struct DiscoverView: View {
         }
     }
 
-    /// 播放「猜你喜欢」推荐歌曲：以推荐列表为队列（后续续拉切回普通全随机流）
+    /// 播放「猜你喜欢」推荐歌曲：以推荐列表为队列（后续续拉切回普通全随机流）。
+    /// 不把推荐曲 append 进 library.tracks——那会污染发现页「全部歌曲」数据源。
     private func playRecommended(_ track: Track) {
         library.searchContext = nil
-        if !library.tracks.contains(where: { $0.id == track.id }) {
-            library.tracks.append(track)
-        }
         player.playInNormalMode(track, in: recommended)
     }
 

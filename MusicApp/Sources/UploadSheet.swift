@@ -17,6 +17,8 @@ struct UploadSheet: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var uploading = false
     @State private var error: String?
+    /// 选图请求序号：快速连续选两次封面时，旧加载结果迟到直接丢弃，防止旧图覆盖新图
+    @State private var pickerLoadToken = 0
 
     private var canUpload: Bool {
         !uploading
@@ -168,9 +170,13 @@ struct UploadSheet: View {
 
     private func loadPickerImage() {
         guard let item = pickerItem else { return }
+        pickerLoadToken += 1
+        let token = pickerLoadToken
         Task {
             if let data = try? await item.loadTransferable(type: Data.self),
                let image = UIImage(data: data) {
+                // 旧选择的结果迟到：丢弃，不覆盖用户最新选择的封面
+                guard token == pickerLoadToken else { return }
                 coverImage = image
                 coverData = data
             }
@@ -191,13 +197,17 @@ struct UploadSheet: View {
                 error = "文件超过 100MB 上限，无法上传"
                 return
             }
-            let accessing = fileURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessing {
-                    fileURL.stopAccessingSecurityScopedResource()
+            // 大文件读取放到后台线程（最高 100MB），避免阻塞主线程 UI：
+            // Task 继承主线程隔离，直接 Data(contentsOf:) 会卡住界面
+            let data: Data = try await Task.detached(priority: .userInitiated) {
+                let accessing = fileURL.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing {
+                        fileURL.stopAccessingSecurityScopedResource()
+                    }
                 }
-            }
-            let data = try Data(contentsOf: fileURL)
+                return try Data(contentsOf: fileURL)
+            }.value
             try await API.upload(
                 data: data,
                 filename: fileURL.lastPathComponent,

@@ -30,27 +30,6 @@ enum Theme {
     static let textSecondary = Color(hex: 0x9C9CA0)   // 灰
     static let textTertiary = Color(hex: 0x626266)    // 暗灰
 
-    // 渐变（深色主题下克制使用）
-    static let heroGradient = LinearGradient(
-        colors: [accent, lilac],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-    static let peachGradient = LinearGradient(
-        colors: [peach, accent],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-    static let skyGradient = LinearGradient(
-        colors: [sky, lilac],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-
-    // 轻阴影（弱化光污染）
-    static let softShadow = Color.clear
-    static let cardShadow = Color.clear
-
     /// 占位封面用的暗色渐变组
     static let placeholderPalettes: [(Color, Color)] = [
         (accentSoft, accent.opacity(0.45)),

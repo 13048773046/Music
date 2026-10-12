@@ -13,6 +13,8 @@ struct SearchView: View {
     @State private var results: [Track] = []
     @State private var searching = false
     @State private var hasSearched = false
+    /// 请求序号：快速连续搜索时旧响应后到直接丢弃，防止旧结果覆盖新结果
+    @State private var searchToken = 0
 
     var body: some View {
         NavigationStack {
@@ -110,17 +112,18 @@ struct SearchView: View {
         guard !kw.isEmpty else { return }
         hasSearched = true
         searching = true
+        // 递增请求序号：本次请求的响应只有仍是最新序号时才生效
+        searchToken += 1
+        let token = searchToken
         // 搜索关键词上报（个性化推荐信号：搜过什么 → 推相关歌曲）
         let ev = API.BehaviorEvent(trackId: "", event: "search", value: 0,
                                    meta: API.BehaviorEvent.metaJSON(["kw": kw]))
         Task { await API.reportBehavior([ev]) }
         Task {
-            do {
-                let found = try await API.search(kw)
-                results = found
-            } catch {
-                results = []
-            }
+            let found = try? await API.search(kw)
+            // 旧请求的迟到响应：丢弃，不覆盖最新搜索结果
+            guard token == searchToken else { return }
+            results = found ?? []
             searching = false
         }
     }

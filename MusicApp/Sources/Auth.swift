@@ -76,11 +76,15 @@ final class AuthManager: ObservableObject {
         restore()
     }
 
-    /// 接口返回 401（token 失效/被严格模式拒绝）时调用：清除本地登录态，下次进 App 需重新登录
+    /// 接口返回 401（token 失效/被严格模式拒绝）时调用：清除本地登录态，下次进 App 需重新登录。
+    /// 由 URLSession 回调线程触发，@Published 写入必须回到主线程。
     func handleUnauthorized() {
         guard currentUser != nil else { return }
-        currentUser = nil
-        Keychain.delete(service: serviceName, account: accountName)
+        DispatchQueue.main.async {
+            guard self.currentUser != nil else { return }
+            self.currentUser = nil
+            Keychain.delete(service: self.serviceName, account: self.accountName)
+        }
     }
 
     /// 启动时从 Keychain 恢复登录态，恢复成功则直接进首页，不再要求登录

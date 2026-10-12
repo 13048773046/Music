@@ -3,20 +3,31 @@ import AVFoundation
 
 // MARK: - KRC / LRC 歌词模型（毫秒级逐字时间戳）
 
-struct KRWord: Equatable, Identifiable {
-    let id = UUID()
+/// 逐字歌词单元：手动实现 Equatable（只比较内容字段，不含身份 id）。
+/// 若依赖自动合成（曾含 `let id = UUID()`），每次解析重建的新对象 UUID 不同，
+/// `==` 恒为 false，导致 LyricRowView 的 Equatable 局部刷新完全失效、
+/// 歌词三行每帧全部重建——这是卡拉OK页掉帧的隐蔽根源。
+struct KRWord: Equatable {
     let text: String
     let start: Double  // 秒
     var end: Double    // 秒（LRC 兼容时需要按下一行开始时间修正）
+
+    static func == (lhs: KRWord, rhs: KRWord) -> Bool {
+        lhs.text == rhs.text && lhs.start == rhs.start && lhs.end == rhs.end
+    }
 }
 
-struct KRCLine: Equatable, Identifiable {
-    let id = UUID()
+/// 歌词行：手动 Equatable（内容比较），保证同一行解析两次后相等。
+struct KRCLine: Equatable {
     var words: [KRWord]
     let start: Double
     let end: Double
 
     var text: String { words.map(\.text).joined() }
+
+    static func == (lhs: KRCLine, rhs: KRCLine) -> Bool {
+        lhs.start == rhs.start && lhs.end == rhs.end && lhs.words == rhs.words
+    }
 }
 
 /// 解析歌词文本：自动识别 KRC（含 `<起始ms,持续ms>` 逐字时间戳）与标准 LRC。
@@ -25,10 +36,15 @@ struct KRCLine: Equatable, Identifiable {
 /// 元信息行（[offset:]/[ti:]/[ar:]/[al:]/[by:]）自动跳过。
 /// 注：UI 采用逐字卡拉OK填充（每个字在自身 start/end 区间内从左到右填充绘制），
 /// 逐字时间戳按原始解析结果使用。
+
+/// 行时间戳正则：`[mm:ss]` / `[mm:ss.ff]` / `[mm:ss:fff]` 及 KRC 每字时间戳
+private let rowRegex = try! NSRegularExpression(pattern: "\\[(\\d+):(\\d+)(?:[.:](\\d+))?(?:,(\\d+))?\\]")
+/// KRC 逐字时间戳正则：`<起始ms,持续ms>文本`
+private let wordRegex = try! NSRegularExpression(pattern: "<(\\d+),(\\d+)>([^<]*)")
+
 func parseLyrics(_ text: String) -> [KRCLine] {
     guard !text.isEmpty else { return [] }
-    let rowRegex = try! NSRegularExpression(pattern: "\\[(\\d+):(\\d+)(?:[.:](\\d+))?(?:,(\\d+))?\\]")
-    let wordRegex = try! NSRegularExpression(pattern: "<(\\d+),(\\d+)>([^<]*)")
+    // 正则创建开销大：顶层静态缓存，只创建一次
 
     var lines: [KRCLine] = []
     for raw in text.components(separatedBy: .newlines) {

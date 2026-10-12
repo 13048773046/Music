@@ -5,6 +5,9 @@ import CoreImage
 enum CoverPalette {
     private static var cache: [String: UIColor] = [:]
     private static let lock = NSLock()
+    /// CIContext 创建成本高（GPU/CPU 上下文初始化），全局复用一个。
+    /// CIContext 是线程安全的，可跨线程共享。
+    private static let context = CIContext(options: [.workingColorSpace: NSNull()])
 
     static func color(for id: String, from url: URL) async -> UIColor {
         lock.lock()
@@ -32,7 +35,6 @@ enum CoverPalette {
         filter.setValue(CIVector(cgRect: input.extent), forKey: kCIInputExtentKey)
         guard let output = filter.outputImage else { return nil }
         var bitmap = [UInt8](repeating: 0, count: 4)
-        let context = CIContext(options: [.workingColorSpace: NSNull()])
         context.render(output,
                        toBitmap: &bitmap,
                        rowBytes: 4,

@@ -261,6 +261,20 @@ enum API {
         try await fetchPage(path: "my-comments", page: page, pageSize: pageSize)
     }
 
+    /// 我的页统计：累计听歌时长（秒）。统一封装，AppPreloader 与 MineView 共用。
+    static func myStats() async throws -> Int {
+        var req = URLRequest(url: base.appendingPathComponent("my-stats"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw URLError(.badServerResponse)
+        }
+        return (obj["totalSeconds"] as? Int) ?? 0
+    }
+
     struct Comment: Codable, Identifiable, Hashable {
         let id: String
         let userId: String
@@ -326,100 +340,100 @@ enum API {
         base.appendingPathComponent("background").appendingPathComponent(id)
     }
 
+    // MARK: - Multipart 表单构建（复用，消除各接口重复粘贴的 field/filePart）
+
+    /// 增量构建 multipart/form-data 请求体
+    private struct MultipartBody {
+        let boundary: String
+        private(set) var data = Data()
+
+        init() {
+            boundary = "Boundary-\(UUID().uuidString)"
+        }
+
+        mutating func field(_ name: String, _ value: String) {
+            data.append(Data("--\(boundary)\r\n".utf8))
+            data.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
+            data.append(Data("\(value)\r\n".utf8))
+        }
+
+        mutating func file(_ name: String, fileName: String, contentType: String, fileData: Data) {
+            data.append(Data("--\(boundary)\r\n".utf8))
+            data.append(Data("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(fileName)\"\r\n".utf8))
+            data.append(Data("Content-Type: \(contentType)\r\n\r\n".utf8))
+            data.append(fileData)
+            data.append(Data("\r\n".utf8))
+        }
+
+        mutating func finish() {
+            data.append(Data("--\(boundary)--\r\n".utf8))
+        }
+    }
+
     // MARK: - 用户注册 / 登录（multipart）
 
     static func register(account: String, password: String, name: String,
                          avatarData: Data?,
                          gender: String = "", age: Int = 0, signature: String = "",
                          backgroundData: Data?) async throws -> User {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var body = Data()
-        func field(_ n: String, _ v: String) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
-            body.append(Data("\(v)\r\n".utf8))
+        var body = MultipartBody()
+        body.field("account", account)
+        body.field("password", password)
+        body.field("name", name)
+        body.field("gender", gender)
+        body.field("age", String(age))
+        body.field("signature", signature)
+        if let avatarData {
+            body.file("avatar", fileName: "avatar.jpg", contentType: "image/jpeg", fileData: avatarData)
         }
-        func filePart(_ n: String, _ v: Data) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n".utf8))
-            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
-            body.append(v)
-            body.append(Data("\r\n".utf8))
+        if let backgroundData {
+            body.file("background", fileName: "background.jpg", contentType: "image/jpeg", fileData: backgroundData)
         }
-        field("account", account)
-        field("password", password)
-        field("name", name)
-        field("gender", gender)
-        field("age", String(age))
-        field("signature", signature)
-        if let avatarData { filePart("avatar", avatarData) }
-        if let backgroundData { filePart("background", backgroundData) }
-        body.append(Data("--\(boundary)--\r\n".utf8))
-        return try await submitUser(path: "register", boundary: boundary, body: body)
+        body.finish()
+        return try await submitUser(path: "register", boundary: body.boundary, body: body.data)
     }
 
     static func login(account: String, password: String) async throws -> User {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var body = Data()
-        func field(_ n: String, _ v: String) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
-            body.append(Data("\(v)\r\n".utf8))
-        }
-        field("account", account)
-        field("password", password)
-        body.append(Data("--\(boundary)--\r\n".utf8))
-        return try await submitUser(path: "login", boundary: boundary, body: body)
+        var body = MultipartBody()
+        body.field("account", account)
+        body.field("password", password)
+        body.finish()
+        return try await submitUser(path: "login", boundary: body.boundary, body: body.data)
     }
 
     /// 更新当前用户资料（可选替换头像/背景图）
     static func updateProfile(account: String, name: String, gender: String, age: Int,
                               signature: String,
                               avatarData: Data?, backgroundData: Data?) async throws -> User {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var body = Data()
-        func field(_ n: String, _ v: String) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
-            body.append(Data("\(v)\r\n".utf8))
+        var body = MultipartBody()
+        body.field("account", account)
+        body.field("name", name)
+        body.field("gender", gender)
+        body.field("age", String(age))
+        body.field("signature", signature)
+        if let avatarData {
+            body.file("avatar", fileName: "avatar.jpg", contentType: "image/jpeg", fileData: avatarData)
         }
-        func filePart(_ n: String, _ v: Data) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"; filename=\"\(n).jpg\"\r\n".utf8))
-            body.append(Data("Content-Type: image/jpeg\r\n\r\n".utf8))
-            body.append(v)
-            body.append(Data("\r\n".utf8))
+        if let backgroundData {
+            body.file("background", fileName: "background.jpg", contentType: "image/jpeg", fileData: backgroundData)
         }
-        field("account", account)
-        field("name", name)
-        field("gender", gender)
-        field("age", String(age))
-        field("signature", signature)
-        if let avatarData { filePart("avatar", avatarData) }
-        if let backgroundData { filePart("background", backgroundData) }
-        body.append(Data("--\(boundary)--\r\n".utf8))
-        return try await submitUser(path: "profile/update", boundary: boundary, body: body,
+        body.finish()
+        return try await submitUser(path: "profile/update", boundary: body.boundary, body: body.data,
                                     authed: true)
     }
 
     /// 修改密码（需登录）：旧密码校验通过后更新为新密码
     static func changePassword(old: String, new: String) async throws {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var body = Data()
-        func field(_ n: String, _ v: String) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
-            body.append(Data("\(v)\r\n".utf8))
-        }
-        field("old_password", old)
-        field("new_password", new)
-        body.append(Data("--\(boundary)--\r\n".utf8))
+        var body = MultipartBody()
+        body.field("old_password", old)
+        body.field("new_password", new)
+        body.finish()
 
         var req = URLRequest(url: base.appendingPathComponent("change-password"))
         req.httpMethod = "POST"
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 30
-        req.httpBody = body
+        req.httpBody = body.data
         applyAuth(&req)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else {
@@ -486,37 +500,22 @@ enum API {
     static func upload(data: Data, filename: String, title: String, artist: String, album: String,
                        userId: String = "",
                        coverData: Data? = nil, coverFilename: String? = nil) async throws {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var body = Data()
-
-        func field(_ name: String, _ value: String) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
-            body.append(Data("\(value)\r\n".utf8))
-        }
-        func filePart(_ name: String, _ fileName: String, _ contentType: String, _ fileData: Data) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(fileName)\"\r\n".utf8))
-            body.append(Data("Content-Type: \(contentType)\r\n\r\n".utf8))
-            body.append(fileData)
-            body.append(Data("\r\n".utf8))
-        }
-
-        field("title", title)
-        field("artist", artist)
-        field("album", album)
-        field("userId", userId)
-        filePart("file", filename, "audio/mpeg", data)
+        var body = MultipartBody()
+        body.field("title", title)
+        body.field("artist", artist)
+        body.field("album", album)
+        body.field("userId", userId)
+        body.file("file", fileName: filename, contentType: "audio/mpeg", fileData: data)
         if let coverData, let coverFilename {
-            filePart("cover", coverFilename, "image/jpeg", coverData)
+            body.file("cover", fileName: coverFilename, contentType: "image/jpeg", fileData: coverData)
         }
-        body.append(Data("--\(boundary)--\r\n".utf8))
+        body.finish()
 
         var req = URLRequest(url: base.appendingPathComponent("upload"))
         req.httpMethod = "POST"
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 180
-        req.httpBody = body
+        req.httpBody = body.data
         applyAuth(&req)
         let (data, resp) = try await URLSession.shared.data(for: req)
         try checkAuth(resp)

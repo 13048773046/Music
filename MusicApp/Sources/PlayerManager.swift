@@ -57,8 +57,9 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var playMode: PlayMode = .listLoop
-    /// 首页播放页背景是否偏浅（供透明导航栏决定文字颜色）
-    @Published var playerCardBackgroundLight: Bool = true
+    /// 首页播放页背景是否偏浅（供透明导航栏决定文字颜色）。
+    /// 初始 false：切歌/加载中背景为深色渐变，配白色文字；封面主色就绪后按亮度更新。
+    @Published var playerCardBackgroundLight: Bool = false
     /// 当前歌曲封面提取的主色（原始值未压暗）；nil = 加载中/无封面。
     /// 播放页背景 = 主色×0.4，侧边栏背景 = 主色×0.3（比播放页再暗一档）
     @Published var playerCardDominant: UIColor? = nil
@@ -78,6 +79,8 @@ final class PlayerManager: NSObject, ObservableObject {
     private var pendingArtwork: UIImage?
     /// 已构建好的锁屏 artwork 对象（切歌时重建一次，进度刷新不再重复创建，降低 0.1s 刷新开销）
     private var currentArtwork: MPMediaItemArtwork?
+    /// 锁屏信息最近一次刷新时间（updateNowPlaying 节流用）
+    private var lastNowPlayingUpdate: TimeInterval = 0
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var failObserver: NSObjectProtocol?
@@ -527,7 +530,7 @@ final class PlayerManager: NSObject, ObservableObject {
                     self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
                     self.player.play()
                 }
-                self.updateNowPlaying()
+                self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
             }
         }
         loadArtworkIfNeeded()
@@ -545,7 +548,7 @@ final class PlayerManager: NSObject, ObservableObject {
                 guard self.current?.coverURL == url else { return }
                 self.pendingArtwork = image
                 self.currentArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                self.updateNowPlaying()
+                self.updateNowPlaying(force: true)   // 封面就绪：立即刷新锁屏封面
             }
         }.resume()
     }
@@ -626,7 +629,7 @@ final class PlayerManager: NSObject, ObservableObject {
             player.play()
         }
         isPlaying = true
-        updateNowPlaying()
+        updateNowPlaying(force: true)
     }
 
     private func pausePlayback() {
@@ -638,7 +641,7 @@ final class PlayerManager: NSObject, ObservableObject {
             player.pause()
         }
         isPlaying = false
-        updateNowPlaying()
+        updateNowPlaying(force: true)
     }
 
     // MARK: - 收听结算
@@ -678,18 +681,22 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
-    private func updateNowPlaying() {
+    private func updateNowPlaying(force: Bool = false) {
         guard let current = current else {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             return
         }
+        // 节流：进度每 0.1s 刷新，但锁屏信息无需那么频繁（每次写入都有开销）。
+        // 切歌/暂停/恢复/封面就绪时 force=true 立即刷新，其余刷新间隔 ≥ 0.5s。
+        let now = Date().timeIntervalSince1970
+        if !force, now - lastNowPlayingUpdate < 0.5 { return }
+        lastNowPlayingUpdate = now
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: current.title,
             MPMediaItemPropertyArtist: current.artist ?? "未知歌手",
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
-            MPNowPlayingInfoPropertyPlaybackProgress: progress
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
         ]
         if let album = current.album, !album.isEmpty {
             info[MPMediaItemPropertyAlbumTitle] = album
