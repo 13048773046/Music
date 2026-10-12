@@ -99,6 +99,7 @@ struct AboutView: View {
             }
         }
         .navigationBarHidden(true)
+        .onAppear { NavBack.enableSwipeBack() }
         .alert("已复制", isPresented: $showCopied) {
             Button("好", role: .cancel) {}
         } message: {
@@ -111,7 +112,7 @@ struct AboutView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                NavBack.goBack(dismiss)
             } label: {
                 ZStack {
                     Circle().fill(Theme.card)

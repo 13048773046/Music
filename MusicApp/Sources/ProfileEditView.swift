@@ -44,36 +44,44 @@ struct ProfileEditView: View {
                     }
                     .padding(20)
                 }
-
-                // 固定底部保存按钮（安全区之上，永不被底部遮挡）
-                Button {
-                    Task { await save() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if busy {
-                            ProgressView().tint(.white)
-                        } else {
-                            Text("保存修改").fontWeight(.semibold)
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .disabled(busy)
-                .buttonStyle(.plain)
-                .padding(.horizontal, 20)
-                .padding(.top, 4)
-                .padding(.bottom, 12)
             }
+
+            // 右上角保存按钮：固定悬浮（不随滚动），与返回按钮同一行
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        Task { await save() }
+                    } label: {
+                        Group {
+                            if busy {
+                                ProgressView().tint(Theme.accent)
+                            } else {
+                                Text("保存")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(Theme.accent)
+                            }
+                        }
+                        .frame(minWidth: 52, minHeight: 38)
+                        .contentShape(Rectangle())
+                    }
+                    .disabled(busy)
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .padding(.top, 20)
+            .padding(.trailing, 20)
         }
         .navigationBarHidden(true)
-        .onAppear { seed() }
+        .onAppear {
+            seed()
+            NavBack.enableSwipeBack()
+        }
         .onChange(of: avatarPickerItem) { _ in Task { await loadAvatar() } }
         .onChange(of: bgPickerItem) { _ in Task { await loadBg() } }
         .alert("已保存", isPresented: $showSaved) {
-            Button("好", role: .cancel) { dismiss() }
+            Button("好", role: .cancel) { NavBack.goBack(dismiss) }
         }
     }
 
@@ -82,7 +90,7 @@ struct ProfileEditView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                NavBack.goBack(dismiss)
             } label: {
                 ZStack {
                     Circle().fill(Theme.card)

@@ -101,6 +101,7 @@ struct SettingsView: View {
             }
         }
         .navigationBarHidden(true)
+        .onAppear { NavBack.enableSwipeBack() }
         .alert("缓存已清理", isPresented: $showClearAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -139,7 +140,7 @@ struct SettingsView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                NavBack.goBack(dismiss)
             } label: {
                 ZStack {
                     Circle().fill(Theme.card)
@@ -328,8 +329,9 @@ struct ChangePasswordView: View {
             }
         }
         .navigationBarHidden(true)
+        .onAppear { NavBack.enableSwipeBack() }
         .alert("密码已修改", isPresented: $showDone) {
-            Button("好", role: .cancel) { dismiss() }
+            Button("好", role: .cancel) { NavBack.goBack(dismiss) }
         } message: {
             Text("下次登录请使用新密码。")
         }
@@ -338,7 +340,7 @@ struct ChangePasswordView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                NavBack.goBack(dismiss)
             } label: {
                 ZStack {
                     Circle().fill(Theme.card)
