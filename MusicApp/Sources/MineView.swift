@@ -47,7 +47,7 @@ struct MineView: View {
                 Theme.background.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // 用户信息区（含听歌时长，不用卡片）
+                    // 用户信息区（背景图 + 头像 + 听歌时长）
                     userHeader
                     // 指示器：作品 | 点赞 | 评论
                     tabIndicator
@@ -92,151 +92,171 @@ struct MineView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: - 用户信息区（头像 + 昵称/签名 + 上传/编辑 + 听歌时长）
+    // MARK: - 用户信息区（背景图横幅 + 头像压边 + 昵称 + 签名 + 听歌时长）
 
     private var userHeader: some View {
         let u = auth.currentUser
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 14) {
-                // 头像
-                ZStack {
-                    CachedCoverImage(
-                        url: u?.avatarURL ?? URL(string: "about:blank")!,
-                        title: u?.name ?? "",
-                        placeholder:
-                            Circle().fill(Theme.accentSoft)
-                                .overlay(Image(systemName: "person.fill")
-                                    .font(.system(size: 26))
-                                    .foregroundColor(Theme.accent))
-                    )
-                }
-                .frame(width: 58, height: 58)
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 1.5))
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(u?.name ?? "未登录")
-                        .font(.system(size: 19, weight: .bold))
-                        .foregroundColor(.white)
-                    HStack(spacing: 8) {
-                        if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
-                            tag(gender)
-                        }
-                        if let age = u?.age, age > 0 {
-                            tag("\(age) 岁")
-                        }
-                    }
-                }
-
-                Spacer()
-
-                // 上传按钮
-                Button {
-                    showImporter = true
-                } label: {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+        return VStack(spacing: 0) {
+            // 背景图 + 头像行（头像中心压背景图下沿）
+            ZStack(alignment: .topLeading) {
+                // 背景图（无图时深色占位）
+                Group {
+                    if let bgURL = u?.backgroundURL {
+                        CachedCoverImage(url: bgURL, title: u?.name ?? "",
+                                         placeholder: Rectangle().fill(Theme.card))
+                            .frame(height: 112)
+                            .clipped()
+                    } else {
+                        Rectangle()
                             .fill(Theme.card)
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(Theme.accent)
+                            .frame(height: 112)
                     }
-                    .frame(width: 42, height: 42)
                 }
-                .buttonStyle(.plain)
 
-                // 编辑资料按钮
-                Button {
-                    showProfileEdit = true
-                } label: {
+                HStack(alignment: .center, spacing: 14) {
+                    // 头像
                     ZStack {
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(Theme.card)
-                        Image(systemName: "pencil")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(Theme.textSecondary)
+                        CachedCoverImage(
+                            url: u?.avatarURL ?? URL(string: "about:blank")!,
+                            title: u?.name ?? "",
+                            placeholder:
+                                Circle().fill(Theme.accentSoft)
+                                    .overlay(Image(systemName: "person.fill")
+                                        .font(.system(size: 26))
+                                        .foregroundColor(Theme.accent))
+                        )
                     }
-                    .frame(width: 42, height: 42)
+                    .frame(width: 68, height: 68)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Theme.background, lineWidth: 2.5))
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(u?.name ?? "未登录")
+                            .font(.system(size: 19, weight: .bold))
+                            .foregroundColor(.white)
+                        HStack(spacing: 8) {
+                            if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
+                                tag(gender)
+                            }
+                            if let age = u?.age, age > 0 {
+                                tag("\(age) 岁")
+                            }
+                        }
+                    }
+                    .padding(.bottom, 2)
+
+                    Spacer()
+
+                    // 上传 + 编辑按钮（背景图右下角）
+                    HStack(spacing: 10) {
+                        Button {
+                            showImporter = true
+                        } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(Color.black.opacity(0.35))
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
+                            .frame(width: 42, height: 42)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            showProfileEdit = true
+                        } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(Color.black.opacity(0.35))
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
+                            .frame(width: 42, height: 42)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.leading, 20)
+                .padding(.trailing, 20)
+                .padding(.top, 112 - 34)   // 头像中心压在背景图下沿
             }
+            .frame(height: 112 + 34)       // 背景 + 头像露出下半部
 
-            // 签名（有则显示）
-            if let sig = u?.signature, !sig.isEmpty {
-                Text(sig)
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(1)
-            }
+            // 签名 + 听歌时长（背景图下方，页面背景上）
+            VStack(alignment: .leading, spacing: 10) {
+                if let sig = u?.signature, !sig.isEmpty {
+                    Text(sig)
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                }
 
-            // 听歌时长：整合在用户信息区内（非卡片，一行数据）
-            HStack(spacing: 8) {
-                Image(systemName: "clock.fill")
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.sky)
-                Text("累计听歌")
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-                Text(listenText)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(Theme.accent)
+                // 听歌时长：一行数据（非卡片）
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.sky)
+                    Text("累计听歌")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.textSecondary)
+                    Spacer()
+                    Text(listenText)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(Theme.accent)
+                }
             }
-            .padding(.top, 2)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 14)
     }
 
-    // MARK: - 指示器（作品 | 点赞 | 评论，下划线滑块跟随）
+    // MARK: - 指示器（胶囊分段控件：作品 | 点赞 | 评论，滑块平滑跟随）
 
     private var tabIndicator: some View {
-        HStack(spacing: 0) {
-            indicatorItem(title: "作品", count: works.total, index: 0)
-            indicatorItem(title: "点赞", count: likes.total, index: 1)
-            indicatorItem(title: "评论", count: comments.total, index: 2)
+        HStack(spacing: 2) {
+            segItem(title: "作品", count: works.total, index: 0)
+            segItem(title: "点赞", count: likes.total, index: 1)
+            segItem(title: "评论", count: comments.total, index: 2)
         }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Theme.cardBorder, lineWidth: 1)
+                )
+        )
         .padding(.horizontal, 20)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Theme.cardBorder)
-                .frame(height: 1)
-        }
-        .padding(.bottom, 8)
+        .padding(.bottom, 10)
     }
 
-    private func indicatorItem(title: String, count: Int, index: Int) -> some View {
+    private func segItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
             withAnimation(.easeInOut(duration: 0.25)) { selectedTab = index }
         } label: {
-            VStack(spacing: 8) {
-                HStack(spacing: 4) {
+            ZStack {
+                // 选中滑块：平滑移动到当前 tab（matchedGeometryEffect）
+                if selected {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(Theme.accentSoft)
+                        .matchedGeometryEffect(id: "seg-pill", in: tabIndicatorNS)
+                }
+                HStack(spacing: 5) {
                     Text(title)
-                        .font(.system(size: 15, weight: selected ? .bold : .medium))
-                        .foregroundColor(selected ? .white : Theme.textSecondary)
+                        .font(.system(size: 14, weight: selected ? .bold : .medium))
+                        .foregroundColor(selected ? Theme.accent : Theme.textSecondary)
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundColor(selected ? Theme.accent : Theme.textTertiary)
                 }
-                .padding(.horizontal, 8)
-
-                // 选中滑块（matchedGeometryEffect 实现跨 tab 滑动动画）
-                ZStack(alignment: .leading) {
-                    if selected {
-                        Rectangle()
-                            .fill(Theme.accent)
-                            .frame(height: 2.5)
-                            .matchedGeometryEffect(id: "tab-slider", in: tabIndicatorNS)
-                    } else {
-                        Rectangle()
-                            .fill(.clear)
-                            .frame(height: 2.5)
-                    }
-                }
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -567,11 +587,16 @@ struct MineView: View {
     }
 
     /// 通用分页加载：reset=true 回到第一页并替换数据；否则追加下一页。
-    /// 加载期间防重入；失败时保留已加载数据，仅标记 failed（首屏空列表时展示重试提示）。
+    /// - 加载期间防重入；
+    /// - 请求成功后才替换/清空列表；
+    /// - 请求失败或被系统打断（如重复下拉刷新取消上一次任务）时**回滚旧数据**，
+    ///   只有完全没有任何数据时才展示"加载失败"，避免刷新时列表闪空/误报失败。
     @MainActor
     private func loadPage<T: Equatable>(_ pager: Binding<MinePager<T>>, reset: Bool,
                                         fetch: (Int, Int) async throws -> API.PageResult<T>) async {
         guard !pager.wrappedValue.isLoading else { return }
+        // 记录旧快照：失败时回滚
+        let old = pager.wrappedValue
         if reset {
             pager.wrappedValue = MinePager()
         }
@@ -591,11 +616,20 @@ struct MineView: View {
             np.failed = false
             pager.wrappedValue = np
         } catch {
-            var np = pager.wrappedValue
-            np.isLoading = false
-            np.loadedOnce = true
-            np.failed = np.items.isEmpty
-            pager.wrappedValue = np
+            // 有旧数据：回滚（列表保持不变，不打断浏览、不误报失败）
+            if !old.items.isEmpty {
+                var np = old
+                np.isLoading = false
+                np.failed = false
+                pager.wrappedValue = np
+            } else {
+                // 无旧数据（首次加载失败）：展示失败提示
+                var np = pager.wrappedValue
+                np.isLoading = false
+                np.loadedOnce = true
+                np.failed = np.items.isEmpty
+                pager.wrappedValue = np
+            }
         }
     }
 
