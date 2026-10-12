@@ -1344,6 +1344,7 @@ td.act button.gray{background:#2a2a2e;color:#ddd}
 <button data-t="tracks" onclick="tab('tracks')">上传歌曲</button>
 <button data-t="collected" onclick="tab('collected')">采集歌曲</button>
 <button data-t="comments" onclick="tab('comments')">评论管理</button>
+<button data-t="ann" onclick="tab('ann')">公告管理</button>
 </div>
 <div class="main">
 <div class="topbar"><h1 id="title">仪表盘</h1><div><button style="margin-right:8px" onclick="changePwd()">修改密码</button><button onclick="logout()">退出</button></div></div>
@@ -1379,9 +1380,9 @@ function login(){
 function logout(){token='';localStorage.removeItem('admin_token');location.reload()}
 function tab(t){
   document.querySelectorAll('.side button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
-  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理'};
+  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理',ann:'公告管理'};
   document.getElementById('title').textContent=titles[t];
-  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();
+  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();if(t==='ann')loadAnn();
 }
 let curPage={tracks:1,collected:1,comments:1};
 let curTracks=[],curCols=[];
@@ -1417,6 +1418,42 @@ async function loadComments(page){
   h+='</table></div>';
   h+=pager(curPage.comments,d.total,'loadComments');
   document.getElementById('content').innerHTML=h;
+}
+async function loadAnn(){
+  const h=
+  '<div style="max-width:600px">'+
+  '<div style="background:#1a1a1c;padding:24px;border-radius:12px;margin-bottom:16px">'+
+  '<h3 style="margin-bottom:16px;font-size:16px">发布新公告</h3>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">标题</label>'+
+  '<input id="annTitle" placeholder="公告标题" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">内容</label>'+
+  '<textarea id="annContent" rows="5" placeholder="公告内容" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">版本号（可选）</label>'+
+  '<input id="annVersion" placeholder="如 v1.2.0" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div style="margin-bottom:18px"><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#ccc;cursor:pointer">'+
+  '<input type="checkbox" id="annShowOnce" style="width:16px;height:16px"> 只弹一次（用户点过"我知道了"后不再弹，直到内容更新）</label></div>'+
+  '<button onclick="submitAnn()" style="width:100%;padding:12px;border:0;border-radius:10px;background:#2a6df4;color:#fff;font-size:15px;cursor:pointer">发布公告</button>'+
+  '</div>'+
+  '<div style="background:#1a1a1c;padding:20px;border-radius:12px;font-size:13px;color:#888;line-height:1.8">'+
+  '<b style="color:#ccc">说明：</b><br>'+
+  '• 发布后，App 启动时会自动从底部弹出公告弹窗<br>'+
+  '• 勾选"只弹一次"：用户点过确认后不再弹，直到你发布新公告<br>'+
+  '• 不勾选：用户每次打开 App 都会看到这条公告<br>'+
+  '• 最新一条公告会覆盖之前的，App 只展示最新一条'+
+  '</div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+async function submitAnn(){
+  const title=document.getElementById('annTitle').value.trim();
+  const content=document.getElementById('annContent').value.trim();
+  const version=document.getElementById('annVersion').value.trim();
+  const showOnce=document.getElementById('annShowOnce').checked?1:0;
+  if(!title||!content){alert('请填写标题和内容');return;}
+  try{
+    const r=await fetch('/music/api/admin/announcement',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token},body:JSON.stringify({title,content,version,showOnce})});
+    if(r.ok){alert('发布成功');loadAnn();}
+    else{alert('发布失败');}
+  }catch(e){alert('网络错误');}
 }
 async function loadTracks(page){
   if(page)curPage.tracks=page;
