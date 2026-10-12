@@ -45,33 +45,6 @@ struct ProfileEditView: View {
                     .padding(20)
                 }
             }
-
-            // 右上角保存按钮：固定悬浮（不随滚动），与返回按钮同一行
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        Group {
-                            if busy {
-                                ProgressView().tint(Theme.accent)
-                            } else {
-                                Text("保存")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(Theme.accent)
-                            }
-                        }
-                        .frame(minWidth: 52, minHeight: 38)
-                        .contentShape(Rectangle())
-                    }
-                    .disabled(busy)
-                    .buttonStyle(.plain)
-                }
-                Spacer()
-            }
-            .padding(.top, 20)
-            .padding(.trailing, 20)
         }
         .navigationBarHidden(true)
         .onAppear {
@@ -111,6 +84,25 @@ struct ProfileEditView: View {
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer()
+
+            // 保存按钮：右上角，与返回按钮同一行
+            Button {
+                Task { await save() }
+            } label: {
+                Group {
+                    if busy {
+                        ProgressView().tint(Theme.accent)
+                    } else {
+                        Text("保存")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(Theme.accent)
+                    }
+                }
+                .frame(minWidth: 52, minHeight: 38)
+                .contentShape(Rectangle())
+            }
+            .disabled(busy)
+            .buttonStyle(.plain)
         }
     }
 
