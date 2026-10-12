@@ -31,6 +31,8 @@ struct ProfileEditView: View {
                     VStack(spacing: 18) {
                         header
 
+                        profileCard
+
                         inputCard
 
                         if let error {
@@ -104,9 +106,9 @@ struct ProfileEditView: View {
         }
     }
 
-    // MARK: - 头部：背景图 + 头像
+    // MARK: - 资料卡：背景图 + 头像（点击更换）
 
-    private var header: some View {
+    private var profileCard: some View {
         ZStack(alignment: .topLeading) {
             // 底层 card 色，撑满整个卡片（160 图区 + 40 头像区）
             Rectangle().fill(Theme.card)
