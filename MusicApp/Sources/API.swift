@@ -312,9 +312,11 @@ enum API {
         base.appendingPathComponent("lyric").appendingPathComponent(id)
     }
 
-    /// 歌词内存缓存：听歌模式切换恢复、切回同一首歌时歌词秒出，不重复请求
+    /// 歌词内存缓存：听歌模式切换恢复、切回同一首歌时歌词秒出，不重复请求。
+    /// 设置上限防膨胀（长滑数百首后防止歌词文本常驻内存），内存警告时全清。
     private static let lyricLock = NSLock()
     private static var lyricCache: [String: String] = [:]
+    private static let lyricCacheMax = 300
 
     static func fetchLyric(_ id: String) async throws -> String {
         lyricLock.lock()
@@ -327,9 +329,19 @@ enum API {
         }
         let text = String(data: data, encoding: .utf8) ?? ""
         lyricLock.lock()
+        if lyricCache.count >= lyricCacheMax {
+            lyricCache.removeAll()   // 达到上限：整清（歌词可随时重新拉取，无需复杂淘汰）
+        }
         lyricCache[id] = text
         lyricLock.unlock()
         return text
+    }
+
+    /// 清空歌词缓存（内存警告时调用）
+    static func clearLyricCache() {
+        lyricLock.lock()
+        lyricCache.removeAll()
+        lyricLock.unlock()
     }
 
     static func avatarURL(_ id: String) -> URL {

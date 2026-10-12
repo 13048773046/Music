@@ -85,6 +85,20 @@ final class PlayerManager: NSObject, ObservableObject {
     private var endObserver: NSObjectProtocol?
     private var failObserver: NSObjectProtocol?
 
+    // MARK: - 播放池健壮性（企业级防护）
+
+    /// 切歌/重载的加载任务：快速连续切歌时取消旧任务，
+    /// 避免旧签名 URL 请求继续占用带宽、迟到响应覆盖新歌状态。
+    private var loadTask: Task<Void, Never>?
+    /// 已做过「自动重试一次」的歌曲 id：防止同一首歌无限自动重试；
+    /// 切到新歌时重置。手动重试按钮不受影响。
+    private var autoRetriedTrackId: String?
+    /// 缓冲卡死检测：连续缓冲超过阈值且播放点无进展 → 判定加载失败走自愈
+    private var bufferingStallStart: Date?
+    private var stallProgressAtStart: Double = 0
+    /// 缓冲卡死判定阈值：缓冲超过 15s 且进度无变化
+    private let stallTimeout: TimeInterval = 15
+
     // MARK: - 收听行为追踪（个性化推荐数据源）
 
     /// 单曲收听状态：按 trackId 归属，切歌/重播时更新
@@ -133,6 +147,26 @@ final class PlayerManager: NSObject, ObservableObject {
                 let bufferEnd = CMTimeGetSeconds(range.start) + CMTimeGetSeconds(range.duration)
                 self.bufferProgress = min(max(bufferEnd / self.duration, 0), 1)
             }
+            // 初始加载失败检测（404/网络断时 AVPlayerItem.status 变为 .failed，
+            // 不触发 .AVPlayerItemFailedToPlayToEndTime 通知，只能轮询状态）
+            if self.player.currentItem?.status == .failed {
+                self.handlePlaybackFailure()
+            }
+            // 缓冲卡死检测：非新歌初始加载（已有 duration）却长时间无进展 → 自愈
+            if self.isBuffering {
+                if self.bufferingStallStart == nil {
+                    self.bufferingStallStart = Date()
+                    self.stallProgressAtStart = self.progress
+                } else if let start = self.bufferingStallStart,
+                          Date().timeIntervalSince(start) > self.stallTimeout,
+                          self.duration > 0,
+                          self.progress - self.stallProgressAtStart < 0.01 {
+                    self.bufferingStallStart = nil
+                    self.handlePlaybackFailure()
+                }
+            } else {
+                self.bufferingStallStart = nil
+            }
             self.updateNowPlaying()
         }
 
@@ -150,14 +184,25 @@ final class PlayerManager: NSObject, ObservableObject {
             self.next()
         }
 
-        // 音频流加载失败（网络中断/资源损坏/服务器返回错误）：UI 展示重试，避免 App 静默卡死
+        // 音频流加载失败（网络中断/资源损坏/服务器返回错误）：统一走自愈路径
+        // （UI 展示重试 + 有限自动重试一次），避免 App 静默卡死
         failObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.loadFailed = true
-            self?.isBuffering = false
+            self?.handlePlaybackFailure()
+        }
+
+        // 内存压力：清空图片/主色/歌词缓存，防止长滑播放后内存膨胀被系统杀进程
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            CoverImageCache.shared.clear()
+            CoverPalette.clearCache()
+            API.clearLyricCache()
         }
 
         // 收听心跳：每秒累计真实播放秒数，每 30s 自动上报一次（防 App 被杀丢失数据）
@@ -183,6 +228,10 @@ final class PlayerManager: NSObject, ObservableObject {
 
     deinit {
         listenTimer?.invalidate()
+        loadTask?.cancel()
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver)
+        }
     }
 
     /// 切换音效后重新加载当前歌曲以应用新音效（同曲重载，不算切歌/跳过）
@@ -197,13 +246,38 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     func play(_ track: Track, in tracks: [Track]) {
+        guard !tracks.isEmpty else { return }   // 空队列不进入播放
         if queue != tracks {
             queue = tracks
         }
         if let index = tracks.firstIndex(of: track) {
             currentIndex = index
+        } else if !queue.isEmpty {
+            // 目标歌不在队列（极端竞态/调用错误）：兜底到队首，
+            // 避免旧 currentIndex 指向错误歌曲
+            currentIndex = 0
         }
         playCurrent()
+    }
+
+    /// 播放失败统一自愈入口（原音 AVPlayer 失败通知 / item status failed / 缓冲卡死 / 3D 引擎加载失败共用）。
+    /// 行为：置失败状态供 UI 展示重试，并对当前歌做一次有限自动重试（网络瞬时抖动自愈）。
+    private func handlePlaybackFailure() {
+        guard !loadFailed else { return }   // 已在失败状态，避免重复触发自动重试
+        loadFailed = true
+        isBuffering = false
+        isPlaying = false   // 实际已无声：锁屏/UI 同步为暂停态，避免「显示播放中但无声音」
+        bufferingStallStart = nil
+        updateNowPlaying(force: true)
+        guard let trackId = current?.id, autoRetriedTrackId != trackId else { return }
+        autoRetriedTrackId = trackId
+        // 延迟 2s 自动重试一次；期间用户手动切歌/重试成功则取消
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self,
+                  self.current?.id == trackId,   // 仍是同一首歌（未手动切走）
+                  self.loadFailed else { return } // 期间未恢复（手动重试成功则跳过）
+            self.playCurrent(flushReason: .heartbeat)
+        }
     }
 
     /// 从搜索/发现页直接播放普通流歌曲：若当前处于「我的喜欢/新鲜」模式，
@@ -468,6 +542,9 @@ final class PlayerManager: NSObject, ObservableObject {
 
     private func playCurrent(flushReason: ListenFlushReason? = nil) {
         guard let current = current else { return }
+        // 取消上一首的加载任务（快速连续切歌时旧签名 URL 请求不再继续）
+        loadTask?.cancel()
+        loadTask = nil
         // 先结算上一首的收听：真正切歌才可能产生“跳过”负向信号；
         // 同一首歌重播（单曲循环/音效重载）只结算有效收听，不算跳过
         let sameTrack = (listen.trackId == current.id)
@@ -475,6 +552,8 @@ final class PlayerManager: NSObject, ObservableObject {
         // 新歌：重置收听状态；同一首歌重播：保留累计（用于“听了几遍”）
         if !sameTrack {
             listen = ListenState(trackId: current.id)
+            // 新歌重新获得一次自动重试机会（自动重试按歌曲 id 防重）
+            autoRetriedTrackId = nil
         }
         usingEngine = (selectedEQ == "3D 环绕")
         // 状态立即重置，UI 先反馈（避免切歌后旧状态残留）
@@ -487,6 +566,7 @@ final class PlayerManager: NSObject, ObservableObject {
         loadFailed = false
         pendingArtwork = nil
         currentArtwork = nil
+        bufferingStallStart = nil
 
         // 关键：切歌瞬间同步终止上一首的播放与加载，而不是等新歌 URL 就绪后再替换——
         // 1) AVPlayer：清空当前 item，立刻断开旧音频流（正在进行的缓冲/播放立即停止）
@@ -497,7 +577,7 @@ final class PlayerManager: NSObject, ObservableObject {
         player.replaceCurrentItem(with: nil)
         enginePlayer.stop()
 
-        Task {
+        let task = Task {
             // 优先获取签名时效播放 URL（防链接泄露/盗链），失败自动回退普通 URL
             let url = await API.signedStreamURL(for: current.id)
             guard !Task.isCancelled else { return }
@@ -525,6 +605,13 @@ final class PlayerManager: NSObject, ObservableObject {
                         self?.isBuffering = loading
                         if !loading { self?.bufferProgress = 1 }
                     }
+                    // 3D 引擎加载失败也要走统一自愈（此前只 print，UI 无感知 → 静默卡死）
+                    self.enginePlayer.onLoadFailed = { [weak self] in
+                        guard let self else { return }
+                        DispatchQueue.main.async {
+                            self.handlePlaybackFailure()
+                        }
+                    }
                     self.enginePlayer.load(url: url, mode: .surround3D)
                 } else {
                     self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
@@ -533,6 +620,7 @@ final class PlayerManager: NSObject, ObservableObject {
                 self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
             }
         }
+        loadTask = task
         loadArtworkIfNeeded()
         Task { await API.reportPlay(current.id) }
     }
@@ -562,31 +650,35 @@ final class PlayerManager: NSObject, ObservableObject {
         center.previousTrackCommand.isEnabled = true
         center.changePlaybackPositionCommand.isEnabled = true
 
+        // MPRemoteCommandCenter 的回调在任意线程触发，
+        // 而 @Published 状态的写入必须在主线程，否则存在数据竞争。
+        // 所有命令统一转发回主线程执行。
         center.playCommand.addTarget { [weak self] _ in
-            self?.resumePlayback()
+            DispatchQueue.main.async { self?.resumePlayback() }
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            self?.pausePlayback()
+            DispatchQueue.main.async { self?.pausePlayback() }
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            self?.toggle()
+            DispatchQueue.main.async { self?.toggle() }
             return .success
         }
         center.nextTrackCommand.addTarget { [weak self] _ in
-            self?.next()
+            DispatchQueue.main.async { self?.next() }
             return .success
         }
         center.previousTrackCommand.addTarget { [weak self] _ in
-            self?.previous()
+            DispatchQueue.main.async { self?.previous() }
             return .success
         }
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let e = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
-            self?.seek(toSeconds: e.positionTime)
+            let seconds = e.positionTime
+            DispatchQueue.main.async { self?.seek(toSeconds: seconds) }
             return .success
         }
     }
@@ -622,7 +714,12 @@ final class PlayerManager: NSObject, ObservableObject {
 
     /// 恢复播放：按当前播放器分派（3D 环绕 → enginePlayer；原音 → AVPlayer）。
     /// 锁屏/通知栏/来电恢复都走这里，避免双播放器同播导致音量叠加。
+    /// 加载失败状态下点播放 = 重试加载（当前无有效 item，直接 play 会空转假播放）。
     private func resumePlayback() {
+        if loadFailed {
+            reloadCurrent()
+            return
+        }
         if usingEngine {
             enginePlayer.play()
         } else {

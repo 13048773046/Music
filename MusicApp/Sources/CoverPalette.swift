@@ -3,17 +3,14 @@ import CoreImage
 
 /// 从歌曲封面提取主色作为播放页背景（带缓存）
 enum CoverPalette {
-    private static var cache: [String: UIColor] = [:]
-    private static let lock = NSLock()
+    /// NSCache 自动淘汰（内存压力/上限），线程安全无需自加锁
+    private static let cache = NSCache<NSString, UIColor>()
     /// CIContext 创建成本高（GPU/CPU 上下文初始化），全局复用一个。
     /// CIContext 是线程安全的，可跨线程共享。
     private static let context = CIContext(options: [.workingColorSpace: NSNull()])
 
     static func color(for id: String, from url: URL) async -> UIColor {
-        lock.lock()
-        let cached = cache[id]
-        lock.unlock()
-        if let cached {
+        if let cached = cache.object(forKey: id as NSString) {
             return cached
         }
         guard let (data, _) = try? await URLSession.shared.data(from: url),
@@ -21,10 +18,13 @@ enum CoverPalette {
               let color = extract(from: image) else {
             return .systemGray5
         }
-        lock.lock()
-        cache[id] = color
-        lock.unlock()
+        cache.setObject(color, forKey: id as NSString)
         return color
+    }
+
+    /// 清空主色缓存（内存警告时调用）
+    static func clearCache() {
+        cache.removeAllObjects()
     }
 
     /// 用 CIAreaAverage 取封面平均色作为主色

@@ -55,6 +55,8 @@ final class AudioEnginePlayer {
     var onProgress: ((Double, Double) -> Void)?   // (currentSeconds, durationSeconds)
     var onCompletion: (() -> Void)?
     var onLoadingChanged: ((Bool) -> Void)?
+    /// 加载/播放失败回调（下载失败、文件损坏等）：上层据此进入失败自愈（重试 UI + 自动重试）
+    var onLoadFailed: (() -> Void)?
 
     /// 整曲下载用共享会话：避免每次切歌新建 URLSession（每个 session 自带连接池与资源，
     /// 频繁新建会造成资源浪费与潜在泄漏）。downloadTask 会把整曲下载到临时文件，缓存策略仅影响 URL 缓存命中。
@@ -170,11 +172,17 @@ final class AudioEnginePlayer {
             self.pendingURL = nil
             if let error = error {
                 print("[AudioEngine] download error: \(error)")
-                DispatchQueue.main.async { self.onLoadingChanged?(false) }
+                DispatchQueue.main.async {
+                    self.onLoadingChanged?(false)
+                    self.onLoadFailed?()   // 上层自愈：重试 UI + 有限自动重试
+                }
                 return
             }
             guard let tempURL = tempURL else {
-                DispatchQueue.main.async { self.onLoadingChanged?(false) }
+                DispatchQueue.main.async {
+                    self.onLoadingChanged?(false)
+                    self.onLoadFailed?()
+                }
                 return
             }
             do {
@@ -199,7 +207,10 @@ final class AudioEnginePlayer {
                 DispatchQueue.main.async { self.onLoadingChanged?(false) }
             } catch {
                 print("[AudioEngine] load error: \(error)")
-                DispatchQueue.main.async { self.onLoadingChanged?(false) }
+                DispatchQueue.main.async {
+                    self.onLoadingChanged?(false)
+                    self.onLoadFailed?()
+                }
             }
         }
         currentTask = task
@@ -248,6 +259,11 @@ final class AudioEnginePlayer {
         isPlaying = false
         pausedFrame = 0
         stopTimer()
+        // 释放已打开音频文件句柄与格式引用（切歌后旧文件不再被引用，
+        // 避免文件句柄残留导致磁盘/内存资源占用）
+        audioFile = nil
+        fileFormat = nil
+        totalFrames = 0
         if engine.isRunning {
             engine.pause()
         }

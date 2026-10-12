@@ -91,19 +91,35 @@ struct VerticalPager: UIViewControllerRepresentable {
         /// 期间 updateUIViewController 不得程序化回跳，否则会与手势索引打架。
         var isUserPaging = false
 
+        // MARK: 页缓存 LRU 上限（企业级内存防护）
+        /// 访问顺序：最近访问在前（LRU 淘汰依据）
+        private var accessOrder: [Int] = []
+        /// 缓存上限：超过后淘汰最久未访问且不在当前页附近的页面。
+        /// 防止长滑数百首后 600+ 个 UIHostingController 常驻内存。
+        private let maxCachedPages = 32
+        /// 受保护范围：当前页 ± 3（覆盖 UIPageViewController 可见页 + 滑动预取区）
+        private var protectedRange: ClosedRange<Int> {
+            let center = parent.currentIndex
+            return (center - 3)...(center + 3)
+        }
+
         init(_ parent: VerticalPager) {
             self.parent = parent
         }
 
         /// 获取/懒创建指定索引的页面控制器
         func controller(for index: Int) -> UIViewController {
-            if let existing = controllers[index] { return existing }
+            if let existing = controllers[index] {
+                touch(index)
+                return existing
+            }
             guard parent.tracks.indices.contains(index) else {
                 // 索引越界（极端竞态）：返回一个空白占位页避免崩溃
                 let hosting = UIHostingController(rootView: Color.clear)
                 hosting.view.backgroundColor = .clear
                 controllers[index] = hosting
                 indexByController[ObjectIdentifier(hosting)] = index
+                touch(index)
                 return hosting
             }
             let track = parent.tracks[index]
@@ -127,7 +143,31 @@ struct VerticalPager: UIViewControllerRepresentable {
             hosting.additionalSafeAreaInsets = UIEdgeInsets(top: -top, left: 0, bottom: -bottom, right: 0)
             controllers[index] = hosting
             indexByController[ObjectIdentifier(hosting)] = index
+            touch(index)
+            evictIfNeeded()
             return hosting
+        }
+
+        /// 标记访问并把该索引移到最前（LRU）
+        private func touch(_ index: Int) {
+            accessOrder.removeAll { $0 == index }
+            accessOrder.insert(index, at: 0)
+        }
+
+        /// 超过缓存上限时淘汰最久未访问且不在当前页附近的页面
+        private func evictIfNeeded() {
+            guard accessOrder.count > maxCachedPages else { return }
+            let protected = protectedRange
+            // 先拷贝再遍历：迭代期间修改 accessOrder 会触发「Collection 变异时枚举」崩溃
+            for index in Array(accessOrder.reversed()) where !protected.contains(index) {
+                guard controllers[index] != nil else { continue }
+                let removed = controllers.removeValue(forKey: index)
+                if let removed {
+                    indexByController.removeValue(forKey: ObjectIdentifier(removed))
+                }
+                accessOrder.removeAll { $0 == index }
+                if accessOrder.count <= maxCachedPages { break }
+            }
         }
 
         /// 控制器反查索引（O(1)）
@@ -144,6 +184,7 @@ struct VerticalPager: UIViewControllerRepresentable {
         func rebuild(tracks: [Track]) {
             controllers.removeAll()
             indexByController.removeAll()
+            accessOrder.removeAll()
             trackIDs = tracks.map { $0.id }
         }
 
