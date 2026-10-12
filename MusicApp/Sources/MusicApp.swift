@@ -305,6 +305,9 @@ struct MainTabView: View {
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { v in
+                // 侧滑抽屉只在首页（播放页）生效：发现页/我的页不响应，
+                // 避免在"我的"页面左滑误触侧边栏（那里有自己的左右滑动切页）
+                guard selection == 1 else { return }
                 let dx = v.translation.width
                 let dy = v.translation.height
                 // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑（竖滑切歌不受影响）
@@ -313,6 +316,7 @@ struct MainTabView: View {
                 drawer.updateDrag(translationX: dx)
             }
             .onEnded { v in
+                guard selection == 1 else { return }
                 drawer.finishDrag(translationX: v.translation.width,
                                  velocityX: v.velocity.width)
             }
