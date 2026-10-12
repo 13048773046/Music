@@ -9,7 +9,6 @@ import SwiftUI
 /// - 搜索相关流：搜索点击播放后建立（`searchContext` 记录关键词），
 ///   每次向后端取 10 首相关随机歌曲（相关优先，不足补全随机），
 ///   追加到播放队列；从发现页点击歌曲则切回普通全随机流。
-@MainActor
 final class Library: ObservableObject {
     static let shared = Library()
 
@@ -20,13 +19,15 @@ final class Library: ObservableObject {
     @Published var searchContext: String? = nil
     /// 是否正在拉取下一批，防止重复触发
     private var isLoadingMore = false
-    /// 进行中的首屏加载任务（class box 提供身份比较）：
+
+    /// 进行中的首屏加载任务（class box 提供身份比较；锁保护跨线程读写）：
     /// 并发调用者（启动页/首页/发现页）共享同一次加载并等待结果，
     /// 避免「双请求」或「第二个调用因防重入直接返回 → 页面永久停在 loading」。
-    private final class LoadBox {
+    private final class LoadBox: @unchecked Sendable {
         let task: Task<Void, Never>
         init(_ task: Task<Void, Never>) { self.task = task }
     }
+    private let loadLock = NSLock()
     private var inFlightLoad: LoadBox?
 
     private init() {}
@@ -38,7 +39,10 @@ final class Library: ObservableObject {
     /// - 加载失败不置 `isLoaded`，下次进入可自动重试。
     func load(force: Bool = false) async {
         if !force && isLoaded { return }
-        if let pending = inFlightLoad {
+        loadLock.lock()
+        let pending = inFlightLoad
+        loadLock.unlock()
+        if let pending {
             await pending.task.value
             return
         }
@@ -48,22 +52,28 @@ final class Library: ObservableObject {
             do {
                 // 带上当前登录用户 id，让后端返回每首歌的 commentCount 与 isLiked
                 let list = try await API.tracks(userId: AuthManager.shared.currentUser?.id)
-                self.tracks = list
-                self.isLoaded = true
-                // 首次拿到列表且播放器还没有队列时，自动播第一首
-                if PlayerManager.shared.queue.isEmpty, !list.isEmpty {
-                    PlayerManager.shared.play(list[0], in: list)
+                await MainActor.run {
+                    self.tracks = list
+                    self.isLoaded = true
+                    // 首次拿到列表且播放器还没有队列时，自动播第一首
+                    if PlayerManager.shared.queue.isEmpty, !list.isEmpty {
+                        PlayerManager.shared.play(list[0], in: list)
+                    }
                 }
             } catch {
                 // 失败静默：保持未加载状态，下次进入页面自动重试
             }
         })
+        loadLock.lock()
         inFlightLoad = box
+        loadLock.unlock()
         await box.task.value
         // 只清理自己发起的加载任务（期间可能有新的 force 加载替换了 inFlightLoad）
+        loadLock.lock()
         if inFlightLoad === box {
             inFlightLoad = nil
         }
+        loadLock.unlock()
     }
 
     /// 从发现页点击歌曲播放：切回普通全随机流（不再继续相关流）
@@ -92,11 +102,13 @@ final class Library: ObservableObject {
         do {
             let list = try await API.tracks(userId: AuthManager.shared.currentUser?.id,
                                             keyword: searchContext)
-            let queue = PlayerManager.shared.queue
-            let existing = Set(queue.map { $0.id })
-            let fresh = list.filter { !existing.contains($0.id) }
-            if !fresh.isEmpty {
-                PlayerManager.shared.queue.append(contentsOf: fresh)
+            await MainActor.run {
+                let queue = PlayerManager.shared.queue
+                let existing = Set(queue.map { $0.id })
+                let fresh = list.filter { !existing.contains($0.id) }
+                if !fresh.isEmpty {
+                    PlayerManager.shared.queue.append(contentsOf: fresh)
+                }
             }
         } catch {
             // 失败静默，下次滑动再试

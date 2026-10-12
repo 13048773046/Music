@@ -151,8 +151,8 @@ struct VerticalPager: UIViewControllerRepresentable {
         /// - 追加：无需补建（懒创建），保留已建页面（避免翻页位置跳动）
         /// - 替换：新队列变短，或新第一首已不在旧队列中 → 重建全部页
         func syncControllers(for newTracks: [Track]) -> Bool {
-            let rebuild = shouldRebuild(for: newTracks)
-            if rebuild {
+            let needRebuild = shouldRebuild(for: newTracks)
+            if needRebuild {
                 rebuild(tracks: newTracks)
                 return true
             }
