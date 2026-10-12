@@ -124,6 +124,9 @@ struct CommentSheet: View {
                                       content: text.trimmingCharacters(in: .whitespaces))
             text = ""
             await load()
+            // 行为上报：发表评论
+            let ev = API.BehaviorEvent(trackId: track.id, event: "comment", value: 1)
+            Task { await API.reportBehavior([ev]) }
         } catch {
         }
         sending = false

@@ -495,6 +495,10 @@ struct PlayerCard: View {
             let r = try await API.toggleLike(trackId: track.id, userId: uid)
             liked = r.liked
             likeCount = r.count
+            // 行为上报：点赞/取消赞（取消赞 value=-1）
+            let ev = API.BehaviorEvent(trackId: track.id, event: "like",
+                                       value: r.liked ? 1 : -1)
+            Task { await API.reportBehavior([ev]) }
         } catch {}
     }
 
@@ -503,6 +507,9 @@ struct PlayerCard: View {
         let link = await API.shareLink(for: track.id)
         let updated = await API.reportShare(track.id)
         if updated > 0 { shareCount = updated }   // 接口失败时保留本地计数，不被 0 覆盖
+        // 行为上报：分享成功
+        let ev = API.BehaviorEvent(trackId: track.id, event: "share", value: 1)
+        Task { await API.reportBehavior([ev]) }
         if let link {
             shareItem = SharePayload(text: "《\(track.title)》@流萤音乐 \(link)")
         } else {
