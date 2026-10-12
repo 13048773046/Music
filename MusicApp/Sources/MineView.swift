@@ -29,6 +29,8 @@ struct MineView: View {
 
     /// 滑动窗体当前页：0=作品 1=点赞 2=评论
     @State private var selectedTab = 0
+    /// 上一次所在页：用于左右切换时的过渡动画方向
+    @State private var lastTab = 0
     @Namespace private var sliderNS
 
     @State private var showImporter = false
@@ -58,15 +60,19 @@ struct MineView: View {
             ZStack {
                 Theme.background.ignoresSafeArea()
 
-                // 沉浸式（与首页一致）：内容延伸到状态栏，背景图铺到屏幕最顶部，
-                // 状态栏直接悬浮在背景图上
-                VStack(spacing: 0) {
-                    userHeader(topInset: Self.statusBarHeight)
-                    tabIndicator
-                    tabPages
-                    bottomBar
+                // 整页滚动（与首页一致沉浸式）：头部/指示器/列表全部在同一个 ScrollView 里，
+                // 上下滑动时整个页面（背景图、用户信息、指示器）一起滚动，而不是只有列表滚。
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        userHeader(topInset: Self.statusBarHeight)
+                        tabIndicator
+                        currentPage
+                        bottomBar
+                    }
                 }
                 .ignoresSafeArea(edges: .top)
+                .refreshable { await refreshAll() }
+                .simultaneousGesture(horizontalSwipe)
             }
             .navigationBarHidden(true)
             .task { await initialLoad() }
@@ -245,7 +251,7 @@ struct MineView: View {
     private func segItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
-            withAnimation(.easeInOut(duration: 0.3)) { selectedTab = index }
+            switchTab(index)
         } label: {
             VStack(spacing: 5) {
                 HStack(spacing: 4) {
@@ -276,94 +282,107 @@ struct MineView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 滑动窗体（TabView 三页：作品 / 点赞 / 评论）
+    // MARK: - 当前页内容（整页滚动：只渲染选中页，左右滑动切换带过渡动画）
 
-    private var tabPages: some View {
-        // 自定义 binding：滑动切换时带动画，滑块平滑跟随（而不是直接闪到新位置）
-        TabView(selection: Binding(
-            get: { selectedTab },
-            set: { newValue in
-                withAnimation(.easeInOut(duration: 0.3)) { selectedTab = newValue }
-            }
-        )) {
-            worksPage
-                .tag(0)
-            likesPage
-                .tag(1)
-            commentsPage
-                .tag(2)
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    /// 切换页：记录上一页用于过渡方向，并带动画切换（指示器滑块同步平滑移动）
+    private func switchTab(_ new: Int) {
+        guard new >= 0, new <= 2, new != selectedTab else { return }
+        lastTab = selectedTab
+        withAnimation(.easeInOut(duration: 0.28)) { selectedTab = new }
     }
 
-    // MARK: - 作品页（分页加载）
-
-    private var worksPage: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if works.failed {
-                    loadFailedHint
-                } else if works.isEmpty {
-                    emptyHint("还没有上传歌曲")
-                } else {
-                    ForEach(works.items, id: \.id) { t in
-                        trackRow(t, queue: works.items)
-                    }
-                    loadMoreFooter(pager: works) { await loadWorks(reset: false) }
-                }
+    /// 左右滑动手势：横向主导时切换上一页/下一页（纵向仍交给整页滚动）
+    private var horizontalSwipe: some Gesture {
+        DragGesture(minimumDistance: 30)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > abs(dy), abs(dx) > 50 else { return }
+                let newTab = dx < 0 ? min(selectedTab + 1, 2) : max(selectedTab - 1, 0)
+                switchTab(newTab)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 4)
-            .padding(.bottom, 16)
+    }
+
+    @ViewBuilder
+    private var currentPage: some View {
+        // 过渡方向：向右切（新页从右滑入、旧页向左滑出）；向左切反之
+        let dir: Edge = selectedTab > lastTab ? .trailing : .leading
+        let rev: Edge = dir == .trailing ? .leading : .trailing
+        ZStack {
+            if selectedTab == 0 {
+                worksList
+                    .transition(.asymmetric(insertion: .move(edge: dir),
+                                            removal: .move(edge: rev)))
+            } else if selectedTab == 1 {
+                likesList
+                    .transition(.asymmetric(insertion: .move(edge: dir),
+                                            removal: .move(edge: rev)))
+            } else {
+                commentsList
+                    .transition(.asymmetric(insertion: .move(edge: dir),
+                                            removal: .move(edge: rev)))
+            }
         }
-        .refreshable { await refreshWorks() }
+    }
+
+    // MARK: - 作品页（分页加载，直接在外层整页 ScrollView 中惰性渲染）
+
+    private var worksList: some View {
+        LazyVStack(spacing: 0) {
+            if works.failed {
+                loadFailedHint
+            } else if works.isEmpty {
+                emptyHint("还没有上传歌曲")
+            } else {
+                ForEach(works.items, id: \.id) { t in
+                    trackRow(t, queue: works.items)
+                }
+                loadMoreFooter(pager: works) { await loadWorks(reset: false) }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
     }
 
     // MARK: - 点赞页（分页加载）
 
-    private var likesPage: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if likes.failed {
-                    loadFailedHint
-                } else if likes.isEmpty {
-                    emptyHint("还没有点赞过歌曲")
-                } else {
-                    ForEach(likes.items, id: \.id) { t in
-                        trackRow(t, queue: likes.items)
-                    }
-                    loadMoreFooter(pager: likes) { await loadLikes(reset: false) }
+    private var likesList: some View {
+        LazyVStack(spacing: 0) {
+            if likes.failed {
+                loadFailedHint
+            } else if likes.isEmpty {
+                emptyHint("还没有点赞过歌曲")
+            } else {
+                ForEach(likes.items, id: \.id) { t in
+                    trackRow(t, queue: likes.items)
                 }
+                loadMoreFooter(pager: likes) { await loadLikes(reset: false) }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 4)
-            .padding(.bottom, 16)
         }
-        .refreshable { await refreshLikes() }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
     }
 
     // MARK: - 评论页（分页加载）
 
-    private var commentsPage: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if comments.failed {
-                    loadFailedHint
-                } else if comments.isEmpty {
-                    emptyHint("还没有发表过评论")
-                } else {
-                    ForEach(comments.items, id: \.id) { c in
-                        commentRow(c)
-                    }
-                    loadMoreFooter(pager: comments) { await loadComments(reset: false) }
+    private var commentsList: some View {
+        LazyVStack(spacing: 0) {
+            if comments.failed {
+                loadFailedHint
+            } else if comments.isEmpty {
+                emptyHint("还没有发表过评论")
+            } else {
+                ForEach(comments.items, id: \.id) { c in
+                    commentRow(c)
                 }
+                loadMoreFooter(pager: comments) { await loadComments(reset: false) }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 4)
-            .padding(.bottom, 16)
         }
-        .refreshable { await refreshComments() }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
     }
 
     // MARK: - 底部（关于 + 退出登录）
