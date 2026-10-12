@@ -140,7 +140,7 @@ struct MainTabView: View {
             }
             .onEnded { v in
                 drawer.finishDrag(translationX: v.translation.width,
-                                 velocityX: v.predictedEndTranslation.width)
+                                 velocityX: v.velocity.width)
             }
     }
 }

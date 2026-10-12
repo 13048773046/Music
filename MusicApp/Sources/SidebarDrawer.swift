@@ -44,17 +44,24 @@ final class SidebarDrawerController: NSObject, ObservableObject {
         progress = min(1, max(0, (base + dx) / width))
     }
 
-    func finishDrag(translationX dx: CGFloat, velocityX predicted: CGFloat) {
+    func finishDrag(translationX dx: CGFloat, velocityX rawVelocity: CGFloat) {
         guard isDragging else { return }
         isDragging = false
-        // 方向判定：拖过 1/4 宽度或预测位移超 30% 宽度（快速甩动）→ 打开/关闭，否则回弹
+        // 归一化瞬时速度（单位 progress/秒）：区分「快速甩动 fling」与「慢速拖拽」
+        let v = rawVelocity / width
+        // fling 阈值：每秒 progress 变化超过 0.5（约 175px/s）视为快速甩动，
+        // 直接按速度方向落位，不再纠结手指当前拖了多少距离——甩一下就走
+        let flingThreshold: CGFloat = 0.5
         let shouldOpen: Bool
-        if dragStartOpen {
-            shouldOpen = !(dx < -width * 0.25 || predicted < -width * 0.3)
+        if v > flingThreshold {
+            shouldOpen = true          // 向右快甩 → 打开
+        } else if v < -flingThreshold {
+            shouldOpen = false         // 向左快甩 → 关闭
         } else {
-            shouldOpen = (dx > width * 0.25 || predicted > width * 0.3)
+            // 慢速拖拽：按当前位置是否过半决定落位（跟手拖到 49% 松手就关，51% 就开）
+            shouldOpen = progress > 0.5
         }
-        animate(to: shouldOpen ? 1 : 0, velocity: predicted / width)
+        animate(to: shouldOpen ? 1 : 0, velocity: v)
     }
 
     /// 按钮 / 遮罩点击触发的落位动画（无初始速度）
@@ -73,9 +80,11 @@ final class SidebarDrawerController: NSObject, ObservableObject {
             return
         }
         // 官方交互式弹簧时序：initialVelocity 继承手指当前速度，落位无「零初速停顿」
-        let timing = UISpringTimingParameters(dampingRatio: 0.86,
-                                              initialVelocity: CGVector(dx: velocity, dy: 0))
-        animator = UIViewPropertyAnimator(duration: 0.6, timingParameters: timing)
+        // 速度钳制在 ±2.0 以内：避免快速甩动时弹簧「嗖」地飞出去，整体节奏保持舒缓
+        let clamped = max(-2.0, min(2.0, velocity))
+        let timing = UISpringTimingParameters(dampingRatio: 0.82,
+                                              initialVelocity: CGVector(dx: clamped, dy: 0))
+        animator = UIViewPropertyAnimator(duration: 0.65, timingParameters: timing)
         animator?.addAnimations { [weak self] in
             // 动画结束时确保精确到位（fractionComplete 采样已接近目标）
             self?.progress = self?.endProgress ?? 0
