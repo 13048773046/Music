@@ -28,7 +28,6 @@ struct MineView: View {
 
     /// 滑动窗体当前页：0=作品 1=点赞 2=评论
     @State private var selectedTab = 0
-    @Namespace private var tabIndicatorNS
 
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
@@ -97,21 +96,22 @@ struct MineView: View {
     private var userHeader: some View {
         let u = auth.currentUser
         return VStack(spacing: 0) {
-            // 背景图 + 头像行（头像中心压背景图下沿）
+            // 背景图 + 头像行（头像中心压背景图下沿；背景图底部两角圆角衔接）
             ZStack(alignment: .topLeading) {
-                // 背景图（无图时深色占位）
+                // 背景图（无图时深色占位），高 160，底部圆角 24
                 Group {
                     if let bgURL = u?.backgroundURL {
                         CachedCoverImage(url: bgURL, title: u?.name ?? "",
                                          placeholder: Rectangle().fill(Theme.card))
-                            .frame(height: 112)
+                            .frame(height: 160)
                             .clipped()
                     } else {
                         Rectangle()
                             .fill(Theme.card)
-                            .frame(height: 112)
+                            .frame(height: 160)
                     }
                 }
+                .clipShape(BottomRoundedShape(radius: 24))
 
                 HStack(alignment: .center, spacing: 14) {
                     // 头像
@@ -126,13 +126,13 @@ struct MineView: View {
                                         .foregroundColor(Theme.accent))
                         )
                     }
-                    .frame(width: 68, height: 68)
+                    .frame(width: 72, height: 72)
                     .clipShape(Circle())
                     .overlay(Circle().stroke(Theme.background, lineWidth: 2.5))
 
                     VStack(alignment: .leading, spacing: 5) {
                         Text(u?.name ?? "未登录")
-                            .font(.system(size: 19, weight: .bold))
+                            .font(.system(size: 20, weight: .bold))
                             .foregroundColor(.white)
                         HStack(spacing: 8) {
                             if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
@@ -180,9 +180,9 @@ struct MineView: View {
                 }
                 .padding(.leading, 20)
                 .padding(.trailing, 20)
-                .padding(.top, 112 - 34)   // 头像中心压在背景图下沿
+                .padding(.top, 160 - 36)   // 头像中心压在背景图下沿，信息整体下移
             }
-            .frame(height: 112 + 34)       // 背景 + 头像露出下半部
+            .frame(height: 160 + 36)       // 背景 + 头像露出下半部
 
             // 签名 + 听歌时长（背景图下方，页面背景上）
             VStack(alignment: .leading, spacing: 10) {
@@ -208,55 +208,43 @@ struct MineView: View {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.top, 12)
+            .padding(.top, 14)
             .padding(.bottom, 14)
         }
     }
 
-    // MARK: - 指示器（胶囊分段控件：作品 | 点赞 | 评论，滑块平滑跟随）
+    // MARK: - 指示器（紧凑版：作品 | 点赞 | 评论，选中项绿色加粗 + 底部小短条）
 
     private var tabIndicator: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 18) {
             segItem(title: "作品", count: works.total, index: 0)
             segItem(title: "点赞", count: likes.total, index: 1)
             segItem(title: "评论", count: comments.total, index: 2)
         }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Theme.card)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Theme.cardBorder, lineWidth: 1)
-                )
-        )
         .padding(.horizontal, 20)
-        .padding(.bottom, 10)
+        .padding(.bottom, 8)
     }
 
     private func segItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
-            withAnimation(.easeInOut(duration: 0.25)) { selectedTab = index }
+            withAnimation(.easeInOut(duration: 0.2)) { selectedTab = index }
         } label: {
-            ZStack {
-                // 选中滑块：平滑移动到当前 tab（matchedGeometryEffect）
-                if selected {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(Theme.accentSoft)
-                        .matchedGeometryEffect(id: "seg-pill", in: tabIndicatorNS)
-                }
-                HStack(spacing: 5) {
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
                     Text(title)
-                        .font(.system(size: 14, weight: selected ? .bold : .medium))
+                        .font(.system(size: 13, weight: selected ? .bold : .medium))
                         .foregroundColor(selected ? Theme.accent : Theme.textSecondary)
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundColor(selected ? Theme.accent : Theme.textTertiary)
                 }
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity)
+                // 选中态小短条
+                Capsule()
+                    .fill(selected ? Theme.accent : Color.clear)
+                    .frame(width: 26, height: 3)
             }
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -417,7 +405,11 @@ struct MineView: View {
             }
             .padding(.vertical, 10)
             .overlay(alignment: .bottom) {
-                Divider().background(Theme.cardBorder)
+                // 行间分割线：必须显式指定为全宽横线（Divider 在 overlay 中会渲染成竖线）
+                Rectangle()
+                    .fill(Theme.cardBorder)
+                    .frame(height: 0.5)
+                    .frame(maxWidth: .infinity)
             }
         }
         .buttonStyle(.plain)
@@ -453,7 +445,11 @@ struct MineView: View {
             }
             .padding(.vertical, 10)
             .overlay(alignment: .bottom) {
-                Divider().background(Theme.cardBorder)
+                // 行间分割线：显式全宽横线，避免 Divider 渲染成竖线
+                Rectangle()
+                    .fill(Theme.cardBorder)
+                    .frame(height: 0.5)
+                    .frame(maxWidth: .infinity)
             }
         }
         .buttonStyle(.plain)
@@ -643,5 +639,25 @@ struct MineView: View {
                           commentCount: nil, userId: nil, userName: nil,
                           hasLyric: nil, isLiked: nil)
         player.play(track, in: [track])
+    }
+}
+
+/// 只圆底部两角的形状：用户背景图与下方信息区衔接处的圆角
+struct BottomRoundedShape: Shape {
+    var radius: CGFloat = 24
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(radius, rect.height / 2)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY),
+                       control: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - r),
+                       control: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
