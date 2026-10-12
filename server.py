@@ -934,6 +934,65 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 self._json(200, {"totalSeconds": total_sec, "trackCount": track_cnt})
                 return
 
+            # 我的上传歌曲列表
+            if u.path == "/api/my-tracks":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"list": []})
+                    return
+                rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.dur,t.play_count,t.like_count
+                                    FROM tracks t WHERE t.user_id=? AND t.offline=0
+                                    ORDER BY t.created DESC""", (uid,)).fetchall()
+                c.close()
+                lst = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3] or "",
+                        "cover": "1" if r[4] else "", "dur": r[5],
+                        "playCount": r[6] or 0, "likeCount": r[7] or 0} for r in rows]
+                self._json(200, {"list": lst})
+                return
+
+            # 我点赞的歌曲列表
+            if u.path == "/api/my-likes":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"list": []})
+                    return
+                rows1 = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.dur,t.play_count,t.like_count
+                                    FROM likes l JOIN tracks t ON t.id=l.track_id
+                                    WHERE l.user_id=? AND t.offline=0 ORDER BY l.created DESC""", (uid,)).fetchall()
+                rows2 = c.execute("""SELECT c.id,c.title,c.artist,c.album,'1',c.duration,c.play_count,c.like_count
+                                    FROM likes l JOIN collected_tracks c ON c.id=l.track_id
+                                    WHERE l.user_id=? AND c.offline=0 ORDER BY l.created DESC""", (uid,)).fetchall()
+                c.close()
+                lst = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3] or "",
+                        "cover": "1", "dur": r[5], "playCount": r[6] or 0, "likeCount": r[7] or 0}
+                       for r in rows1 + rows2]
+                self._json(200, {"list": lst})
+                return
+
+            # 我评论过的歌曲列表
+            if u.path == "/api/my-comments":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"list": []})
+                    return
+                rows = c.execute("""SELECT c.track_id, c.content, c.created,
+                                   COALESCE((SELECT title FROM tracks WHERE id=c.track_id),
+                                            (SELECT title FROM collected_tracks WHERE id=c.track_id)),
+                                   COALESCE((SELECT artist FROM tracks WHERE id=c.track_id),
+                                            (SELECT artist FROM collected_tracks WHERE id=c.track_id))
+                                   FROM comments c WHERE c.user_id=? ORDER BY c.created DESC""", (uid,)).fetchall()
+                c.close()
+                lst = [{"trackId": r[0], "content": r[1], "created": r[2],
+                        "title": r[3] or "", "artist": r[4] or ""} for r in rows]
+                self._json(200, {"list": lst})
+                return
+
             # ---------- 采集控制台 H5 页面 ----------
             if u.path == "/collect.html":
                 html = """<!doctype html>

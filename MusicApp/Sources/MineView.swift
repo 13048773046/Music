@@ -6,6 +6,9 @@ struct MineView: View {
     @EnvironmentObject private var auth: AuthManager
     @State private var trackCount: Int?
     @State private var listenSeconds: Int = 0
+    @State private var myTracks: [[String: Any]] = []
+    @State private var myLikes: [[String: Any]] = []
+    @State private var myComments: [[String: Any]] = []
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
     @State private var showUploadSheet = false
@@ -26,6 +29,12 @@ struct MineView: View {
                         userCard
                         // 统计卡片
                         statsRow
+                        // 我的上传作品
+                        myTracksSection
+                        // 我点赞的歌
+                        myLikesSection
+                        // 我评论过的歌
+                        myCommentsSection
                         // 功能入口
                         actionCard
                         // 关于
@@ -44,6 +53,11 @@ struct MineView: View {
                     await loadCount()
                 }
                 await loadListenStats()
+                await loadMyData()
+            }
+            .refreshable {
+                await loadListenStats()
+                await loadMyData()
             }
         }
         .fileImporter(
@@ -241,6 +255,151 @@ struct MineView: View {
         }
     }
 
+    // MARK: - 我的上传作品
+    private var myTracksSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("我的作品")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Text("\(myTracks.count) 首")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textTertiary)
+            }
+            if myTracks.isEmpty {
+                Text("还没有上传歌曲")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.textTertiary)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                ForEach(myTracks.indices, id: \.self) { i in
+                    let t = myTracks[i]
+                    Button {
+                        if let tid = t["id"] as? String,
+                           let track = Library.shared.tracks.first(where: { $0.id == tid }) {
+                            player.play(track, in: Library.shared.tracks)
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Theme.accent.opacity(0.2))
+                                .frame(width: 40, height: 40)
+                                .overlay(Image(systemName: "music.note").font(.system(size: 14)).foregroundColor(Theme.accent))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(t["title"] as? String ?? "")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(Theme.textPrimary)
+                                    .lineLimit(1)
+                                Text(t["artist"] as? String ?? "")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.textTertiary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Text("\(t["playCount"] as? Int ?? 0) 播放")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textTertiary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+        }
+        .softCard(radius: 20, padding: 16)
+    }
+
+    // MARK: - 我点赞的歌
+    private var myLikesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("我的喜欢")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Text("\(myLikes.count) 首")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textTertiary)
+            }
+            if myLikes.isEmpty {
+                Text("还没有点赞过歌曲")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.textTertiary)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                ForEach(myLikes.indices, id: \.self) { i in
+                    let t = myLikes[i]
+                    Button {
+                        if let tid = t["id"] as? String,
+                           let track = Library.shared.tracks.first(where: { $0.id == tid }) {
+                            player.play(track, in: Library.shared.tracks)
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Theme.peach.opacity(0.2))
+                                .frame(width: 40, height: 40)
+                                .overlay(Image(systemName: "heart.fill").font(.system(size: 14)).foregroundColor(Theme.peach))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(t["title"] as? String ?? "")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(Theme.textPrimary)
+                                    .lineLimit(1)
+                                Text(t["artist"] as? String ?? "")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.textTertiary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+        }
+        .softCard(radius: 20, padding: 16)
+    }
+
+    // MARK: - 我评论过的歌
+    private var myCommentsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("我的评论")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Text("\(myComments.count) 条")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textTertiary)
+            }
+            if myComments.isEmpty {
+                Text("还没有发表过评论")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.textTertiary)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                ForEach(myComments.indices, id: \.self) { i in
+                    let c = myComments[i]
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(c["title"] as? String ?? "")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+                        Text("「\(c["content"] as? String ?? "")」")
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(2)
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .softCard(radius: 20, padding: 16)
+    }
+
     private func statCard(icon: String, value: String, label: String, iconColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
@@ -345,6 +504,31 @@ struct MineView: View {
             let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             listenSeconds = (obj?["totalSeconds"] as? Int) ?? 0
         } catch {}
+    }
+
+    private func loadMyData() async {
+        guard let token = auth.authToken else { return }
+        let endpoints = [
+            ("my-tracks", \Self.myTracks),
+            ("my-likes", \Self.myLikes),
+            ("my-comments", \Self.myComments)
+        ]
+        for (path, _) in endpoints {
+            guard let url = URL(string: "https://www.dbmt999.asia/music/api/\(path)") else { continue }
+            var req = URLRequest(url: url)
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            do {
+                let (data, _) = try await URLSession.shared.data(for: req)
+                let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                if let list = obj?["list"] as? [[String: Any]] {
+                    await MainActor.run {
+                        if path == "my-tracks" { myTracks = list }
+                        else if path == "my-likes" { myLikes = list }
+                        else { myComments = list }
+                    }
+                }
+            } catch {}
+        }
     }
 
     /// 听歌时长格式化：不足1小时显示分钟，否则显示小时

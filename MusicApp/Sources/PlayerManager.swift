@@ -653,30 +653,28 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
-    /// 结算当前收听段：进度 ≥ 50%（或完整听完）记为有效收听；
-    /// 切走时进度 < 30% 且听了 ≥ 5 秒记为“跳过”（负向信号）；
-    /// 30% ~ 50% 之间不记录（听 1/3 不算偏好，听 2/3 才算）
+    /// 结算当前收听段：所有播放时长都累计上报 listen（用于听歌时长统计）；
+    /// 切走时进度 < 30% 且听了 ≥ 5 秒额外记为"跳过"（负向信号）
     private func flushListen(_ reason: ListenFlushReason) {
         guard !listen.trackId.isEmpty else { return }
         let delta = listen.seconds - listen.reported
         guard delta >= 1 else { return }
         let frac = duration > 0 ? min(listen.seconds / duration, 1.0) : 0
-        if frac >= 0.5 || listen.completedPlays >= 1 {
-            let meta = API.BehaviorEvent.metaJSON([
-                "fraction": (frac * 100).rounded() / 100,
-                "plays": listen.completedPlays,
-                "seconds": Int(listen.seconds)
-            ])
-            let ev = API.BehaviorEvent(trackId: listen.trackId, event: "listen",
-                                       value: delta, meta: meta)
-            Task { await API.reportBehavior([ev]) }
-            listen.reported = listen.seconds
-        } else if reason == .switchTrack && delta >= 5 && frac < 0.3 {
-            let meta = API.BehaviorEvent.metaJSON(["fraction": (frac * 100).rounded() / 100])
-            let ev = API.BehaviorEvent(trackId: listen.trackId, event: "skip",
-                                       value: 0, meta: meta)
-            Task { await API.reportBehavior([ev]) }
-            listen.reported = listen.seconds
+        // 所有播放时长都上报 listen（听歌时长统计用），不管听了多少
+        let meta = API.BehaviorEvent.metaJSON([
+            "fraction": (frac * 100).rounded() / 100,
+            "plays": listen.completedPlays,
+            "seconds": Int(listen.seconds)
+        ])
+        let ev = API.BehaviorEvent(trackId: listen.trackId, event: "listen",
+                                   value: delta, meta: meta)
+        Task { await API.reportBehavior([ev]) }
+        listen.reported = listen.seconds
+        // 切歌且听的时间很短（<30%），额外记 skip 负向信号
+        if reason == .switchTrack && delta >= 5 && frac < 0.3 {
+            let skipEv = API.BehaviorEvent(trackId: listen.trackId, event: "skip",
+                                           value: 0, meta: API.BehaviorEvent.metaJSON(["fraction": (frac * 100).rounded() / 100]))
+            Task { await API.reportBehavior([skipEv]) }
         }
     }
 
