@@ -36,7 +36,7 @@ struct MineView: View {
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
     @State private var showUploadSheet = false
-    @State private var showProfileEdit = false
+    @State private var showSettings = false
 
     private static let pageSize = 20
 
@@ -100,11 +100,10 @@ struct MineView: View {
                 .environmentObject(auth)
             }
         }
-        .sheet(isPresented: $showProfileEdit) {
-            NavigationStack {
-                ProfileEditView()
-                    .environmentObject(auth)
-            }
+        // 设置页（独立页面，非弹窗）
+        .navigationDestination(isPresented: $showSettings) {
+            SettingsView()
+                .environmentObject(auth)
         }
         .tint(Theme.accent)
     }
@@ -132,7 +131,7 @@ struct MineView: View {
                 .frame(maxWidth: .infinity, alignment: .top)
                 .clipShape(BottomRoundedShape(radius: 24))
 
-                // 右上角：上传 + 编辑按钮（背景图右上角）
+                // 右上角：上传 + 设置按钮（背景图右上角）
                 HStack(spacing: 10) {
                     Button {
                         showImporter = true
@@ -148,14 +147,15 @@ struct MineView: View {
                     }
                     .buttonStyle(.plain)
 
+                    // 设置入口：跳转设置页（修改信息/修改密码/缓存/更新/退出登录）
                     Button {
-                        showProfileEdit = true
+                        showSettings = true
                     } label: {
                         ZStack {
                             RoundedRectangle(cornerRadius: 11, style: .continuous)
                                 .fill(Color.black.opacity(0.35))
-                            Image(systemName: "pencil")
-                                .font(.system(size: 14, weight: .semibold))
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(.white)
                         }
                         .frame(width: 40, height: 40)

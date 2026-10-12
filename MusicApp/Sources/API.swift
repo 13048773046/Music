@@ -402,6 +402,60 @@ enum API {
                                     authed: true)
     }
 
+    /// 修改密码（需登录）：旧密码校验通过后更新为新密码
+    static func changePassword(old: String, new: String) async throws {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        func field(_ n: String, _ v: String) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(n)\"\r\n\r\n".utf8))
+            body.append(Data("\(v)\r\n".utf8))
+        }
+        field("old_password", old)
+        field("new_password", new)
+        body.append(Data("--\(boundary)--\r\n".utf8))
+
+        var req = URLRequest(url: base.appendingPathComponent("change-password"))
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 30
+        req.httpBody = body
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        try checkAuth(resp)
+        guard (200...299).contains(http.statusCode) else {
+            if let err = try? JSONDecoder().decode([String: String].self, from: data),
+               let msg = err["err"] {
+                throw APIError.message(msg)
+            }
+            throw URLError(.badServerResponse)
+        }
+    }
+
+    /// 版本更新检查结果（/api/check-update）
+    struct UpdateCheck: Decodable {
+        let hasUpdate: Bool
+        let id: String?
+        let title: String?
+        let content: String?
+        let version: String?
+        let forceUpdate: Int?
+        let downloadUrl: String?
+    }
+
+    /// 手动检查版本更新
+    static func checkUpdate() async -> UpdateCheck? {
+        var req = URLRequest(url: base.appendingPathComponent("check-update"))
+        req.timeoutInterval = 15
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let obj = try? JSONDecoder().decode(UpdateCheck.self, from: data) else { return nil }
+        return obj
+    }
+
     private static func submitUser(path: String, boundary: String, body: Data,
                                    authed: Bool = false) async throws -> User {
         var req = URLRequest(url: base.appendingPathComponent(path))

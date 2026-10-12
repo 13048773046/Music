@@ -121,6 +121,11 @@ final class AuthManager: ObservableObject {
         saveSession(updated)
     }
 
+    /// 修改密码（校验旧密码后更新）
+    func changePassword(old: String, new: String) async throws {
+        try await API.changePassword(old: old, new: new)
+    }
+
     private func saveSession(_ user: User) {
         // 后端 profile/update 响应不含 token：合并保留已有 token，避免覆盖丢失导致后续请求 401
         var u = user

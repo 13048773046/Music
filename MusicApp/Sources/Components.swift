@@ -69,6 +69,11 @@ final class CoverImageCache {
     func store(_ image: UIImage, for url: URL) {
         cache.setObject(image, forKey: url as NSURL)
     }
+
+    /// 清理全部封面内存缓存（设置页「清理缓存」）
+    func clear() {
+        cache.removeAllObjects()
+    }
 }
 
 /// 带内存缓存的封面图：首次下载后缓存，切页/列表重建不再重复请求

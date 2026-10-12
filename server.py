@@ -3304,6 +3304,47 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                     self._internal_error(e)
                 return
 
+            # ---------- 用户自助修改密码 ----------
+            if u.path == "/api/change-password":
+                try:
+                    if length <= 0 or length > MAX_PROFILE:
+                        self._err(413, "too large")
+                        return
+                    fields, files = self._parse_multipart(length)
+                    if fields is None:
+                        self._err(400, "need multipart")
+                        return
+                    c = db()
+                    uid, via_token = self.auth_user(c, fields)
+                    if not uid:
+                        c.close()
+                        self._err(401, "未登录或登录已过期")
+                        return
+                    old_pw = fields.get("old_password") or ""
+                    new_pw = fields.get("new_password") or ""
+                    if len(new_pw) < 6 or len(new_pw) > 64:
+                        c.close()
+                        self._err(400, "新密码长度需 6-64 位")
+                        return
+                    row = c.execute("SELECT password_hash FROM users WHERE id=?",
+                                    (uid,)).fetchone()
+                    if not row:
+                        c.close()
+                        self._err(404, "用户不存在")
+                        return
+                    if not verify_password(old_pw, row[0]):
+                        c.close()
+                        self._err(403, "旧密码不正确")
+                        return
+                    c.execute("UPDATE users SET password_hash=? WHERE id=?",
+                              (hash_password(new_pw), uid))
+                    c.close()
+                    self._json(200, {"ok": True})
+                    return
+                except Exception as e:
+                    self._internal_error(e)
+                return
+
             # ---------- 用户资料更新 ----------
             if u.path == "/api/profile/update":
                 try:
