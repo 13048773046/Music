@@ -3,10 +3,10 @@ import SwiftUI
 // MARK: - 设置页
 
 /// 设置页：从「我的」右上角齿轮进入。
-/// 分组：账号（修改用户信息 / 修改密码）、通用（清理缓存 / 检查更新）、
-/// 关于（版本 / 官网）、退出登录。
+/// 沉浸式自定义头部（与我的页一致风格），分组：账号 / 通用 / 关于 APP / 退出登录。
 struct SettingsView: View {
     @EnvironmentObject private var auth: AuthManager
+    @Environment(\.dismiss) private var dismiss
 
     @State private var showClearAlert = false
     @State private var showNoUpdate = false
@@ -24,17 +24,83 @@ struct SettingsView: View {
             Theme.background.ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 12) {
-                    accountSection
-                    generalSection
-                    aboutSection
-                    logoutButton
+                VStack(alignment: .leading, spacing: 24) {
+                    header
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        groupTitle("账号")
+                        sectionCard {
+                            navRow(icon: "person.crop.circle", tint: Theme.accent,
+                                   title: "修改用户信息") {
+                                ProfileEditView()
+                                    .environmentObject(auth)
+                            }
+                            divider
+                            navRow(icon: "lock", tint: Theme.sky,
+                                   title: "修改密码") {
+                                ChangePasswordView()
+                                    .environmentObject(auth)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        groupTitle("通用")
+                        sectionCard {
+                            Button {
+                                clearCache()
+                            } label: {
+                                row(icon: "trash", tint: .orange, title: "清理缓存")
+                            }
+                            .buttonStyle(.plain)
+                            divider
+                            Button {
+                                Task { await checkUpdate() }
+                            } label: {
+                                row(icon: "arrow.clockwise.circle", tint: Theme.lilac,
+                                    title: "检查更新",
+                                    value: checkBusy ? "检查中…" : "v\(appVersion)",
+                                    showChevron: !checkBusy)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(checkBusy)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        groupTitle("关于")
+                        sectionCard {
+                            navRow(icon: "info.circle", tint: Theme.lilac,
+                                   title: "关于 APP") {
+                                AboutView()
+                            }
+                        }
+                    }
+
+                    // 退出登录
+                    Button {
+                        showLogoutConfirm = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("退出登录")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .foregroundColor(Color(hex: 0xFF6B6B))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color(hex: 0xFF6B6B).opacity(0.3), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(20)
+                .padding(.bottom, 30)
             }
         }
-        .navigationTitle("设置")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
         .alert("缓存已清理", isPresented: $showClearAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -68,103 +134,72 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - 账号
+    // MARK: - 头部（返回 + 大标题，与我的页一致）
 
-    private var accountSection: some View {
-        VStack(spacing: 8) {
-            NavigationLink {
-                ProfileEditView()
-                    .environmentObject(auth)
-            } label: {
-                rowContent(icon: "person.crop.circle", tint: Theme.accent,
-                           title: "修改用户信息", value: nil)
-            }
-            .buttonStyle(.plain)
-
-            NavigationLink {
-                ChangePasswordView()
-                    .environmentObject(auth)
-            } label: {
-                rowContent(icon: "lock", tint: Theme.accent,
-                           title: "修改密码", value: nil)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    // MARK: - 通用
-
-    private var generalSection: some View {
-        VStack(spacing: 8) {
+    private var header: some View {
+        HStack(spacing: 12) {
             Button {
-                clearCache()
+                dismiss()
             } label: {
-                rowContent(icon: "trash", tint: .orange,
-                           title: "清理缓存", value: nil)
+                ZStack {
+                    Circle().fill(Theme.card)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                }
+                .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
 
-            Button {
-                Task { await checkUpdate() }
-            } label: {
-                rowContent(icon: "arrow.clockwise.circle", tint: Theme.sky,
-                           title: "检查更新",
-                           value: checkBusy ? "检查中…" : "v\(appVersion)")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("设置")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("账号、通用与关于")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
             }
-            .buttonStyle(.plain)
-            .disabled(checkBusy)
+            Spacer()
         }
     }
 
-    // MARK: - 关于
+    // MARK: - 分组与卡片
 
-    private var aboutSection: some View {
-        VStack(spacing: 8) {
-            rowContent(icon: "info.circle", tint: Theme.textTertiary,
-                       title: "版本", value: "v\(appVersion)")
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            rowContent(icon: "globe", tint: Theme.textTertiary,
-                       title: "官网", value: "www.dbmt999.asia")
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
+    private func groupTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(Theme.textTertiary)
+            .padding(.horizontal, 4)
     }
 
-    // MARK: - 退出登录
+    /// 连续卡片容器：组内多行共用一张卡片，行间分隔线
+    private func sectionCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            content()
+        }
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .stroke(Theme.cardBorder, lineWidth: 1))
+    }
 
-    private var logoutButton: some View {
-        Button {
-            showLogoutConfirm = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("退出登录")
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            .foregroundColor(.red)
+    /// 行间分隔线（从图标后开始，避免顶到卡片边缘）
+    private var divider: some View {
+        Rectangle()
+            .fill(Theme.cardBorder)
+            .frame(height: 0.5)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .padding(.top, 8)
+            .padding(.leading, 56)
     }
 
-    // MARK: - 通用行
-
-    private func rowContent(icon: String, tint: Color, title: String,
-                            value: String?) -> some View {
+    /// 通用行
+    private func row(icon: String, tint: Color, title: String,
+                     value: String? = nil, showChevron: Bool = true) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(tint)
-                .frame(width: 30, height: 30)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: 28, height: 28)
+                .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             Text(title)
                 .font(.system(size: 15))
@@ -177,13 +212,27 @@ struct SettingsView: View {
                     .font(.system(size: 13))
                     .foregroundColor(Theme.textTertiary)
             }
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Theme.textTertiary.opacity(0.6))
+            if showChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.textTertiary.opacity(0.7))
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.vertical, 13)
+        .contentShape(Rectangle())
+    }
+
+    /// 可跳转子页的行
+    private func navRow<Destination: View>(icon: String, tint: Color,
+                                           title: String,
+                                           @ViewBuilder destination: () -> Destination) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            row(icon: icon, tint: tint, title: title)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 逻辑
@@ -211,7 +260,8 @@ struct SettingsView: View {
 
 // MARK: - 修改密码页
 
-/// 修改密码：输入旧密码 + 新密码（6-64 位）+ 确认，调后端 change-password
+/// 修改密码：输入旧密码 + 新密码（6-64 位）+ 确认，调后端 change-password。
+/// 沉浸式自定义头部 + 固定底部确认按钮（不被遮挡）。
 struct ChangePasswordView: View {
     @EnvironmentObject private var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -227,44 +277,57 @@ struct ChangePasswordView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: 14) {
-                    secureField("当前密码", text: $oldPwd)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 18) {
+                        header
 
-                    secureField("新密码（6-64 位）", text: $newPwd)
-
-                    secureField("确认新密码", text: $confirmPwd)
-
-                    if let error {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundColor(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if busy {
-                                ProgressView().tint(.white)
-                            } else {
-                                Text("确认修改").fontWeight(.semibold)
-                            }
+                        VStack(spacing: 0) {
+                            secureField("当前密码", text: $oldPwd)
+                            divider
+                            secureField("新密码（6-64 位）", text: $newPwd)
+                            divider
+                            secureField("确认新密码", text: $confirmPwd)
                         }
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
+                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.cardBorder, lineWidth: 1))
+
+                        if let error {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundColor(Color(hex: 0xFF6B6B))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4)
+                        }
                     }
-                    .disabled(busy)
-                    .buttonStyle(.plain)
+                    .padding(20)
                 }
-                .padding(20)
+
+                // 固定底部确认按钮（安全区之上，永不被遮挡）
+                Button {
+                    Task { await save() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if busy {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text("确认修改").fontWeight(.semibold)
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .disabled(busy)
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
             }
         }
-        .navigationTitle("修改密码")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
         .alert("密码已修改", isPresented: $showDone) {
             Button("好", role: .cancel) { dismiss() }
         } message: {
@@ -272,19 +335,53 @@ struct ChangePasswordView: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button {
+                dismiss()
+            } label: {
+                ZStack {
+                    Circle().fill(Theme.card)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                }
+                .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("修改密码")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("设置新的登录密码")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+        }
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Theme.cardBorder)
+            .frame(height: 0.5)
+            .frame(maxWidth: .infinity)
+            .padding(.leading, 16)
+    }
+
     private func secureField(_ title: String, text: Binding<String>) -> some View {
         SecureField(title, text: text)
             .textInputAutocapitalization(.never)
             .disableAutocorrection(true)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Theme.card)
             .foregroundColor(Theme.textPrimary)
     }
 
     private func save() async {
         let new = newPwd.trimmingCharacters(in: .whitespaces)
-        // 本地校验
         if oldPwd.isEmpty {
             error = "请输入当前密码"
             return

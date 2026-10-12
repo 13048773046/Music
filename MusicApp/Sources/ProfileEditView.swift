@@ -26,44 +26,81 @@ struct ProfileEditView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: 18) {
-                    header
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 18) {
+                        header
 
-                    inputCard
+                        inputCard
 
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if busy {
-                                ProgressView().tint(.white)
-                            } else {
-                                Text("保存修改").fontWeight(.semibold)
-                            }
+                        if let error {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundColor(Color(hex: 0xFF6B6B))
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
                     }
-                    .disabled(busy)
-                    .buttonStyle(.plain)
-
-                    if let error {
-                        Text(error).font(.footnote).foregroundColor(.red)
-                    }
+                    .padding(20)
                 }
-                .padding(20)
+
+                // 固定底部保存按钮（安全区之上，永不被底部遮挡）
+                Button {
+                    Task { await save() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if busy {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text("保存修改").fontWeight(.semibold)
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .disabled(busy)
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
             }
         }
-        .navigationTitle("编辑资料")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
         .onAppear { seed() }
         .onChange(of: avatarPickerItem) { _ in Task { await loadAvatar() } }
         .onChange(of: bgPickerItem) { _ in Task { await loadBg() } }
         .alert("已保存", isPresented: $showSaved) {
             Button("好", role: .cancel) { dismiss() }
+        }
+    }
+
+    // MARK: - 头部（返回 + 大标题，与设置页一致）
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button {
+                dismiss()
+            } label: {
+                ZStack {
+                    Circle().fill(Theme.card)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                }
+                .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("编辑资料")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("完善你的个人主页")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
         }
     }
 
