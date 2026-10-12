@@ -342,6 +342,27 @@ def rate_limit(handler, name, extra=""):
     return RATE.allow(rate_key(handler, name, extra), limit, window)
 
 
+def parse_page(qs, default_size=20, max_size=50):
+    """解析列表分页参数：返回 (page, page_size)。
+
+    - page 从 1 开始；page<1 或未传 → 返回 None，表示「不分页、全量返回」（兼容旧客户端）。
+    - pageSize 默认 20，超上限 50 时截断。
+    """
+    try:
+        page = int((qs.get("page", [""])[0] or "").strip() or 0)
+    except (ValueError, TypeError):
+        page = 0
+    try:
+        page_size = int((qs.get("pageSize", [""])[0] or "").strip() or default_size)
+    except (ValueError, TypeError):
+        page_size = default_size
+    if page_size < 1:
+        page_size = default_size
+    if page_size > max_size:
+        page_size = max_size
+    return (page if page >= 1 else None), page_size
+
+
 # ---------------- 流媒体签名 URL ----------------
 
 def sign_stream(tid, exp):
@@ -934,63 +955,132 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                 self._json(200, {"totalSeconds": total_sec, "trackCount": track_cnt})
                 return
 
-            # 我的上传歌曲列表
+            # 我的上传歌曲列表（支持分页：page/pageSize，不传 page 时全量返回兼容旧客户端）
             if u.path == "/api/my-tracks":
                 c = db()
                 uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if not uid:
                     c.close()
-                    self._json(200, {"list": []})
+                    self._json(200, {"list": [], "total": 0, "hasMore": False})
                     return
-                rows = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.dur,t.play_count,t.like_count
-                                    FROM tracks t WHERE t.user_id=? AND t.offline=0
-                                    ORDER BY t.created DESC""", (uid,)).fetchall()
+                qs = urllib.parse.parse_qs(u.query)
+                page, page_size = parse_page(qs)
+                sel = """SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                         t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                         COALESCE(u.name,''),
+                         (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                         MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
+                         FROM tracks t
+                         LEFT JOIN users u ON u.id=t.user_id
+                         LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
+                         WHERE t.user_id=? AND t.offline=0
+                         GROUP BY t.id ORDER BY t.created DESC"""
+                args = [uid, uid]
+                total = c.execute("SELECT COUNT(*) FROM tracks WHERE user_id=? AND offline=0",
+                                  (uid,)).fetchone()[0]
+                if page is None:
+                    rows = c.execute(sel, args).fetchall()
+                else:
+                    rows = c.execute(sel + " LIMIT ? OFFSET ?",
+                                     args + [page_size, (page - 1) * page_size]).fetchall()
                 c.close()
                 lst = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3] or "",
-                        "cover": "1" if r[4] else "", "dur": r[5],
-                        "playCount": r[6] or 0, "likeCount": r[7] or 0} for r in rows]
-                self._json(200, {"list": lst})
+                        "cover": r[4] or "", "fname": r[5] or "",
+                        "size": int(r[6]) if r[6] is not None else 0,
+                        "dur": r[7], "durText": _fmt_dur(r[7]), "created": r[8],
+                        "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                        "shareCount": r[11] or 0, "userId": r[12] or "",
+                        "userName": r[14] or "", "hasLyric": bool(r[13]),
+                        "commentCount": r[15] or 0, "isLiked": bool(r[16])} for r in rows]
+                self._json(200, {"list": lst, "total": total,
+                                 "hasMore": bool(page is not None and page * page_size < total)})
                 return
 
-            # 我点赞的歌曲列表
+            # 我点赞的歌曲列表（上传+采集合并，按点赞时间倒序；支持分页）
             if u.path == "/api/my-likes":
                 c = db()
                 uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if not uid:
                     c.close()
-                    self._json(200, {"list": []})
+                    self._json(200, {"list": [], "total": 0, "hasMore": False})
                     return
-                rows1 = c.execute("""SELECT t.id,t.title,t.artist,t.album,t.cover,t.dur,t.play_count,t.like_count
-                                    FROM likes l JOIN tracks t ON t.id=l.track_id
-                                    WHERE l.user_id=? AND t.offline=0 ORDER BY l.created DESC""", (uid,)).fetchall()
-                rows2 = c.execute("""SELECT c.id,c.title,c.artist,c.album,'1',c.duration,c.play_count,c.like_count
-                                    FROM likes l JOIN collected_tracks c ON c.id=l.track_id
-                                    WHERE l.user_id=? AND c.offline=0 ORDER BY l.created DESC""", (uid,)).fetchall()
+                qs = urllib.parse.parse_qs(u.query)
+                page, page_size = parse_page(qs)
+                # 归属账号昵称（采集歌曲统一展示用，与 /api/tracks 口径一致）
+                uname = ""
+                urow = c.execute(
+                    "SELECT name FROM users WHERE id=(SELECT user_id FROM collected_tracks"
+                    " WHERE user_id!='' LIMIT 1)").fetchone()
+                if urow:
+                    uname = urow[0]
+                # 上传歌曲点赞子查询（is_liked 恒为 1：行本身来自当前用户的点赞记录）
+                sub1 = """SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                          t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                          COALESCE(u.name,''),
+                          (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                          1 AS is_liked, l.created AS lc
+                          FROM likes l JOIN tracks t ON t.id=l.track_id
+                          LEFT JOIN users u ON u.id=t.user_id
+                          WHERE l.user_id=? AND t.offline=0"""
+                # 采集歌曲点赞子查询（cover 返回占位 "1"，字段结构与上传分支对齐）
+                sub2 = """SELECT c.id,c.title,c.artist,c.album,'1','',0,c.duration,c.created,
+                          c.play_count,c.like_count,c.share_count,c.user_id,c.lrc,
+                          ?, 0, 1, l.created AS lc
+                          FROM likes l JOIN collected_tracks c ON c.id=l.track_id
+                          WHERE l.user_id=? AND c.offline=0"""
+                total1 = c.execute("""SELECT COUNT(*) FROM likes l JOIN tracks t ON t.id=l.track_id
+                                      WHERE l.user_id=? AND t.offline=0""", (uid,)).fetchone()[0]
+                total2 = c.execute("""SELECT COUNT(*) FROM likes l JOIN collected_tracks c
+                                      ON c.id=l.track_id WHERE l.user_id=? AND c.offline=0""", (uid,)).fetchone()[0]
+                total = total1 + total2
+                args = [uid, uname, uid]
+                if page is None:
+                    rows = c.execute(sub1 + " UNION ALL " + sub2, args).fetchall()
+                else:
+                    rows = c.execute("SELECT * FROM (" + sub1 + " UNION ALL " + sub2
+                                     + ") ORDER BY lc DESC LIMIT ? OFFSET ?",
+                                     args + [page_size, (page - 1) * page_size]).fetchall()
                 c.close()
                 lst = [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3] or "",
-                        "cover": "1", "dur": r[5], "playCount": r[6] or 0, "likeCount": r[7] or 0}
-                       for r in rows1 + rows2]
-                self._json(200, {"list": lst})
+                        "cover": r[4] or "", "fname": r[5] or "",
+                        "size": int(r[6]) if r[6] is not None else 0,
+                        "dur": r[7], "durText": _fmt_dur(r[7]), "created": r[8],
+                        "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                        "shareCount": r[11] or 0, "userId": r[12] or "",
+                        "userName": r[14] or "", "hasLyric": bool(r[13]),
+                        "commentCount": r[15] or 0, "isLiked": bool(r[16])} for r in rows]
+                self._json(200, {"list": lst, "total": total,
+                                 "hasMore": bool(page is not None and page * page_size < total)})
                 return
 
-            # 我评论过的歌曲列表
+            # 我评论过的歌曲列表（支持分页）
             if u.path == "/api/my-comments":
                 c = db()
                 uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if not uid:
                     c.close()
-                    self._json(200, {"list": []})
+                    self._json(200, {"list": [], "total": 0, "hasMore": False})
                     return
-                rows = c.execute("""SELECT c.track_id, c.content, c.created,
-                                   COALESCE((SELECT title FROM tracks WHERE id=c.track_id),
-                                            (SELECT title FROM collected_tracks WHERE id=c.track_id)),
-                                   COALESCE((SELECT artist FROM tracks WHERE id=c.track_id),
-                                            (SELECT artist FROM collected_tracks WHERE id=c.track_id))
-                                   FROM comments c WHERE c.user_id=? ORDER BY c.created DESC""", (uid,)).fetchall()
+                qs = urllib.parse.parse_qs(u.query)
+                page, page_size = parse_page(qs)
+                sel = """SELECT c.track_id, c.content, c.created,
+                         COALESCE((SELECT title FROM tracks WHERE id=c.track_id),
+                                  (SELECT title FROM collected_tracks WHERE id=c.track_id)),
+                         COALESCE((SELECT artist FROM tracks WHERE id=c.track_id),
+                                  (SELECT artist FROM collected_tracks WHERE id=c.track_id))
+                         FROM comments c WHERE c.user_id=? ORDER BY c.created DESC"""
+                total = c.execute("SELECT COUNT(*) FROM comments WHERE user_id=?",
+                                  (uid,)).fetchone()[0]
+                if page is None:
+                    rows = c.execute(sel, (uid,)).fetchall()
+                else:
+                    rows = c.execute(sel + " LIMIT ? OFFSET ?",
+                                     (uid, page_size, (page - 1) * page_size)).fetchall()
                 c.close()
                 lst = [{"trackId": r[0], "content": r[1], "created": r[2],
                         "title": r[3] or "", "artist": r[4] or ""} for r in rows]
-                self._json(200, {"list": lst})
+                self._json(200, {"list": lst, "total": total,
+                                 "hasMore": bool(page is not None and page * page_size < total)})
                 return
 
             # ---------- 采集控制台 H5 页面 ----------

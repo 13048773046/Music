@@ -206,6 +206,61 @@ enum API {
         return try JSONDecoder().decode([Track].self, from: data)
     }
 
+    // MARK: - 我的页面分页数据（my-tracks / my-likes / my-comments）
+
+    /// 分页响应通用结构：{ list, total, hasMore }
+    struct PageResult<T: Decodable>: Decodable {
+        let list: [T]
+        let total: Int
+        let hasMore: Bool
+    }
+
+    /// 我的评论条目（含对应歌曲信息，点击可直接播放）
+    struct MyComment: Codable, Identifiable, Hashable {
+        let trackId: String
+        let content: String
+        let created: Double?
+        let title: String?
+        let artist: String?
+
+        var id: String { "\(trackId)-\(Int(created ?? 0))" }
+    }
+
+    /// 分页请求公共逻辑：拼 page/pageSize 参数 + Bearer 鉴权 + 解码 PageResult
+    private static func fetchPage<T: Decodable>(path: String, page: Int?,
+                                                pageSize: Int) async throws -> PageResult<T> {
+        var components = URLComponents(url: base.appendingPathComponent(path),
+                                       resolvingAgainstBaseURL: false)!
+        if let page {
+            components.queryItems = [URLQueryItem(name: "page", value: String(page)),
+                                     URLQueryItem(name: "pageSize", value: String(pageSize))]
+        }
+        var req = URLRequest(url: components.url!)
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(PageResult<T>.self, from: data)
+    }
+
+    /// 我的上传作品（分页）；page 传 nil 时后端返回全量（兼容旧服务）
+    static func myTracks(page: Int? = nil, pageSize: Int = 20) async throws -> PageResult<Track> {
+        try await fetchPage(path: "my-tracks", page: page, pageSize: pageSize)
+    }
+
+    /// 我的点赞歌曲（分页，上传+采集混合）
+    static func myLikes(page: Int? = nil, pageSize: Int = 20) async throws -> PageResult<Track> {
+        try await fetchPage(path: "my-likes", page: page, pageSize: pageSize)
+    }
+
+    /// 我的评论（分页）
+    static func myComments(page: Int? = nil, pageSize: Int = 20) async throws -> PageResult<MyComment> {
+        try await fetchPage(path: "my-comments", page: page, pageSize: pageSize)
+    }
+
     struct Comment: Codable, Identifiable, Hashable {
         let id: String
         let userId: String
