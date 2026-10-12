@@ -279,10 +279,14 @@ struct ChangePasswordView: View {
             Theme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // 固定头部：返回 + 标题 + 确认按钮（独立于内容层，与编辑资料页一致）
+                header
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
                 ScrollView {
                     VStack(spacing: 18) {
-                        header
-
                         VStack(spacing: 0) {
                             secureField("当前密码", text: $oldPwd)
                             divider
@@ -304,28 +308,6 @@ struct ChangePasswordView: View {
                     }
                     .padding(20)
                 }
-
-                // 固定底部确认按钮（安全区之上，永不被遮挡）
-                Button {
-                    Task { await save() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if busy {
-                            ProgressView().tint(.white)
-                        } else {
-                            Text("确认修改").fontWeight(.semibold)
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .disabled(busy)
-                .buttonStyle(.plain)
-                .padding(.horizontal, 20)
-                .padding(.top, 4)
-                .padding(.bottom, 12)
             }
         }
         .navigationBarHidden(true)
@@ -361,6 +343,25 @@ struct ChangePasswordView: View {
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer()
+
+            // 确认修改按钮：右上角，与返回按钮同一行（与编辑资料页保存按钮一致）
+            Button {
+                Task { await save() }
+            } label: {
+                Group {
+                    if busy {
+                        ProgressView().tint(Theme.accent)
+                    } else {
+                        Text("确认")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(Theme.accent)
+                    }
+                }
+                .frame(minWidth: 52, minHeight: 38)
+                .contentShape(Rectangle())
+            }
+            .disabled(busy)
+            .buttonStyle(.plain)
         }
     }
 
