@@ -7,6 +7,7 @@ struct MusicApp: App {
     @StateObject private var library = Library.shared
     @State private var showSplash = true
     @State private var announcement: Announcement?
+    @State private var updateNotice: UpdateNotice?
 
     var body: some Scene {
         WindowGroup {
@@ -27,20 +28,25 @@ struct MusicApp: App {
                 }
             }
             .onAppear {
-                // 启动页期间就并发拉取歌曲列表，进首页即播，减少等待
                 Task { await Library.shared.load() }
-                // 请求公告通知
                 Task { await fetchAnnouncement() }
+                Task { await fetchUpdate() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     withAnimation(.easeInOut(duration: 0.45)) {
                         showSplash = false
                     }
                 }
             }
+            // 公告弹窗（半屏）
             .sheet(item: $announcement) { ann in
                 AnnouncementSheet(announcement: ann)
+                    .presentationDetents([.medium])
             }
-            // 全局深色外观：状态栏白色文字（浅色封面背景的播放页会局部覆盖为浅色）
+            // 更新弹窗（半屏）
+            .sheet(item: $updateNotice) { upd in
+                UpdateSheet(update: upd)
+                    .presentationDetents([.medium])
+            }
             .preferredColorScheme(.dark)
         }
     }
@@ -54,18 +60,36 @@ struct MusicApp: App {
             guard let title = obj?["title"] as? String, !title.isEmpty,
                   let annId = obj?["id"] as? String, !annId.isEmpty else { return }
             let showOnce = (obj?["showOnce"] as? Int) ?? 0
-            // showOnce=1 时，检查是否已经弹过这条公告
             if showOnce == 1 {
                 let shown = UserDefaults.standard.string(forKey: "shown_announcement_id") ?? ""
-                if shown == annId { return }  // 已经弹过，不再弹
+                if shown == annId { return }
             }
             await MainActor.run {
                 announcement = Announcement(
-                    id: annId,
-                    title: title,
+                    id: annId, title: title,
                     content: obj?["content"] as? String ?? "",
                     version: obj?["version"] as? String ?? "",
                     showOnce: showOnce
+                )
+            }
+        } catch {}
+    }
+
+    private func fetchUpdate() async {
+        guard let url = URL(string: "https://www.dbmt999.asia/music/api/check-update") else { return }
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
+            let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard let hasUpdate = obj?["hasUpdate"] as? Bool, hasUpdate else { return }
+            await MainActor.run {
+                updateNotice = UpdateNotice(
+                    id: obj?["id"] as? String ?? "",
+                    title: obj?["title"] as? String ?? "",
+                    content: obj?["content"] as? String ?? "",
+                    version: obj?["version"] as? String ?? "",
+                    forceUpdate: (obj?["forceUpdate"] as? Int) ?? 0,
+                    downloadUrl: obj?["downloadUrl"] as? String ?? ""
                 )
             }
         } catch {}
@@ -81,47 +105,112 @@ struct Announcement: Identifiable {
     let showOnce: Int
 }
 
-/// 从底部弹出的公告弹窗（Bottom Sheet 风格）
+/// 更新通知模型
+struct UpdateNotice: Identifiable {
+    let id: String
+    let title: String
+    let content: String
+    let version: String
+    let forceUpdate: Int
+    let downloadUrl: String
+}
+
+/// 公告弹窗（半屏）
 struct AnnouncementSheet: View {
     let announcement: Announcement
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationView {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(announcement.title)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.white)
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(announcement.title)
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(.white)
-                    Text(announcement.content)
-                        .font(.system(size: 15))
-                        .foregroundColor(.white.opacity(0.85))
-                        .lineSpacing(6)
-                    if !announcement.version.isEmpty {
-                        Text("版本：\(announcement.version)")
-                            .font(.system(size: 13))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                }
-                .padding(20)
+                Text(announcement.content)
+                    .font(.system(size: 15))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineSpacing(6)
             }
-            .background(Color(red: 0.11, green: 0.11, blue: 0.12))
-            .navigationTitle("公告通知")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("我知道了") {
-                        // showOnce=1 时，记录这条公告已弹过，下次不再弹
-                        if announcement.showOnce == 1 {
-                            UserDefaults.standard.set(announcement.id, forKey: "shown_announcement_id")
-                        }
-                        dismiss()
-                    }
+            if !announcement.version.isEmpty {
+                Text("版本：\(announcement.version)")
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+            Spacer()
+            Button(action: {
+                if announcement.showOnce == 1 {
+                    UserDefaults.standard.set(announcement.id, forKey: "shown_announcement_id")
+                }
+                dismiss()
+            }) {
+                Text("我知道了")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(hex: 0x2a6df4))
+                    .cornerRadius(12)
+            }
+        }
+        .padding(24)
+        .background(Color(red: 0.11, green: 0.11, blue: 0.12))
+    }
+}
+
+/// 更新弹窗（半屏）
+struct UpdateSheet: View {
+    let update: UpdateNotice
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(update.title)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(.white)
+            if !update.version.isEmpty {
+                Text("新版本：\(update.version)")
+                    .font(.system(size: 14))
                     .foregroundColor(Color(hex: 0x5cd68a))
+            }
+            ScrollView {
+                Text(update.content)
+                    .font(.system(size: 15))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineSpacing(6)
+            }
+            Spacer()
+            // 去更新按钮（始终显示）
+            Button(action: {
+                if let url = URL(string: update.downloadUrl) {
+                    UIApplication.shared.open(url)
+                }
+                if update.forceUpdate != 1 {
+                    dismiss()
+                }
+            }) {
+                Text("去更新")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color(hex: 0x2a6df4))
+                    .cornerRadius(12)
+            }
+            // 非强制更新才显示取消按钮
+            if update.forceUpdate != 1 {
+                Button(action: {
+                    dismiss()
+                }) {
+                    Text("以后再说")
+                        .font(.system(size: 15))
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
                 }
             }
         }
+        .padding(24)
+        .background(Color(red: 0.11, green: 0.11, blue: 0.12))
     }
 }
 

@@ -173,10 +173,14 @@ def db():
         id TEXT PRIMARY KEY, title TEXT, content TEXT,
         version TEXT DEFAULT '', active INTEGER DEFAULT 1,
         show_once INTEGER DEFAULT 0,
+        type TEXT DEFAULT 'announcement',
+        force_update INTEGER DEFAULT 0,
+        download_url TEXT DEFAULT '',
         created REAL)""")
     ann_cols = [r[1] for r in c.execute("PRAGMA table_info(announcements)")]
-    if "show_once" not in ann_cols:
-        c.execute("ALTER TABLE announcements ADD COLUMN show_once INTEGER DEFAULT 0")
+    for col, default in [("show_once","0"),("type","'announcement'"),("force_update","0"),("download_url","''")]:
+        if col not in ann_cols:
+            c.execute("ALTER TABLE announcements ADD COLUMN %s TEXT DEFAULT %s" % (col, default))
     c.commit()
     return c
 
@@ -885,17 +889,31 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
                                  "time": time.strftime("%Y-%m-%d %H:%M:%S")})
                 return
 
-            # 公告通知：App 启动时请求最新一条 active 公告
+            # 公告通知：App 启动时请求最新一条 active 公告（type=announcement）
             if u.path == "/api/announcement":
                 c = db()
-                row = c.execute("SELECT id, title, content, version, show_once, created FROM announcements"
-                                " WHERE active=1 ORDER BY created DESC LIMIT 1").fetchone()
+                row = c.execute("SELECT id, title, content, version, show_once FROM announcements"
+                                " WHERE active=1 AND type='announcement' ORDER BY created DESC LIMIT 1").fetchone()
                 c.close()
                 if not row:
                     self._json(200, {"id": "", "title": "", "content": "", "version": "", "showOnce": 0})
                     return
                 self._json(200, {"id": row[0], "title": row[1], "content": row[2],
                                  "version": row[3] or "", "showOnce": row[4] or 0})
+                return
+
+            # 检查更新：返回最新一条 active 更新通知（type=update）
+            if u.path == "/api/check-update":
+                c = db()
+                row = c.execute("SELECT id, title, content, version, force_update, download_url FROM announcements"
+                                " WHERE active=1 AND type='update' ORDER BY created DESC LIMIT 1").fetchone()
+                c.close()
+                if not row:
+                    self._json(200, {"hasUpdate": False})
+                    return
+                self._json(200, {"hasUpdate": True, "id": row[0], "title": row[1],
+                                 "content": row[2], "version": row[3] or "",
+                                 "forceUpdate": row[4] or 0, "downloadUrl": row[5] or ""})
                 return
 
             # ---------- 采集控制台 H5 页面 ----------
@@ -1423,34 +1441,54 @@ async function loadAnn(){
   const h=
   '<div style="max-width:600px">'+
   '<div style="background:#1a1a1c;padding:24px;border-radius:12px;margin-bottom:16px">'+
-  '<h3 style="margin-bottom:16px;font-size:16px">发布新公告</h3>'+
+  '<h3 style="margin-bottom:16px;font-size:16px">发布新通知</h3>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">类型</label>'+
+  '<select id="annType" onchange="onAnnTypeChange()" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box">'+
+  '<option value="announcement">公告通知</option>'+
+  '<option value="update">更新通知</option>'+
+  '</select></div>'+
   '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">标题</label>'+
-  '<input id="annTitle" placeholder="公告标题" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<input id="annTitle" placeholder="通知标题" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
   '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">内容</label>'+
-  '<textarea id="annContent" rows="5" placeholder="公告内容" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea></div>'+
+  '<textarea id="annContent" rows="5" placeholder="通知内容" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea></div>'+
   '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">版本号（可选）</label>'+
   '<input id="annVersion" placeholder="如 v1.2.0" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div id="updateFields" style="display:none">'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">下载链接</label>'+
+  '<input id="annDownloadUrl" placeholder="https://..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div style="margin-bottom:14px"><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#ccc;cursor:pointer">'+
+  '<input type="checkbox" id="annForceUpdate" style="width:16px;height:16px"> 强制更新（用户不能取消，必须更新）</label></div>'+
+  '</div>'+
   '<div style="margin-bottom:18px"><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#ccc;cursor:pointer">'+
-  '<input type="checkbox" id="annShowOnce" style="width:16px;height:16px"> 只弹一次（用户点过"我知道了"后不再弹，直到内容更新）</label></div>'+
-  '<button onclick="submitAnn()" style="width:100%;padding:12px;border:0;border-radius:10px;background:#2a6df4;color:#fff;font-size:15px;cursor:pointer">发布公告</button>'+
+  '<input type="checkbox" id="annShowOnce" style="width:16px;height:16px"> 只弹一次（用户点过确认后不再弹，直到内容更新）</label></div>'+
+  '<button onclick="submitAnn()" style="width:100%;padding:12px;border:0;border-radius:10px;background:#2a6df4;color:#fff;font-size:15px;cursor:pointer">发布</button>'+
   '</div>'+
   '<div style="background:#1a1a1c;padding:20px;border-radius:12px;font-size:13px;color:#888;line-height:1.8">'+
   '<b style="color:#ccc">说明：</b><br>'+
-  '• 发布后，App 启动时会自动从底部弹出公告弹窗<br>'+
-  '• 勾选"只弹一次"：用户点过确认后不再弹，直到你发布新公告<br>'+
-  '• 不勾选：用户每次打开 App 都会看到这条公告<br>'+
-  '• 最新一条公告会覆盖之前的，App 只展示最新一条'+
+  '• <b>公告通知</b>：普通公告，用户可关闭，半屏弹窗<br>'+
+  '• <b>更新通知</b>：版本更新提示，可设置强制更新和下载链接<br>'+
+  '• 强制更新：用户只能点"去更新"，不能取消<br>'+
+  '• 非强制更新：用户可点"以后再说"取消<br>'+
+  '• 最新一条通知会覆盖之前的，App 只展示最新一条'+
   '</div></div>';
   document.getElementById('content').innerHTML=h;
+}
+function onAnnTypeChange(){
+  const t=document.getElementById('annType').value;
+  document.getElementById('updateFields').style.display=(t==='update')?'block':'none';
 }
 async function submitAnn(){
   const title=document.getElementById('annTitle').value.trim();
   const content=document.getElementById('annContent').value.trim();
   const version=document.getElementById('annVersion').value.trim();
+  const type=document.getElementById('annType').value;
   const showOnce=document.getElementById('annShowOnce').checked?1:0;
+  const forceUpdate=document.getElementById('annForceUpdate').checked?1:0;
+  const downloadUrl=document.getElementById('annDownloadUrl').value.trim();
   if(!title||!content){alert('请填写标题和内容');return;}
+  if(type==='update'&&!downloadUrl){alert('更新通知需要填写下载链接');return;}
   try{
-    const r=await fetch('/music/api/admin/announcement',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token},body:JSON.stringify({title,content,version,showOnce})});
+    const r=await fetch('/music/api/admin/announcement',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token},body:JSON.stringify({title,content,version,type,showOnce,forceUpdate,downloadUrl})});
     if(r.ok){alert('发布成功');loadAnn();}
     else{alert('发布失败');}
   }catch(e){alert('网络错误');}
@@ -2491,8 +2529,11 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                 c = db()
                 aid = secrets.token_hex(6)
                 show_once = 1 if str(data.get("showOnce") or "0") in ("1", "true", "yes") else 0
-                c.execute("INSERT INTO announcements(id,title,content,version,show_once,active,created) VALUES(?,?,?,?,?,1,?)",
-                          (aid, title, content, data.get("version") or "", show_once, time.time()))
+                atype = data.get("type") or "announcement"
+                force_update = 1 if str(data.get("forceUpdate") or "0") in ("1", "true", "yes") else 0
+                download_url = data.get("downloadUrl") or ""
+                c.execute("INSERT INTO announcements(id,title,content,version,show_once,type,force_update,download_url,active,created) VALUES(?,?,?,?,?,?,?,?,1,?)",
+                          (aid, title, content, data.get("version") or "", show_once, atype, force_update, download_url, time.time()))
                 c.commit()
                 c.close()
                 self._json(200, {"ok": True, "id": aid}); return
