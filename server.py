@@ -926,6 +926,9 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
 .tag.kw{background:#3a2a1e;color:#ffb36b}
 .tag.kg{background:#3a1e3a;color:#d68fd6}
 .tag.tx{background:#1e3a3a;color:#6fd6c8}
+.custom-kw{display:flex;gap:8px;margin-top:8px}
+.custom-kw input{flex:1;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:10px 12px;font-size:14px;outline:none;min-width:0}
+.custom-kw button{background:#2a6df4;color:#fff;border:0;border-radius:10px;padding:0 16px;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0}
 </style></head><body><div class="wrap">
 <h1>流萤音乐 · 采集控制台</h1>
 <div class="sub">选择平台与方式，自动入库；也可搜歌名单点采集</div>
@@ -948,8 +951,12 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="chip" data-v="hot">热门榜单</div>
 </div>
 
-<div class="sec" id="kwSec"><b>关键词</b>（多选）</div>
+<div class="sec" id="kwSec"><b>关键词</b>（多选，可自定义添加）</div>
 <div class="chips" id="kwChips"></div>
+<div class="custom-kw">
+  <input id="customKwInput" placeholder="输入自定义关键词，回车添加" />
+  <button id="addKwBtn">添加</button>
+</div>
 
 <button id="btn" class="btn start">开始采集</button>
 
@@ -996,6 +1003,25 @@ KW_LIST.forEach(k=>{
   d.className='chip on';d.textContent=k;d.dataset.v=k;
   kwChips.appendChild(d);
 });
+
+// 自定义关键词添加
+const customKwInput=document.getElementById('customKwInput');
+const addKwBtn=document.getElementById('addKwBtn');
+function addCustomKw(){
+  const v=customKwInput.value.trim();
+  if(!v)return;
+  // 避免重复
+  const exists=[...kwChips.querySelectorAll('.chip')].some(x=>x.dataset.v===v);
+  if(exists){customKwInput.value='';return;}
+  const d=document.createElement('div');
+  d.className='chip on';d.textContent=v;d.dataset.v=v;
+  kwChips.appendChild(d);
+  // 绑定点击切换（和其他 chip 一致）
+  d.onclick=()=>{d.classList.toggle('on');};
+  customKwInput.value='';
+}
+addKwBtn.onclick=addCustomKw;
+customKwInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addCustomKw();}});
 function sel(container,cb){
   container.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
     if(container===modeChips){
@@ -2763,6 +2789,8 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                 if not isinstance(items, list) or not items or len(items) > 50:
                     self._err(400, "items must be 1..50")
                     return
+                # 自定义关键词标签（用户在采集H5里添加的关键词，逗号分隔）
+                custom_genre = (data.get("keywords") or "").strip()
                 c = db()
                 # 归属：数据库中的唯一账号（仅当 users 表只有 1 个用户时）
                 urows = c.execute("SELECT id FROM users ORDER BY created LIMIT 2").fetchall()
@@ -2796,11 +2824,12 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                     # 播放链接不再采集入库（外部第三方直链时效短且手机端不可用）
                     cur = c.execute(
                         """INSERT OR IGNORE INTO collected_tracks
-                           (id,title,artist,album,cover,duration,source,source_id,play_url,size,created,user_id,lrc)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           (id,title,artist,album,cover,duration,source,source_id,play_url,size,created,user_id,lrc,genre)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (tid, title, (it.get("artist") or "").strip(), (it.get("album") or "").strip(),
                          local_cover, float(it.get("duration") or 0), src, sid,
-                         "", float(it.get("size") or 0), now, owner, it.get("lrc") or ""))
+                         "", float(it.get("size") or 0), now, owner, it.get("lrc") or "",
+                         custom_genre))
                     if cur.rowcount and cur.rowcount > 0:
                         ins += 1
                     else:
