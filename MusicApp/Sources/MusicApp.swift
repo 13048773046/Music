@@ -6,6 +6,7 @@ struct MusicApp: App {
     @StateObject private var auth = AuthManager.shared
     @StateObject private var library = Library.shared
     @State private var showSplash = true
+    @State private var announcement: Announcement?
 
     var body: some Scene {
         WindowGroup {
@@ -28,14 +29,86 @@ struct MusicApp: App {
             .onAppear {
                 // 启动页期间就并发拉取歌曲列表，进首页即播，减少等待
                 Task { await Library.shared.load() }
+                // 请求公告通知
+                Task { await fetchAnnouncement() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     withAnimation(.easeInOut(duration: 0.45)) {
                         showSplash = false
                     }
                 }
             }
+            .sheet(item: $announcement) { ann in
+                AnnouncementSheet(announcement: ann)
+            }
             // 全局深色外观：状态栏白色文字（浅色封面背景的播放页会局部覆盖为浅色）
             .preferredColorScheme(.dark)
+        }
+    }
+
+    private func fetchAnnouncement() async {
+        guard let url = URL(string: "https://www.dbmt999.asia/music/api/announcement") else { return }
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
+            let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if let title = obj?["title"] as? String, !title.isEmpty {
+                await MainActor.run {
+                    announcement = Announcement(
+                        id: obj?["id"] as? String ?? "",
+                        title: title,
+                        content: obj?["content"] as? String ?? "",
+                        version: obj?["version"] as? String ?? ""
+                    )
+                }
+            }
+        } catch {}
+    }
+}
+
+/// 公告模型
+struct Announcement: Identifiable {
+    let id: String
+    let title: String
+    let content: String
+    let version: String
+}
+
+/// 从底部弹出的公告弹窗（Bottom Sheet 风格）
+struct AnnouncementSheet: View {
+    let announcement: Announcement
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(announcement.title)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(.white)
+                    Text(announcement.content)
+                        .font(.system(size: 15))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineSpacing(6)
+                    if !announcement.version.isEmpty {
+                        Text("版本：\(announcement.version)")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                }
+                .padding(20)
+            }
+            .background(Color(red: 0.11, green: 0.11, blue: 0.12))
+            .navigationTitle("公告通知")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("我知道了") {
+                        dismiss()
+                    }
+                    .foregroundColor(Color(hex: 0x5cd68a))
+                }
+            }
         }
     }
 }

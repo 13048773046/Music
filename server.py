@@ -168,6 +168,11 @@ def db():
     if "track_info" not in bev_cols:
         c.execute("ALTER TABLE behavior_events ADD COLUMN track_info TEXT DEFAULT ''")
     c.execute("CREATE INDEX IF NOT EXISTS idx_bev_user ON behavior_events(user_id, created)")
+    # 公告通知表：App 启动时从底部弹窗展示最新公告
+    c.execute("""CREATE TABLE IF NOT EXISTS announcements(
+        id TEXT PRIMARY KEY, title TEXT, content TEXT,
+        version TEXT DEFAULT '', active INTEGER DEFAULT 1,
+        created REAL)""")
     c.commit()
     return c
 
@@ -874,6 +879,19 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
             if u.path in ("/", "/api/health"):
                 self._json(200, {"ok": True, "service": "music",
                                  "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+                return
+
+            # 公告通知：App 启动时请求最新一条 active 公告
+            if u.path == "/api/announcement":
+                c = db()
+                row = c.execute("SELECT id, title, content, version, created FROM announcements"
+                                " WHERE active=1 ORDER BY created DESC LIMIT 1").fetchone()
+                c.close()
+                if not row:
+                    self._json(200, {"id": "", "title": "", "content": "", "version": ""})
+                    return
+                self._json(200, {"id": row[0], "title": row[1], "content": row[2],
+                                 "version": row[3] or ""})
                 return
 
             # ---------- 采集控制台 H5 页面 ----------
@@ -2200,7 +2218,10 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                 c = db()
                 row = c.execute("SELECT token, short_code FROM share_tokens WHERE track_id=?", (tid,)).fetchone()
                 if not row:
+                    # 先查上传歌曲，再查采集歌曲（两类歌曲都支持分享短链）
                     row = c.execute("SELECT 1 FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        row = c.execute("SELECT 1 FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                     if not row:
                         c.close()
                         self._err(404, "not found")
@@ -2260,6 +2281,9 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                 tr = c.execute("""SELECT id, title, artist, cover, lrc, user_id,
                                   COALESCE((SELECT name FROM users WHERE id=tracks.user_id), '')
                                   FROM tracks WHERE id=?""", (tid,)).fetchone()
+                if not tr:
+                    # 采集歌曲：从 collected_tracks 取标题/歌手/封面
+                    tr = c.execute("SELECT id, title, artist, cover, lrc, user_id, '' FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                 c.close()
                 if not tr:
                     self._err(404, "not found")
@@ -2411,6 +2435,26 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
 
             # ---------- 后台管理：编辑 / 上下架 ----------
             ADMIN_TOKEN = _admin_token()
+            if u.path == "/api/admin/announcement":
+                if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 8 * 1024))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                title = (data.get("title") or "").strip()
+                content = (data.get("content") or "").strip()
+                if not title or not content:
+                    self._err(400, "title and content required"); return
+                c = db()
+                aid = secrets.token_hex(6)
+                c.execute("INSERT INTO announcements(id,title,content,version,active,created) VALUES(?,?,?,?,1,?)",
+                          (aid, title, content, data.get("version") or "", time.time()))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "id": aid}); return
+
             if u.path == "/api/admin/update":
                 if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
                     self._err(401, "unauthorized"); return
