@@ -52,30 +52,28 @@ final class SidebarHandlers {
 struct MainTabView: View {
     @EnvironmentObject private var player: PlayerManager
     @State private var selection = 1
-    /// 侧边栏实时露出宽度（0 = 完全关闭，panelWidth = 完全打开），由跟手手势实时驱动
-    @State private var sidebarDrag: CGFloat = 0
+    /// 侧边栏抽屉驱动（官方交互式动画：跟手 + UISpringTimingParameters 速度继承落位）
+    @StateObject private var drawer: SidebarDrawerController
     /// 稳定闭包容器（见 SidebarHandlers 注释）
     @State private var handlers = SidebarHandlers()
-    /// 松手落位中：拦截迟到的 onChanged（快速滑动时手势系统可能晚于 onEnded 派发
-    /// 最后一个 onChanged，若让它覆盖 sidebarDrag 会把进行中的落位动画跳回再重启，
-    /// 表现为「动画中间小停顿」）
-    @State private var isSettling = false
 
     /// 侧边栏宽度（约屏宽 85%）
     private let panelWidth = UIScreen.main.bounds.width * 0.85
 
-    /// 遮罩透明度进度 0...1
-    private var progress: CGFloat { panelWidth > 0 ? sidebarDrag / panelWidth : 0 }
+    init() {
+        let width = UIScreen.main.bounds.width * 0.85
+        _drawer = StateObject(wrappedValue: SidebarDrawerController(width: width))
+    }
 
     var body: some View {
         ZStack {
-            // 侧边栏：常驻渲染，offset 跟随手势实时滑动（关闭时完全移出屏幕左侧）
+            // 侧边栏：常驻渲染，offset 跟随抽屉进度实时滑动（关闭时完全移出屏幕左侧）
             SidebarView(
                 onClose: handlers.onClose
             )
-            .offset(x: sidebarDrag - panelWidth)
+            .offset(x: drawer.progress * panelWidth - panelWidth)
             .zIndex(1)
-            .allowsHitTesting(sidebarDrag > 0)
+            .allowsHitTesting(drawer.progress > 0.01)
 
             // 主界面（内容区 + 顶部栏 + TabBar），打开侧边栏时整体向右推
             ZStack(alignment: .bottom) {
@@ -111,82 +109,38 @@ struct MainTabView: View {
 
                 AppTabBar(selection: $selection)
             }
-            .offset(x: sidebarDrag)
+            .offset(x: drawer.progress * panelWidth)
             // 遮罩常驻：透明度随进度渐显；进度为 0 时不可点击，自动穿透到主界面
             .overlay {
-                Color.black.opacity(0.4 * progress)
-                    .allowsHitTesting(sidebarDrag > 0)
-                    .onTapGesture { closeSidebar() }
+                Color.black.opacity(0.4 * drawer.progress)
+                    .allowsHitTesting(drawer.progress > 0.01)
+                    .onTapGesture { handlers.onClose() }
             }
         }
-        // 全局手势：整个屏幕左右拖动，侧边栏实时跟手；松手按位移/速度落位或回弹
+        // 全局手势：整个屏幕左右拖动实时跟手；松手由官方弹簧时序按速度继承落位
         .gesture(dragGesture)
         .onAppear {
             // 只绑定一次：之后拖动导致父视图重算时，闭包引用保持同一实例，子视图不再重建
-            handlers.onClose = { closeSidebar() }
-            handlers.onOpen = { openSidebar() }
+            handlers.onClose = { drawer.animate(to: 0) }
+            handlers.onOpen = { drawer.animate(to: 1) }
         }
     }
 
-    // MARK: - 侧边栏开合（唯一入口：动画同步 sidebarOpen 语义状态与 sidebarDrag 视觉进度）
-
-    private func openSidebar() {
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
-            player.sidebarOpen = true
-            sidebarDrag = panelWidth
-        }
-    }
-
-    private func closeSidebar() {
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
-            player.sidebarOpen = false
-            sidebarDrag = 0
-        }
-    }
-
-    /// 跟手拖拽手势。
-    /// - onChanged：实时跟随手指；新手势起点自动解除落位锁
-    /// - onEnded：先用「预测终点」无动画接管位置（消除手指速度与动画初速 0 的落差），
-    ///   再用 interactiveSpring 快速完成剩余距离——快速甩动时预测终点已贴近目标，
-    ///   动画几乎不启动，自然无停顿；慢速拖动则平滑回弹
+    /// 跟手拖拽手势：onChanged 实时更新抽屉进度；onEnded 交给官方
+    /// UISpringTimingParameters(initialVelocity:) 落位（继承手指速度，无停顿）
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { v in
                 let dx = v.translation.width
                 let dy = v.translation.height
-                // 新手势刚开始（位移≈0）时解除上次落位锁，恢复跟手
-                if isSettling && abs(dx) < 6 && abs(dy) < 6 {
-                    isSettling = false
-                }
-                guard !isSettling else { return }
                 // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑（竖滑切歌不受影响）
                 guard abs(dx) > abs(dy) * 1.5 else { return }
-                // 以「当前开合状态 + 本次拖动位移」计算目标露出宽度，钳制在 0...panelWidth
-                let base = player.sidebarOpen ? panelWidth : 0
-                sidebarDrag = min(panelWidth, max(0, base + dx))
+                drawer.beginDrag()
+                drawer.updateDrag(translationX: dx)
             }
             .onEnded { v in
-                isSettling = true
-                let dx = v.translation.width
-                let vel = v.predictedEndTranslation.width
-                let base = player.sidebarOpen ? panelWidth : 0
-                // 预测终点（按手指速度外推 50%，避免接管位置跳得太远；钳制在有效范围）
-                let predicted = min(panelWidth, max(0, base + vel * 0.5))
-                // 落位方向：超过 1/4 宽度或快速甩动 → 打开/关闭；否则回弹当前状态
-                let shouldOpen = player.sidebarOpen
-                    ? !(dx < -panelWidth * 0.25 || vel < -80)
-                    : (dx > panelWidth * 0.25 || vel > 80)
-                let target: CGFloat = shouldOpen ? panelWidth : 0
-                player.sidebarOpen = shouldOpen
-                // 先无动画接管到预测终点（与手指落点自然衔接），再动画补完剩余距离
-                sidebarDrag = predicted
-                if abs(target - predicted) > 0.5 {
-                    withAnimation(.interactiveSpring(response: 0.34,
-                                                     dampingFraction: 0.86,
-                                                     blendDuration: 0.25)) {
-                        sidebarDrag = target
-                    }
-                }
+                drawer.finishDrag(translationX: v.translation.width,
+                                 velocityX: v.predictedEndTranslation.width)
             }
     }
 }

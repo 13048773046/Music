@@ -70,8 +70,6 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published var loadFailed: Bool = false
     /// 全局音效选择（切歌不重置）
     @Published var selectedEQ: String = "原音"
-    /// 全局左侧抽屉侧边栏开关（放在 PlayerManager 里因为它是跨页面全局状态）
-    @Published var sidebarOpen: Bool = false
     /// 侧边栏听歌模式：默认模式 / 我的喜欢 / 新鲜模式
     @Published var listenMode: ListenMode = .normal
     /// 切到「我的喜欢/新鲜模式」前记住的循环模式，切回默认模式时恢复
