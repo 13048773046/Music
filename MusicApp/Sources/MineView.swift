@@ -28,6 +28,7 @@ struct MineView: View {
 
     /// 滑动窗体当前页：0=作品 1=点赞 2=评论
     @State private var selectedTab = 0
+    @Namespace private var sliderNS
 
     @State private var showImporter = false
     @State private var pickedFileURL: URL?
@@ -45,15 +46,15 @@ struct MineView: View {
             ZStack {
                 Theme.background.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    // 用户信息区（背景图 + 头像 + 听歌时长）
-                    userHeader
-                    // 指示器：作品 | 点赞 | 评论
-                    tabIndicator
-                    // 滑动窗体：三个列表页
-                    tabPages
-                    // 底部：关于 + 退出
-                    bottomBar
+                // 沉浸式：读取顶部安全区，让背景图延伸到状态栏后面
+                GeometryReader { geo in
+                    let topInset = geo.safeAreaInsets.top
+                    VStack(spacing: 0) {
+                        userHeader(topInset: topInset)
+                        tabIndicator
+                        tabPages
+                        bottomBar
+                    }
                 }
             }
             .navigationBarHidden(true)
@@ -93,28 +94,62 @@ struct MineView: View {
 
     // MARK: - 用户信息区（背景图横幅 + 头像压边 + 昵称 + 签名 + 听歌时长）
 
-    private var userHeader: some View {
+    private func userHeader(topInset: CGFloat) -> some View {
         let u = auth.currentUser
         return VStack(spacing: 0) {
-            // 背景图 + 头像行（头像中心压背景图下沿；背景图底部两角圆角衔接）
+            // 背景图延伸至状态栏（沉浸式），底部两角圆角；右上角按钮 + 头像行
             ZStack(alignment: .topLeading) {
-                // 背景图（无图时深色占位），高 160，底部圆角 24
+                // 背景图（无图时深色占位）：高 160 + 顶部安全区
                 Group {
                     if let bgURL = u?.backgroundURL {
                         CachedCoverImage(url: bgURL, title: u?.name ?? "",
                                          placeholder: Rectangle().fill(Theme.card))
-                            .frame(height: 160)
+                            .frame(height: 160 + topInset)
                             .clipped()
                     } else {
                         Rectangle()
                             .fill(Theme.card)
-                            .frame(height: 160)
+                            .frame(height: 160 + topInset)
                     }
                 }
                 .clipShape(BottomRoundedShape(radius: 24))
 
+                // 右上角：上传 + 编辑按钮（背景图右上角）
+                HStack(spacing: 10) {
+                    Button {
+                        showImporter = true
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(Color.black.opacity(0.35))
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showProfileEdit = true
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(Color.black.opacity(0.35))
+                            Image(systemName: "pencil")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, topInset + 8)
+                .padding(.trailing, 20)
+                .frame(maxWidth: .infinity, alignment: .topTrailing)
+
+                // 头像 + 昵称（背景图下部左侧，头像压背景图下沿）
                 HStack(alignment: .center, spacing: 14) {
-                    // 头像
                     ZStack {
                         CachedCoverImage(
                             url: u?.avatarURL ?? URL(string: "about:blank")!,
@@ -146,45 +181,14 @@ struct MineView: View {
                     .padding(.bottom, 2)
 
                     Spacer()
-
-                    // 上传 + 编辑按钮（背景图右下角）
-                    HStack(spacing: 10) {
-                        Button {
-                            showImporter = true
-                        } label: {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .fill(Color.black.opacity(0.35))
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            .frame(width: 42, height: 42)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            showProfileEdit = true
-                        } label: {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .fill(Color.black.opacity(0.35))
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            .frame(width: 42, height: 42)
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
                 .padding(.leading, 20)
                 .padding(.trailing, 20)
-                .padding(.top, 160 - 36)   // 头像中心压在背景图下沿，信息整体下移
+                .padding(.top, topInset + 160 - 36)   // 头像中心压在背景图下沿
             }
-            .frame(height: 160 + 36)       // 背景 + 头像露出下半部
+            .frame(height: topInset + 160 + 36)       // 背景 + 头像露出下半部
 
-            // 签名 + 听歌时长（背景图下方，页面背景上）
+            // 签名 + 听歌时长（信息区，再往下移一点）
             VStack(alignment: .leading, spacing: 10) {
                 if let sig = u?.signature, !sig.isEmpty {
                     Text(sig)
@@ -208,18 +212,19 @@ struct MineView: View {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.top, 14)
+            .padding(.top, 22)
             .padding(.bottom, 14)
         }
     }
 
-    // MARK: - 指示器（紧凑版：作品 | 点赞 | 评论，选中项绿色加粗 + 底部小短条）
+    // MARK: - 指示器（左对齐：作品 | 点赞 | 评论，选中项绿色加粗 + 滑块平滑过渡）
 
     private var tabIndicator: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 26) {
             segItem(title: "作品", count: works.total, index: 0)
             segItem(title: "点赞", count: likes.total, index: 1)
             segItem(title: "评论", count: comments.total, index: 2)
+            Spacer()
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 8)
@@ -228,9 +233,9 @@ struct MineView: View {
     private func segItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
-            withAnimation(.easeInOut(duration: 0.2)) { selectedTab = index }
+            withAnimation(.easeInOut(duration: 0.3)) { selectedTab = index }
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 5) {
                 HStack(spacing: 4) {
                     Text(title)
                         .font(.system(size: 13, weight: selected ? .bold : .medium))
@@ -239,10 +244,19 @@ struct MineView: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(selected ? Theme.accent : Theme.textTertiary)
                 }
-                // 选中态小短条
-                Capsule()
-                    .fill(selected ? Theme.accent : Color.clear)
-                    .frame(width: 26, height: 3)
+                // 滑块：选中项显示，切换时平滑滑动到新位置（matchedGeometryEffect 过渡）
+                Group {
+                    if selected {
+                        Capsule()
+                            .fill(Theme.accent)
+                            .frame(width: 30, height: 3)
+                            .matchedGeometryEffect(id: "tab-slider", in: sliderNS)
+                    } else {
+                        Capsule()
+                            .fill(Color.clear)
+                            .frame(width: 30, height: 3)
+                    }
+                }
             }
             .padding(.vertical, 4)
             .contentShape(Rectangle())
@@ -253,7 +267,13 @@ struct MineView: View {
     // MARK: - 滑动窗体（TabView 三页：作品 / 点赞 / 评论）
 
     private var tabPages: some View {
-        TabView(selection: $selectedTab) {
+        // 自定义 binding：滑动切换时带动画，滑块平滑跟随（而不是直接闪到新位置）
+        TabView(selection: Binding(
+            get: { selectedTab },
+            set: { newValue in
+                withAnimation(.easeInOut(duration: 0.3)) { selectedTab = newValue }
+            }
+        )) {
             worksPage
                 .tag(0)
             likesPage
