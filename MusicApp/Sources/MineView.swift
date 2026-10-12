@@ -74,6 +74,11 @@ struct MineView: View {
                 .refreshable { await refreshAll() }
                 .simultaneousGesture(horizontalSwipe)
             }
+            // 设置页（独立页面，非弹窗）——navigationDestination 必须在 NavigationStack 内部
+            .navigationDestination(isPresented: $showSettings) {
+                SettingsView()
+                    .environmentObject(auth)
+            }
             .navigationBarHidden(true)
             .task { await initialLoad() }
         }
@@ -99,11 +104,6 @@ struct MineView: View {
                 }
                 .environmentObject(auth)
             }
-        }
-        // 设置页（独立页面，非弹窗）
-        .navigationDestination(isPresented: $showSettings) {
-            SettingsView()
-                .environmentObject(auth)
         }
         .tint(Theme.accent)
     }
@@ -567,8 +567,36 @@ struct MineView: View {
 
     @MainActor
     private func initialLoad() async {
+        // 启动页已预加载我的页数据：直接采用，不再重复请求（秒开）
+        if AppPreloader.shared.mineLoaded {
+            adoptPreload()
+            return
+        }
+        // 预加载未完成/失败（如启动时未登录）：自行加载兜底
         let need = !works.loadedOnce || !likes.loadedOnce || !comments.loadedOnce
         if need { await refreshAll() }
+    }
+
+    /// 采用启动页预加载的数据初始化三个列表与听歌时长（第一页，后续滚动续拉）
+    @MainActor
+    private func adoptPreload() {
+        let pre = AppPreloader.shared
+        listenSeconds = pre.mineStatsSeconds
+
+        func pager<T: Equatable>(items: [T], total: Int) -> MinePager<T> {
+            var p = MinePager<T>()
+            p.items = items
+            p.total = total
+            p.page = 2
+            p.hasMore = total > items.count
+            p.loadedOnce = true
+            p.isLoading = false
+            p.failed = false
+            return p
+        }
+        works = pager(items: pre.works, total: pre.worksTotal)
+        likes = pager(items: pre.likes, total: pre.likesTotal)
+        comments = pager(items: pre.comments, total: pre.commentsTotal)
     }
 
     @MainActor

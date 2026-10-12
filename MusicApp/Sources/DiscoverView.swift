@@ -165,8 +165,13 @@ struct DiscoverView: View {
             buildSections(from: library.tracks)
             state = .loaded
         }
-        // 默认推荐位 = 猜你喜欢：始终拉取个性化推荐（未登录/无行为时后端返回随机兜底）
-        Task { await loadRecommended() }
+        // 默认推荐位 = 猜你喜欢：启动页已预加载则直接用，否则异步拉取（失败静默）
+        let pre = AppPreloader.shared
+        if pre.discoverRecommendedReady {
+            recommended = pre.recommended
+        } else {
+            Task { await loadRecommended() }
+        }
     }
 
     /// 拉取个性化推荐填充「猜你喜欢」区块（失败静默，区块自动隐藏）

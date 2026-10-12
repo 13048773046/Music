@@ -29,6 +29,8 @@ struct MusicApp: App {
             }
             .onAppear {
                 Task { await Library.shared.load() }
+                // 启动页期间并行预加载发现页/我的页数据：进入主界面后切页不再等待
+                Task { await AppPreloader.shared.preload() }
                 Task { await fetchAnnouncement() }
                 Task { await fetchUpdate() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
