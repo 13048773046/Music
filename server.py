@@ -1975,8 +1975,31 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                         continue
                     seen_kw.add(k)
                     dedup.append((kw, sc))
+                # 2.5) genre 风格匹配：从高分歌曲提取风格标签，优先推荐同风格的歌
+                genre_set = {}
+                for tid, sc in top:
+                    row = c.execute("SELECT genre FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        row = c.execute("SELECT genre FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                    if not row or not row[0]:
+                        continue
+                    for g in row[0].split(","):
+                        g = g.strip()
+                        if g and g != "流行":
+                            genre_set[g] = genre_set.get(g, 0.0) + sc
+                genre_cand = {}
+                for g, sc in sorted(genre_set.items(), key=lambda x: -x[1])[:5]:
+                    like_g = "%" + g + "%"
+                    tr = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=? AND genre LIKE ?",
+                                   (viewer_id, like_g)).fetchall()
+                    cr = c.execute("SELECT id FROM collected_tracks WHERE offline=0 AND genre LIKE ?",
+                                   (like_g,)).fetchall()
+                    for (tid,) in tr + cr:
+                        if tid in avoid:
+                            continue
+                        genre_cand[tid] = genre_cand.get(tid, 0.0) + sc
                 # 3) 关键词匹配候选（排除用户自己上传的歌曲与已强互动的歌曲）
-                cand = {}
+                cand = dict(genre_cand)  # genre 匹配的先放进来
                 for kw, sc in dedup[:8]:
                     like_kw = "%" + kw + "%"
                     tr = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=?"
