@@ -51,15 +51,22 @@ struct MusicApp: App {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
             let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            if let title = obj?["title"] as? String, !title.isEmpty {
-                await MainActor.run {
-                    announcement = Announcement(
-                        id: obj?["id"] as? String ?? "",
-                        title: title,
-                        content: obj?["content"] as? String ?? "",
-                        version: obj?["version"] as? String ?? ""
-                    )
-                }
+            guard let title = obj?["title"] as? String, !title.isEmpty,
+                  let annId = obj?["id"] as? String, !annId.isEmpty else { return }
+            let showOnce = (obj?["showOnce"] as? Int) ?? 0
+            // showOnce=1 时，检查是否已经弹过这条公告
+            if showOnce == 1 {
+                let shown = UserDefaults.standard.string(forKey: "shown_announcement_id") ?? ""
+                if shown == annId { return }  // 已经弹过，不再弹
+            }
+            await MainActor.run {
+                announcement = Announcement(
+                    id: annId,
+                    title: title,
+                    content: obj?["content"] as? String ?? "",
+                    version: obj?["version"] as? String ?? "",
+                    showOnce: showOnce
+                )
             }
         } catch {}
     }
@@ -71,6 +78,7 @@ struct Announcement: Identifiable {
     let title: String
     let content: String
     let version: String
+    let showOnce: Int
 }
 
 /// 从底部弹出的公告弹窗（Bottom Sheet 风格）
@@ -104,6 +112,10 @@ struct AnnouncementSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("我知道了") {
+                        // showOnce=1 时，记录这条公告已弹过，下次不再弹
+                        if announcement.showOnce == 1 {
+                            UserDefaults.standard.set(announcement.id, forKey: "shown_announcement_id")
+                        }
                         dismiss()
                     }
                     .foregroundColor(Color(hex: 0x5cd68a))

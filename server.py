@@ -172,7 +172,11 @@ def db():
     c.execute("""CREATE TABLE IF NOT EXISTS announcements(
         id TEXT PRIMARY KEY, title TEXT, content TEXT,
         version TEXT DEFAULT '', active INTEGER DEFAULT 1,
+        show_once INTEGER DEFAULT 0,
         created REAL)""")
+    ann_cols = [r[1] for r in c.execute("PRAGMA table_info(announcements)")]
+    if "show_once" not in ann_cols:
+        c.execute("ALTER TABLE announcements ADD COLUMN show_once INTEGER DEFAULT 0")
     c.commit()
     return c
 
@@ -884,14 +888,14 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
             # 公告通知：App 启动时请求最新一条 active 公告
             if u.path == "/api/announcement":
                 c = db()
-                row = c.execute("SELECT id, title, content, version, created FROM announcements"
+                row = c.execute("SELECT id, title, content, version, show_once, created FROM announcements"
                                 " WHERE active=1 ORDER BY created DESC LIMIT 1").fetchone()
                 c.close()
                 if not row:
-                    self._json(200, {"id": "", "title": "", "content": "", "version": ""})
+                    self._json(200, {"id": "", "title": "", "content": "", "version": "", "showOnce": 0})
                     return
                 self._json(200, {"id": row[0], "title": row[1], "content": row[2],
-                                 "version": row[3] or ""})
+                                 "version": row[3] or "", "showOnce": row[4] or 0})
                 return
 
             # ---------- 采集控制台 H5 页面 ----------
@@ -2449,8 +2453,9 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                     self._err(400, "title and content required"); return
                 c = db()
                 aid = secrets.token_hex(6)
-                c.execute("INSERT INTO announcements(id,title,content,version,active,created) VALUES(?,?,?,?,1,?)",
-                          (aid, title, content, data.get("version") or "", time.time()))
+                show_once = 1 if str(data.get("showOnce") or "0") in ("1", "true", "yes") else 0
+                c.execute("INSERT INTO announcements(id,title,content,version,show_once,active,created) VALUES(?,?,?,?,?,1,?)",
+                          (aid, title, content, data.get("version") or "", show_once, time.time()))
                 c.commit()
                 c.close()
                 self._json(200, {"ok": True, "id": aid}); return
