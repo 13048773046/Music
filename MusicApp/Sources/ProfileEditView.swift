@@ -1,5 +1,4 @@
 import SwiftUI
-import PhotosUI
 
 /// 用户主页 / 编辑资料页：从「我的」资料卡点进来，可改昵称、性别、年龄、签名、头像、背景图。
 struct ProfileEditView: View {
@@ -12,10 +11,10 @@ struct ProfileEditView: View {
     @State private var signature = ""
     @State private var avatarData: Data?
     @State private var avatarImage: UIImage?
-    @State private var avatarPickerItem: PhotosPickerItem?
     @State private var bgData: Data?
     @State private var bgImage: UIImage?
-    @State private var bgPickerItem: PhotosPickerItem?
+    @State private var showAvatarPicker = false
+    @State private var showBgPicker = false
     @State private var busy = false
     @State private var error: String?
     @State private var showSaved = false
@@ -27,10 +26,16 @@ struct ProfileEditView: View {
             Theme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // 固定头部：返回 + 标题 + 保存按钮。
+                // 独立于下方 ScrollView 内容层，与背景图/头像 PhotosPicker 完全隔离，
+                // 避免内容层的点击区域干扰返回按钮的触摸命中。
+                header
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
                 ScrollView {
                     VStack(spacing: 18) {
-                        header
-
                         profileCard
 
                         inputCard
@@ -51,8 +56,12 @@ struct ProfileEditView: View {
             seed()
             NavBack.enableSwipeBack()
         }
-        .onChange(of: avatarPickerItem) { _ in Task { await loadAvatar() } }
-        .onChange(of: bgPickerItem) { _ in Task { await loadBg() } }
+        .sheet(isPresented: $showAvatarPicker) {
+            ImagePicker(onPicked: pickedAvatar)
+        }
+        .sheet(isPresented: $showBgPicker) {
+            ImagePicker(onPicked: pickedBg)
+        }
         .alert("已保存", isPresented: $showSaved) {
             Button("好", role: .cancel) { NavBack.goBack(dismiss) }
         }
@@ -113,8 +122,10 @@ struct ProfileEditView: View {
             // 底层 card 色，撑满整个卡片（160 图区 + 40 头像区）
             Rectangle().fill(Theme.card)
 
-            // 背景图：顶部 160 高
-            PhotosPicker(selection: $bgPickerItem, matching: .images) {
+            // 背景图：顶部 160 高（普通 Button 触发显式照片选择器，命中区域精确）
+            Button {
+                showBgPicker = true
+            } label: {
                 Group {
                     if let bgImage {
                         Image(uiImage: bgImage).resizable().scaledToFill()
@@ -140,7 +151,9 @@ struct ProfileEditView: View {
             .buttonStyle(.plain)
 
             // 头像：压在背景图下沿（top = 160 - 38 = 122，leading = 16）
-            PhotosPicker(selection: $avatarPickerItem, matching: .images) {
+            Button {
+                showAvatarPicker = true
+            } label: {
                 ZStack {
                     if let avatarImage {
                         Image(uiImage: avatarImage).resizable().scaledToFill()
@@ -231,19 +244,17 @@ struct ProfileEditView: View {
         signature = u.signature ?? ""
     }
 
-    private func loadAvatar() async {
-        guard let item = avatarPickerItem else { return }
-        if let data = try? await item.loadTransferable(type: Data.self),
-           let img = UIImage(data: data) {
-            avatarData = data; avatarImage = img
+    private func pickedAvatar(_ data: Data) {
+        if let img = UIImage(data: data) {
+            avatarData = data
+            avatarImage = img
         }
     }
 
-    private func loadBg() async {
-        guard let item = bgPickerItem else { return }
-        if let data = try? await item.loadTransferable(type: Data.self),
-           let img = UIImage(data: data) {
-            bgData = data; bgImage = img
+    private func pickedBg(_ data: Data) {
+        if let img = UIImage(data: data) {
+            bgData = data
+            bgImage = img
         }
     }
 

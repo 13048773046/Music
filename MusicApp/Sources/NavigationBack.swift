@@ -9,17 +9,23 @@ import UIKit
 /// 找不到导航栈（如 sheet 场景）时回退 dismiss()。
 /// 同时提供恢复系统边缘滑动返回手势的能力（navigationBarHidden 后偶发失效）。
 enum NavBack {
-    /// 当前活跃的 UINavigationController（SwiftUI NavigationStack 内部即 UINavigationController）
+    /// 当前活跃的 UINavigationController（SwiftUI NavigationStack 内部即 UINavigationController）。
+    /// 深度优先遍历 presented + child 链，确保能找到导航栈（iOS 16 多层 push 场景）。
     static func currentNavigationController() -> UINavigationController? {
         guard let scene = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .first(where: { $0.activationState == .foregroundActive }),
               let window = scene.windows.first(where: { $0.isKeyWindow }),
               let root = window.rootViewController else { return nil }
-        var vc: UIViewController? = root
-        while let presented = vc?.presentedViewController { vc = presented }
-        if let nav = vc as? UINavigationController { return nav }
-        return vc?.navigationController
+        func find(_ vc: UIViewController) -> UINavigationController? {
+            if let nav = vc as? UINavigationController { return nav }
+            if let presented = vc.presentedViewController, let nav = find(presented) { return nav }
+            for child in vc.children {
+                if let nav = find(child) { return nav }
+            }
+            return nil
+        }
+        return find(root)
     }
 
     /// 可靠返回：导航栈存在且有上级页面时 pop，否则回退 dismiss
