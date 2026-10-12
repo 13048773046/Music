@@ -997,8 +997,19 @@ const searchBtn=document.getElementById('searchBtn');
 const searchList=document.getElementById('searchList');
 let running=false, mode='search';
 
-// 初始化关键词 chips
+// 初始化关键词 chips（预设 + 从 localStorage 恢复的自定义）
+const STORAGE_KEY='custom_keywords';
+// 读取已保存的自定义关键词
+let savedKws=[];
+try{savedKws=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');}catch(e){savedKws=[];}
+// 预设关键词
 KW_LIST.forEach(k=>{
+  const d=document.createElement('div');
+  d.className='chip on';d.textContent=k;d.dataset.v=k;
+  kwChips.appendChild(d);
+});
+// 恢复自定义关键词
+savedKws.forEach(k=>{
   const d=document.createElement('div');
   d.className='chip on';d.textContent=k;d.dataset.v=k;
   kwChips.appendChild(d);
@@ -1016,9 +1027,17 @@ function addCustomKw(){
   const d=document.createElement('div');
   d.className='chip on';d.textContent=v;d.dataset.v=v;
   kwChips.appendChild(d);
-  // 绑定点击切换（和其他 chip 一致）
-  d.onclick=()=>{d.classList.toggle('on');};
+  // 绑定点击切换
+  d.onclick=()=>{d.classList.toggle('on');saveKws();};
   customKwInput.value='';
+  saveKws();
+}
+// 保存自定义关键词到 localStorage
+function saveKws(){
+  const all=[...kwChips.querySelectorAll('.chip')].map(x=>x.dataset.v);
+  // 只保存不在预设列表里的自定义关键词
+  const custom=all.filter(k=>!KW_LIST.includes(k));
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(custom));
 }
 addKwBtn.onclick=addCustomKw;
 customKwInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addCustomKw();}});
@@ -1031,6 +1050,7 @@ function sel(container,cb){
       kwChips.querySelectorAll('.chip').forEach(x=>x.disabled=(mode!=='search'));
     }else{
       c.classList.toggle('on');
+      saveKws(); // 选中状态变化也保存
     }
     if(cb)cb();
   });
