@@ -94,7 +94,9 @@ final class SidebarDrawerController: NSObject, ObservableObject {
         }
         let fraction = animator.fractionComplete
         progress = startProgress + (endProgress - startProgress) * fraction
-        if animator.state == .ended || animator.state == .stopped {
+        // UIViewAnimatingState 仅 .inactive/.active/.stopped：
+        // 动画自然完成后回到 .inactive，手动 stop 为 .stopped；无 .ended case
+        if animator.state == .inactive || animator.state == .stopped {
             progress = endProgress
             stopAnimation()
         }
