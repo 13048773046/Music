@@ -161,13 +161,14 @@ struct GlobalTopBar: View {
             Button {
                 onOpenSidebar()
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
+                    // 三横线菜单：圆润线条 + 纯白色，视觉饱满
                     Image(systemName: "line.horizontal.3")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(textPrimary.opacity(0.9))
+                        .font(.system(size: 22, weight: .heavy))
+                        .foregroundColor(.white)
                     Text("流萤音乐")
                         .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(textPrimary)
+                        .foregroundColor(.white)
                 }
             }
             .buttonStyle(.plain)
@@ -179,7 +180,7 @@ struct GlobalTopBar: View {
             } label: {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(textPrimary)
+                    .foregroundColor(.white)
                     .padding(10)
             }
             .buttonStyle(.plain)
