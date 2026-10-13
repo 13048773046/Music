@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 全局导航路由：跨页面跳转（通知点击 → 回首页播放歌曲 / 打开评论弹窗定位评论）
 final class AppRouter: ObservableObject {
@@ -99,7 +100,17 @@ final class NotificationBus: ObservableObject {
     private var reconnectAttempt = 0
     private var manualStop = false
 
-    private init() {}
+    private init() {
+        // 回前台主动恢复：后台时系统可能回收长连接（不触发 failure），回前台检查并重连
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, !self.manualStop, self.task == nil,
+                  let token = AuthManager.shared.authToken, !token.isEmpty else { return }
+            self.startIfNeeded()
+        }
+    }
 
     /// 设置未读数（列表接口返回时同步）
     func setUnread(_ n: Int) {
@@ -205,7 +216,9 @@ final class NotificationBus: ObservableObject {
 
     private func scheduleReconnect() {
         guard !manualStop else { return }
-        guard reconnectAttempt < 10 else { return }
+        // 指数退避：5s 起、每失败一次近似翻倍，封顶 60s；不设重连上限——
+        // 长时间播放时网络可能长时间不稳定，硬上限会导致永久断连、之后通知全丢。
+        // 达到封顶后持续每 60s 重试，直到登录态退出（manualStop）或重连成功。
         reconnectAttempt += 1
         let delay = min(5.0 * Double(reconnectAttempt), 60.0)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in

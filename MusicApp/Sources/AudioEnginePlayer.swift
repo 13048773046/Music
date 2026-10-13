@@ -100,6 +100,10 @@ final class AudioEnginePlayer {
     private var pendingURL: URL?
     /// prepare 是否就绪（已下载、引擎已启动、已 schedule）
     private var isPrepared = false
+    /// 引擎运行状态低频检查计数（progress timer 内每 ~1s 检查一次）。
+    /// AVAudioEngine 长时间运行可能被系统异常停止且不触发配置变化通知 → 静默无声，
+    /// 兜底：检测到未运行时自动 restartIfNeeded 续播。
+    private var restoreCheckCounter = 0
 
     /// 进度回调（每秒约 10 次）
     var onProgress: ((Double, Double) -> Void)?   // (currentSeconds, durationSeconds)
@@ -433,6 +437,16 @@ final class AudioEnginePlayer {
                     self.stopTimer()
                     self.onCompletion?()
                     return
+                }
+                // 长时间播放兜底：AVAudioEngine 可能被系统异常停止且未触发配置变化通知
+                // （长时间运行/后台优化/音频栈异常），每 ~1s 检查一次，未运行时自动重启续播，
+                // 防止长时间播放后引擎静默停止导致无声。
+                self.restoreCheckCounter += 1
+                if self.restoreCheckCounter >= 10 {
+                    self.restoreCheckCounter = 0
+                    if self.isPlaying, self.totalFrames > 0, !self.engine.isRunning {
+                        self.restartIfNeeded()
+                    }
                 }
                 self.onProgress?(self.currentSeconds(), self.durationSeconds())
             }
