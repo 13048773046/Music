@@ -386,6 +386,8 @@ private struct LoadingSweep: View {
 struct MarqueeText: View {
     let text: String
     let font: Font
+    /// 溢出（文字超出可用宽度，会被右侧按钮挡住）时使用的紧凑字号；nil = 不缩小
+    var compactFont: Font? = nil
     let color: Color
     /// 滚动速度（pt/秒）
     var speed: CGFloat = 50
@@ -394,31 +396,40 @@ struct MarqueeText: View {
     /// 是否允许滚动：非当前播放页传 false，离屏页不再跑 repeatForever 动画，减少卡顿
     var active: Bool = true
 
-    @State private var textWidth: CGFloat = 0
+    @State private var textWidth: CGFloat = 0    // 原字号单份文字宽
     @State private var containerWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
 
-    /// 文字实际宽度超出容器宽度才滚动
+    /// 原字号文字是否超出容器（即会被右侧音效按钮挡住）：只据此触发缩小 + 滚动
     private var overflow: Bool { textWidth > containerWidth + 4 && containerWidth > 0 }
+    /// 显示字号：溢出（被按钮挡住）时用紧凑字号缩小
+    private var displayFont: Font { overflow ? (compactFont ?? font) : font }
 
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 50) {
-                Text(text).font(font).foregroundColor(color).fixedSize()
+                Text(text).font(displayFont).foregroundColor(color).fixedSize()
                 if overflow {
-                    Text(text).font(font).foregroundColor(color).fixedSize()
+                    Text(text).font(displayFont).foregroundColor(color).fixedSize()
                 }
             }
             .background(
                 GeometryReader { tgeo in
                     Color.clear.onAppear {
-                        // 两份文字总宽减间距再除 2 = 单份宽度
-                        let total = tgeo.size.width
-                        textWidth = overflow ? (total - 50) / 2 : total
                         containerWidth = geo.size.width
                     }
                 }
             )
+            .overlay(alignment: .leading) {
+                // 隐藏的原字号文本：精确测量「是否会被右侧按钮挡住」，与显示字号解耦。
+                // 避免缩小字号后溢出判断跟着变、导致不滚动的误判。
+                Text(text).font(font).fixedSize().hidden()
+                    .background(
+                        GeometryReader { orig in
+                            Color.clear.onAppear { textWidth = orig.size.width }
+                        }
+                    )
+            }
             .offset(x: offset)
             .onAppear { start(container: geo.size.width) }
             .onChange(of: text) { _ in restart(container: geo.size.width) }

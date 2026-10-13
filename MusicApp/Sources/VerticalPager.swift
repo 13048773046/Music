@@ -425,6 +425,8 @@ struct PlayerCard: View {
                             MarqueeText(
                                 text: track.title,
                                 font: .system(size: 24, weight: .bold),
+                                // 歌名太长会被右侧音效按钮遮住时：缩小字号 + 跑马灯滚动
+                                compactFont: .system(size: 18, weight: .semibold),
                                 color: textPrimary(onLight: onLight),
                                 active: isCurrent
                             )
