@@ -734,6 +734,14 @@ private struct RealProgressView: View {
                 onSeek: { fraction in player.seek(toFraction: fraction) }
             )
 
+            // 原音 → 引擎无缝切换：后台预下载进度反馈（切换瞬间不打断播放，
+            // 就绪后自动接管；此提示让用户知道正在准备音效）
+            if player.engineSwitchInProgress {
+                Text("音效加载中 \(Int(player.engineDownloadFraction * 100))%")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundColor(secondaryTint)
+            }
+
             HStack {
                 Text(formatTime((scrubFraction ?? player.progress) * player.duration))
                 Spacer()

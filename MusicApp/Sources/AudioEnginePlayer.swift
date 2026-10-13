@@ -1,6 +1,39 @@
 import AVFoundation
 import QuartzCore   // CACurrentMediaTime（可靠单调时钟）
 
+/// 引擎整曲下载的进度代理：把 URLSessionDownloadTask 的下载进度按 URL 转发给对应引擎实例。
+/// （downloadTask 无 completion-handler 进度 API，必须走 delegate；共享会话共享一个代理）
+final class EngineDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    static let shared = EngineDownloadDelegate()
+    /// url.absoluteString → 进度回调
+    private var handlers: [String: (Double) -> Void] = [:]
+    private let lock = NSLock()
+
+    func register(url: String, handler: @escaping (Double) -> Void) {
+        lock.lock(); handlers[url] = handler; lock.unlock()
+    }
+    func unregister(url: String) {
+        lock.lock(); handlers[url] = nil; lock.unlock()
+    }
+
+    // MARK: URLSessionDownloadDelegate
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0,
+              let desc = downloadTask.taskDescription else { return }
+        let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        lock.lock()
+        let handler = handlers[desc]
+        lock.unlock()
+        DispatchQueue.main.async { handler?(min(max(fraction, 0), 1)) }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {}
+}
+
 /// 音效实时处理引擎（原音 + 5 种引擎音效）。
 ///
 /// 管线：
@@ -65,6 +98,8 @@ final class AudioEnginePlayer {
     /// 当前下载任务与目标 URL：快速切歌时取消旧任务、丢弃旧回调，防止旧歌覆盖新歌
     private var currentTask: URLSessionDownloadTask?
     private var pendingURL: URL?
+    /// prepare 是否就绪（已下载、引擎已启动、已 schedule）
+    private var isPrepared = false
 
     /// 进度回调（每秒约 10 次）
     var onProgress: ((Double, Double) -> Void)?   // (currentSeconds, durationSeconds)
@@ -75,12 +110,19 @@ final class AudioEnginePlayer {
 
     /// 整曲下载用共享会话：避免每次切歌新建 URLSession（每个 session 自带连接池与资源，
     /// 频繁新建会造成资源浪费与潜在泄漏）。downloadTask 会把整曲下载到临时文件，缓存策略仅影响 URL 缓存命中。
+    /// delegate 用于上报下载进度（「原音→引擎」无缝切换时 UI 显示加载百分比）。
     private static let downloadSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.timeoutIntervalForRequest = 30
-        return URLSession(configuration: config)
+        let session = URLSession(configuration: config,
+                                 delegate: EngineDownloadDelegate.shared,
+                                 delegateQueue: nil)
+        return session
     }()
+
+    /// 下载进度回调（0...1，主线程）
+    var onDownloadProgress: ((Double) -> Void)?
 
     // MARK: - 配置
 
@@ -175,20 +217,28 @@ final class AudioEnginePlayer {
 
     // MARK: - 播放控制
 
-    /// 从 URL 加载并播放（先下载到临时文件）。
-    /// - startSeconds: 初始播放位置（无缝续播：跨播放器切换时从该秒数接续，0 = 从头）
-    /// - autoPlay: 下载完成后是否立即播放（false = 就绪但保持暂停，pausedFrame 已定位，
-    ///   之后 play() 会从该位置续播）
-    func load(url: URL, mode: Mode, startSeconds: Double = 0, autoPlay: Bool = true) {
+    /// 预下载整曲并就绪（不启动播放、不上报进度 Timer）。
+    /// 用途：原音 → 引擎音效的无缝接力——AVPlayer 继续出声，引擎在后台下载；
+    /// 就绪后调用 playFrom(seconds:autoPlay:) 从当前进度接管，用户感知不到加载。
+    /// 完成/失败回调均回主线程；下载进度经 onDownloadProgress 上报（0...1）。
+    func prepare(url: URL, mode: Mode, completion: @escaping () -> Void) {
         stop()
+        isPrepared = false
         onLoadingChanged?(true)
         pendingURL = url
+        EngineDownloadDelegate.shared.register(url: url.absoluteString) { [weak self] f in
+            self?.onDownloadProgress?(f)
+        }
 
         let task = Self.downloadSession.downloadTask(with: url) { [weak self] tempURL, _, error in
             guard let self = self else { return }
-            // 切歌后旧任务迟到响应：直接丢弃，防止旧歌覆盖新歌的音频/状态
-            guard self.pendingURL == url else { return }
+            // 切歌/切音效后旧任务迟到响应：直接丢弃，防止旧内容覆盖新状态
+            guard self.pendingURL == url else {
+                EngineDownloadDelegate.shared.unregister(url: url.absoluteString)
+                return
+            }
             self.pendingURL = nil
+            EngineDownloadDelegate.shared.unregister(url: url.absoluteString)
             if let error = error {
                 print("[AudioEngine] download error: \(error)")
                 DispatchQueue.main.async {
@@ -217,17 +267,15 @@ final class AudioEnginePlayer {
                 self.audioFile = file
                 self.fileFormat = file.processingFormat
                 self.totalFrames = file.length
-                // 无缝续播：初始位置 = startSeconds（clamp 到文件范围），
-                // 播放中切换引擎时从当前位置接续，而不是从头播
-                let sampleRate = file.processingFormat.sampleRate
-                let target = AVAudioFramePosition(startSeconds * sampleRate)
-                self.pausedFrame = max(0, min(target, file.length - 1))
+                self.pausedFrame = 0
                 self.apply(mode: mode)
-
                 try self.engine.start()
-                self.schedule(from: self.pausedFrame)
-                if autoPlay { self.play() }
-                DispatchQueue.main.async { self.onLoadingChanged?(false) }
+                self.schedule(from: 0)
+                self.isPrepared = true
+                DispatchQueue.main.async {
+                    self.onLoadingChanged?(false)
+                    completion()
+                }
             } catch {
                 print("[AudioEngine] load error: \(error)")
                 DispatchQueue.main.async {
@@ -236,8 +284,62 @@ final class AudioEnginePlayer {
                 }
             }
         }
+        task.taskDescription = url.absoluteString
         currentTask = task
         task.resume()
+    }
+
+    /// 从 URL 加载并播放（先下载到临时文件）。
+    /// - startSeconds: 初始播放位置（无缝续播：跨播放器切换时从该秒数接续，0 = 从头）
+    /// - autoPlay: 下载完成后是否立即播放（false = 就绪但保持暂停，pausedFrame 已定位，
+    ///   之后 play() 会从该位置续播）
+    func load(url: URL, mode: Mode, startSeconds: Double = 0, autoPlay: Bool = true) {
+        prepare(url: url, mode: mode) { [weak self] in
+            guard let self = self else { return }
+            if autoPlay {
+                self.playFrom(seconds: startSeconds, autoPlay: true)
+            } else {
+                // 暂停态：只定位，就绪后由 resumePlayback 从该位置起播
+                self.seek(toSeconds: startSeconds)
+            }
+        }
+    }
+
+    /// 从指定位置播放（必须已 prepare 就绪）。
+    /// - autoPlay: false 时只定位就绪（pausedFrame），由后续 play() 从该位置起播
+    func playFrom(seconds: Double, autoPlay: Bool = true) {
+        guard isPrepared, let format = fileFormat, totalFrames > 0 else { return }
+        let target = AVAudioFramePosition(seconds * format.sampleRate)
+        let clamped = max(0, min(target, totalFrames - 1))
+        pausedFrame = clamped
+        schedule(from: clamped)
+        if autoPlay {
+            playerNode.play()
+            isPlaying = true
+            playStartFrame = clamped
+            playStartTime = CACurrentMediaTime()
+            startTimer()
+        }
+    }
+
+    /// 引擎应恢复运行时调用（回前台 / 音频会话配置变化）：
+    /// AVAudioEngine 可能被系统停止（后台优化/配置变更），引擎不再输出 → 无声。
+    /// 这里检测到未运行就重启并重新挂载，从推算位置续播（进度不丢）。
+    func restartIfNeeded() {
+        guard isPlaying else { return }
+        guard !engine.isRunning else { return }
+        do {
+            let resume = currentFrame()   // 引擎停止期间进度时钟仍在走，以推算位置续播
+            try engine.start()
+            schedule(from: resume)
+            playerNode.play()
+            playStartFrame = resume
+            playStartTime = CACurrentMediaTime()
+            startTimer()
+            print("[AudioEngine] restarted at \(resume) frames")
+        } catch {
+            print("[AudioEngine] restart failed: \(error)")
+        }
     }
 
     /// 调度世代号：每次 schedule/stop 递增，完成回调据此识别「正常播完」与「被 stop 打断」。
@@ -287,6 +389,7 @@ final class AudioEnginePlayer {
         currentTask?.cancel()
         currentTask = nil
         pendingURL = nil
+        isPrepared = false
         playerNode.stop()
         scheduleGen += 1   // 失效所有未播完 segment 的完成回调
         isPlaying = false
@@ -352,6 +455,9 @@ final class AudioEnginePlayer {
             playerNode.play()
             playStartFrame = clamped
             playStartTime = CACurrentMediaTime()
+        } else {
+            // 暂停态：也必须重新挂载目标段，否则 play() 时仍播上一次调度的位置（从旧位置起播）
+            schedule(from: clamped)
         }
     }
 

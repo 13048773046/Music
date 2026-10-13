@@ -76,6 +76,17 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 切到「我的喜欢/新鲜模式」前记住的循环模式，切回默认模式时恢复
     private var savedNormalMode: PlayMode = .listLoop
 
+    // MARK: - 原音 → 引擎 无缝接力（下载期间原音继续出声）
+
+    /// 引擎预加载切换任务：取消旧任务防迟到接管
+    private var engineSwitchTask: Task<Void, Never>?
+    /// 是否正在为「原音 → 引擎」后台预下载（UI 显示加载百分比）
+    @Published private(set) var engineSwitchInProgress: Bool = false
+    /// 引擎整曲下载进度 0...1（engineSwitchInProgress 期间有效）
+    @Published private(set) var engineDownloadFraction: Double = 0
+    /// 加载期间（duration==0）的待应用拖动位置：就绪后立即跳到该处
+    private var pendingSeekFraction: Double?
+
     private var pendingArtwork: UIImage?
     /// 已构建好的锁屏 artwork 对象（切歌时重建一次，进度刷新不再重复创建，降低 0.1s 刷新开销）
     private var currentArtwork: MPMediaItemArtwork?
@@ -126,6 +137,7 @@ final class PlayerManager: NSObject, ObservableObject {
 
         setupRemoteCommands()
         setupInterruptionHandling()
+        setupEngineRestoreHandling()
 
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 10),   // 0.1s：进度条等 UI 平滑（歌词另有逐帧实时源）
@@ -142,6 +154,14 @@ final class PlayerManager: NSObject, ObservableObject {
             if d.isFinite, d > 0 {
                 self.duration = d
                 self.progress = min(max(self.currentTime / d, 0), 1)
+                // 加载期间拖动待应用：AVPlayer 拿到真实时长后立即跳过去
+                if let pf = self.pendingSeekFraction {
+                    self.pendingSeekFraction = nil
+                    let target = CMTime(seconds: pf * d, preferredTimescale: 600)
+                    self.player.seek(to: target)
+                    self.currentTime = pf * d
+                    self.progress = pf
+                }
             }
             // 缓冲状态：播放点数据未到达时（卡顿/加载中）显示加载动画
             self.isBuffering = (self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
@@ -240,10 +260,16 @@ final class PlayerManager: NSObject, ObservableObject {
 
     /// 切换音效：直接应用（EQBSheet 调用入口）。
     /// - 引擎音效之间切换：只换引擎参数，不重新下载整曲，进度/歌词连续；
-    /// - 原音 ↔ 引擎：跨播放器切换，重载当前歌曲（引擎需下载整曲 / AVPlayer 走流）。
+    /// - 原音 → 引擎：AVPlayer 继续出声（无感），引擎后台下载就绪后从当前进度无缝接管；
+    /// - 引擎 → 原音：重载当前歌曲（引擎需下载整曲 / AVPlayer 走流）。
     /// - 加载失败状态下切换 = 重试加载。
     func applyEQ(_ name: String) {
         guard name != selectedEQ else { return }
+        // 先取消进行中的引擎预加载切换（再次切换/切歌/失败都会重新发起）
+        engineSwitchTask?.cancel()
+        engineSwitchTask = nil
+        engineSwitchInProgress = false
+        engineDownloadFraction = 0
         if loadFailed {
             selectedEQ = name
             reloadCurrent()   // 失败态：切音效即重试（playCurrent 按新音效加载）
@@ -258,9 +284,99 @@ final class PlayerManager: NSObject, ObservableObject {
                 updateNowPlaying(force: true)
             }
             // 原音 → 原音：无操作
+        } else if isEngine {
+            // 原音 → 引擎：无缝接力。AVPlayer 继续播放（原音出声、可拖动），
+            // 引擎在后台下载整曲；就绪后从 AVPlayer 当前进度无缝接管。
+            guard let current = current else { return }
+            let targetID = current.id
+            let mode = Self.engineMode(for: name)
+            selectedEQ = name
+            engineSwitchInProgress = true
+            engineDownloadFraction = 0
+            let task = Task {
+                let url = await API.signedStreamURL(for: targetID)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    // 预下载期间切歌/切回原音/再次切换：丢弃迟到接管并清状态
+                    guard self.current?.id == targetID, self.selectedEQ != "原音" else {
+                        self.engineSwitchInProgress = false
+                        self.engineDownloadFraction = 0
+                        return
+                    }
+                    // 引擎回调接线（接管后由引擎驱动进度/完成/缓冲）
+                    self.enginePlayer.onProgress = { [weak self] cur, dur in
+                        guard let self = self else { return }
+                        // 加载期间拖动待应用：进度数据一到就跳过去
+                        if let pf = self.pendingSeekFraction, dur > 0 {
+                            self.pendingSeekFraction = nil
+                            let t = pf * dur
+                            self.enginePlayer.seek(toSeconds: t)
+                            self.currentTime = t
+                            self.progress = min(max(pf, 0), 1)
+                            return
+                        }
+                        self.currentTime = cur
+                        self.duration = dur
+                        self.progress = dur > 0 ? min(cur / dur, 1) : 0
+                        self.updateNowPlaying()
+                    }
+                    self.enginePlayer.onCompletion = { [weak self] in
+                        guard let self else { return }
+                        if self.listen.trackId == self.current?.id {
+                            self.listen.completedPlays += 1
+                        }
+                        self.flushListen(.complete)
+                        self.next()
+                    }
+                    self.enginePlayer.onLoadingChanged = { [weak self] loading in
+                        self?.isBuffering = loading
+                        if !loading { self?.bufferProgress = 1 }
+                    }
+                    self.enginePlayer.onDownloadProgress = { [weak self] f in
+                        self?.engineDownloadFraction = f
+                    }
+                    // 预加载失败：AVPlayer 仍在正常播，回退原音继续，不触发失败自愈
+                    self.enginePlayer.onLoadFailed = { [weak self] in
+                        guard let self else { return }
+                        DispatchQueue.main.async {
+                            if self.engineSwitchInProgress {
+                                self.engineSwitchInProgress = false
+                                self.engineDownloadFraction = 0
+                                self.selectedEQ = "原音"
+                                self.updateNowPlaying(force: true)
+                            } else {
+                                self.handlePlaybackFailure()
+                            }
+                        }
+                    }
+                    self.enginePlayer.prepare(url: url, mode: mode) { [weak self] in
+                        guard let self else { return }
+                        self.engineSwitchInProgress = false
+                        self.engineDownloadFraction = 0
+                        // 就绪后再次确认未被切歌/切回原音
+                        guard self.current?.id == targetID, self.selectedEQ != "原音" else {
+                            self.enginePlayer.stop()   // 丢弃就绪结果，释放下载文件
+                            return
+                        }
+                        // 无缝接管：取 AVPlayer 最新进度 → 停 AVPlayer → 引擎从该处续播
+                        var resume = self.currentTime
+                        if let pf = self.pendingSeekFraction, self.duration > 0 {
+                            resume = pf * self.duration
+                        }
+                        self.pendingSeekFraction = nil
+                        let shouldPlay = self.isPlaying
+                        self.enginePlayer.playFrom(seconds: resume, autoPlay: shouldPlay)
+                        self.usingEngine = true
+                        self.player.pause()
+                        self.player.replaceCurrentItem(with: nil)
+                        self.updateNowPlaying(force: true)
+                    }
+                }
+            }
+            engineSwitchTask = task
         } else {
-            // 原音 ↔ 引擎：跨播放器切换。记录切换瞬间进度与播放状态，
-            // 加载完成后从该位置无缝续播（不从头、不闪零）；暂停中切换则保持暂停。
+            // 引擎 → 原音：跨播放器切换。记录切换瞬间进度与播放状态，
+            // AVPlayer 加载完成后从该位置无缝续播（不从头、不闪零）；暂停中切换则保持暂停。
             let wasPlaying = isPlaying
             let resumeSeconds = currentTime
             selectedEQ = name
@@ -572,12 +688,17 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     func seek(toFraction fraction: Double) {
-        guard duration > 0 else { return }
-        if usingEngine {
-            enginePlayer.seek(toSeconds: fraction * duration)
+        if duration > 0 {
+            if usingEngine {
+                enginePlayer.seek(toSeconds: fraction * duration)
+            } else {
+                let target = CMTime(seconds: fraction * duration, preferredTimescale: 600)
+                player.seek(to: target)
+            }
         } else {
-            let target = CMTime(seconds: fraction * duration, preferredTimescale: 600)
-            player.seek(to: target)
+            // 加载中（duration 未知/为 0）：记住目标位置，就绪后立即跳过去，
+            // 否则拖动会被静默丢弃、滑块弹回原位（原音→引擎下载期间可拖动）
+            pendingSeekFraction = fraction
         }
     }
 
@@ -596,6 +717,12 @@ final class PlayerManager: NSObject, ObservableObject {
                              autoResume: Bool = true,
                              preserveProgress: Bool = false) {
         guard let current = current else { return }
+        // 切歌/重载会终止一切进行中的切换：取消引擎预加载任务、清空待应用拖动
+        engineSwitchTask?.cancel()
+        engineSwitchTask = nil
+        engineSwitchInProgress = false
+        engineDownloadFraction = 0
+        pendingSeekFraction = nil
         // 取消上一首的加载任务（快速连续切歌时旧签名 URL 请求不再继续）
         loadTask?.cancel()
         loadTask = nil
@@ -646,6 +773,15 @@ final class PlayerManager: NSObject, ObservableObject {
                 if self.usingEngine {
                     self.enginePlayer.onProgress = { [weak self] cur, dur in
                         guard let self = self else { return }
+                        // 加载期间拖动待应用：进度数据一到就跳过去
+                        if let pf = self.pendingSeekFraction, dur > 0 {
+                            self.pendingSeekFraction = nil
+                            let t = pf * dur
+                            self.enginePlayer.seek(toSeconds: t)
+                            self.currentTime = t
+                            self.progress = min(max(pf, 0), 1)
+                            return
+                        }
                         self.currentTime = cur
                         self.duration = dur
                         self.progress = dur > 0 ? min(cur / dur, 1) : 0
@@ -783,6 +919,30 @@ final class PlayerManager: NSObject, ObservableObject {
                     self.resumePlayback()
                 }
             }
+        }
+    }
+
+    /// 引擎被系统停止后的自动恢复：
+    /// 1) App 回前台：后台期间 AVAudioEngine 可能被系统停止（后台优化），引擎不再输出 → 回前台无声。
+    /// 2) 音频会话配置变化（耳机插拔/采样率/蓝牙切换）：AVAudioEngine 会自动停止，
+    ///    不处理则引擎播放从此无声（用户反馈「切后台再回来没声音」的直接来源）。
+    /// 两者统一走 enginePlayer.restartIfNeeded()：检测引擎未运行则重启并挂载、从推算位置续播。
+    private func setupEngineRestoreHandling() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // 先确保音频会话激活（后台期间可能被停用），再恢复引擎
+            try? AVAudioSession.sharedInstance().setActive(true)
+            self?.enginePlayer.restartIfNeeded()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.enginePlayer.restartIfNeeded()
         }
     }
 
