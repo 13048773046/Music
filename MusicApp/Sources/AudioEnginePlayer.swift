@@ -288,11 +288,21 @@ final class AudioEnginePlayer {
         }
     }
 
+    /// 进度 Timer：必须调度在主线程 RunLoop 上。
+    /// load() 的下载完成回调在后台线程，若直接 Timer.scheduledTimer 会把 timer 挂到后台线程
+    /// （其 RunLoop 不运行）——timer 永不触发 → onProgress 从不回调 → 进度/歌词/拖动条全卡死。
+    /// 统一回主线程创建，回调即主线程，写 @Published 也安全。
     private func startTimer() {
         stopTimer()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            self.onProgress?(self.currentSeconds(), self.durationSeconds())
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // 期间可能已 stop 再 start（异步竞态）：以最新状态为准
+            guard self.isPlaying else { return }
+            guard self.progressTimer == nil else { return }
+            self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                self.onProgress?(self.currentSeconds(), self.durationSeconds())
+            }
         }
     }
 

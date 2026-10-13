@@ -47,8 +47,8 @@ final class PlayerManager: NSObject, ObservableObject {
     let player = AVPlayer()
     /// 引擎音效实时处理引擎（3D 立体/360 环绕/复古/现场/流行/摇滚）
     private let enginePlayer = AudioEnginePlayer()
-    /// 当前是否在用引擎播放（3D 模式）
-    private var usingEngine = false
+    /// 当前是否在用引擎播放（任一引擎音效模式；歌词等组件据此决定取数源）
+    private(set) var usingEngine = false
 
     @Published var queue: [Track] = []
     @Published var currentIndex: Int = -1
@@ -132,6 +132,10 @@ final class PlayerManager: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] time in
             guard let self = self else { return }
+            // 引擎音效模式（3D 立体/360 环绕/复古/现场/流行/摇滚）：AVPlayer 无 currentItem，
+            // 其 periodic observer 会把 currentTime/progress/duration/isBuffering 全部写回 0，
+            // 覆盖 enginePlayer.onProgress 的进度数据 → 进度条/歌词/拖动条卡死。必须整体隔离。
+            guard !self.usingEngine else { return }
             let sec = CMTimeGetSeconds(time)
             self.currentTime = sec.isFinite ? sec : 0
             let d = CMTimeGetSeconds(self.player.currentItem?.duration ?? .zero)

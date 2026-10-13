@@ -146,8 +146,11 @@ struct LyricPreview: View {
     }
     @State private var tracker = ScrollTracker()
 
-    /// 播放跟随：每帧直接实时查询 AVPlayer 当前时间（毫秒级），逐字高亮逐帧推进
+    /// 播放跟随：每帧直接实时查询 AVPlayer 当前时间（毫秒级），逐字高亮逐帧推进。
+    /// 引擎音效模式（3D 立体等）：AVPlayer 无 currentItem 时间恒 0，
+    /// 直接以外部进度为准（0.1s 阶梯更新），避免开头 0.6s 误判冻结。
     private func displayTime() -> Double {
+        if PlayerManager.shared.usingEngine { return progress }
         let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
         let safe = now.isFinite ? now : 0
         return abs(progress - safe) < 0.6 ? safe : progress
