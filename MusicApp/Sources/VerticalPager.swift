@@ -699,45 +699,44 @@ private struct LiveLyricView: View {
 }
 
 /// 无歌词占位：作者·歌手名 + 「该歌曲暂无歌词」，替代原本空白歌词区。
-/// 用 TimelineView(.animation) 时间轴驱动循环滚动（与 LyricPreview 同款单调滚动机制）：
-/// 「作者·歌手名」显示 hold 秒 → 平滑滚动到「该歌曲暂无歌词」→ 停留 hold 秒 → 滚回，循环。
+/// 用 TimelineView(.animation) 时间轴驱动，与正常歌词 LyricPreview 同款单调滚动 + 缩放/淡出过渡：
+/// 「作者·歌手名」停留 hold 秒 → 平滑滚动到「该歌曲暂无歌词」→ **停住，不循环**。
 /// 高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
 private struct NoLyricPlaceholder: View {
     let author: String
     let tint: Color
 
-    private static let hold: Double = 3.0       // 每行停留时长（秒）
-    private static let scroll: Double = 0.28    // 切行滚动时长（秒）
-    private static let period: Double = hold + scroll
+    private static let hold: Double = 3.0       // 第一行「作者·歌手名」停留时长（秒）
+    private static let scroll: Double = 0.28    // 滚到第二行的过渡时长（秒，与正常歌词一致）
     private static let rowGap: CGFloat = 8
     private static let step: CGFloat = 32       // 第一行行高24 + 间距8，滚动位移
     private static let viewHeight: CGFloat = 60
 
-    /// 滚动单调化追踪器：class 引用属性不触发 SwiftUI 重绘，时间轴跨段跳变不产生回弹
+    /// 滚动单调化追踪器：class 引用属性不触发 SwiftUI 重绘，过渡阶段只增不减不回弹
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
     var body: some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            // 当前目标行：0→1→0→1 循环轮播（每行 period 秒）
-            let c = Int(t.truncatingRemainder(dividingBy: Self.period * 2) / Self.period)
-            // 段内进度：0=本行开始，scroll=滚动完，period=本行结束
-            let seg = t.truncatingRemainder(dividingBy: Self.period)
+            // 目标行：第一行停留 hold 秒后滚到第二行，单向到达后停住（不循环）
+            let c = t < Self.hold ? 0 : 1
+            // 滚动进度：进入第二行后 0→1；第一行停留期为 0
+            let seg = t < Self.hold ? 0 : min(max((t - Self.hold) / Self.scroll, 0), 1)
             // 切行重置 + 滚动进度单调化（副作用在辅助函数中完成，ViewBuilder 内只声明式调用）
             let _ = advanceTracker(c: c, seg: seg)
             let raw = tracker.maxT
             let eased = 1 - (1 - raw) * (1 - raw) * (1 - raw)   // easeOutCubic
             let scrolling = raw < 1
-            // 位移：c=0 时第一行在顶(0)；c=1 时第二行在顶(-step)，滚动期用 eased 插值衔接
-            let offsetY = -Self.step * (c == 1 ? eased : 1 - eased)
+            // 位移：滚到第二行时上移 step（用 eased 插值），到顶后停住
+            let offsetY = -Self.step * eased
 
             VStack(spacing: Self.rowGap) {
                 placeholderRow("作者·\(author)", size: 20, weight: .medium,
-                               isCur: c == 0, otherActive: c == 1,
+                               isCur: c == 0, isOld: c == 1,
                                scrolling: scrolling, eased: eased)
                 placeholderRow("该歌曲暂无歌词", size: 15, weight: .regular,
-                               isCur: c == 1, otherActive: c == 0,
+                               isCur: c == 1, isOld: false,
                                scrolling: scrolling, eased: eased)
             }
             .offset(y: offsetY)
@@ -752,20 +751,23 @@ private struct NoLyricPlaceholder: View {
     /// 收敛到本辅助函数，在 body 内以 `let _ = advanceTracker(...)` 声明式调用
     private func advanceTracker(c: Int, seg: Double) {
         if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-        let rawSeg = min(max(seg / Self.scroll, 0), 1)
-        if rawSeg > tracker.maxT { tracker.maxT = rawSeg }
+        if seg > tracker.maxT { tracker.maxT = seg }
     }
 
-    /// 单行：当前行高亮主色；被替换行（滚动来源）滚动期间淡出缩小，停留期正常显示
+    /// 单行过渡动画（与正常歌词 LyricPreview 一致）：
+    /// 当前行滚动期从 0.8 放大到 1.0；被替换行（旧行）同步缩小淡出。
     private func placeholderRow(_ text: String, size: CGFloat, weight: Font.Weight,
-                                isCur: Bool, otherActive: Bool,
-                                scrolling: Bool, eased: Double) -> some View {
-        Text(text)
+                                isCur: Bool, isOld: Bool, scrolling: Bool, eased: Double) -> some View {
+        let scale: Double = isCur
+            ? (scrolling ? 0.8 + 0.2 * eased : 1.0)
+            : (isOld ? 1.0 - 0.15 * eased : 0.8)
+        let opacity = isOld ? (1 - eased) : 1.0
+        return Text(text)
             .font(.system(size: size, weight: weight))
             .foregroundColor(tint.opacity(isCur ? 0.92 : 0.45))
             .lineLimit(1)
-            .opacity(otherActive ? (scrolling ? 1 - eased : 1) : 1)
-            .scaleEffect(otherActive ? (scrolling ? 1 - 0.1 * eased : 1) : 1, anchor: .leading)
+            .scaleEffect(scale, anchor: .leading)
+            .opacity(opacity)
     }
 }
 
