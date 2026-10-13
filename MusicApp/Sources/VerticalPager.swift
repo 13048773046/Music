@@ -695,22 +695,67 @@ private struct LiveLyricView: View {
 }
 
 /// 无歌词占位：作者·歌手名 + 「该歌曲暂无歌词」，替代原本空白歌词区。
+/// 用 TimelineView(.animation) 时间轴驱动循环滚动（与 LyricPreview 同款单调滚动机制）：
+/// 「作者·歌手名」显示 hold 秒 → 平滑滚动到「该歌曲暂无歌词」→ 停留 hold 秒 → 滚回，循环。
 /// 高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
 private struct NoLyricPlaceholder: View {
     let author: String
     let tint: Color
 
+    private static let hold: Double = 3.0       // 每行停留时长（秒）
+    private static let scroll: Double = 0.28    // 切行滚动时长（秒）
+    private static let period: Double = hold + scroll
+    private static let rowGap: CGFloat = 8
+    private static let step: CGFloat = 32       // 第一行行高24 + 间距8，滚动位移
+    private static let viewHeight: CGFloat = 60
+
+    /// 滚动单调化追踪器：class 引用属性不触发 SwiftUI 重绘，时间轴跨段跳变不产生回弹
+    private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
+    @State private var tracker = Tracker()
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("作者·\(author)")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundColor(tint.opacity(0.92))
-            Text("该歌曲暂无歌词")
-                .font(.system(size: 15))
-                .foregroundColor(tint.opacity(0.5))
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            // 当前目标行：0→1→0→1 循环轮播（每行 period 秒）
+            let c = Int(t.truncatingRemainder(dividingBy: Self.period * 2) / Self.period)
+            // 段内进度：0=本行开始，scroll=滚动完，period=本行结束
+            let seg = t.truncatingRemainder(dividingBy: Self.period)
+            // 切行重置 + 滚动进度单调化（跨段跳变不回弹）
+            if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
+            let rawSeg = min(max(seg / Self.scroll, 0), 1)
+            if rawSeg > tracker.maxT { tracker.maxT = rawSeg }
+            let raw = tracker.maxT
+            let eased = 1 - (1 - raw) * (1 - raw) * (1 - raw)   // easeOutCubic
+            let scrolling = raw < 1
+            // 位移：c=0 时第一行在顶(0)；c=1 时第二行在顶(-step)，滚动期用 eased 插值衔接
+            let offsetY = -Self.step * (c == 1 ? eased : 1 - eased)
+
+            VStack(spacing: Self.rowGap) {
+                placeholderRow("作者·\(author)", size: 20, weight: .medium,
+                               isCur: c == 0, otherActive: c == 1,
+                               scrolling: scrolling, eased: eased)
+                placeholderRow("该歌曲暂无歌词", size: 15, weight: .regular,
+                               isCur: c == 1, otherActive: c == 0,
+                               scrolling: scrolling, eased: eased)
+            }
+            .offset(y: offsetY)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: Self.viewHeight, alignment: .top)
+            .clipped()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 60, alignment: .top)
+        .frame(height: Self.viewHeight, alignment: .top)
+    }
+
+    /// 单行：当前行高亮主色；被替换行（滚动来源）滚动期间淡出缩小，停留期正常显示
+    private func placeholderRow(_ text: String, size: CGFloat, weight: Font.Weight,
+                                isCur: Bool, otherActive: Bool,
+                                scrolling: Bool, eased: Double) -> some View {
+        Text(text)
+            .font(.system(size: size, weight: weight))
+            .foregroundColor(tint.opacity(isCur ? 0.92 : 0.45))
+            .lineLimit(1)
+            .opacity(otherActive ? (scrolling ? 1 - eased : 1) : 1)
+            .scaleEffect(otherActive ? (scrolling ? 1 - 0.1 * eased : 1) : 1, anchor: .leading)
     }
 }
 
