@@ -76,6 +76,34 @@ async function qsLyric(id) {
   }
 }
 
+// ─── gd 平台：GDAPI 公开聚合（music-api.gdstudio.xyz，网易云源）───
+const GD_API = 'https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&loader_name=forest&need_sec_link=1&sec_link_scene=im&theme=light';
+async function gdSearch(kw, limit) {
+  const r = await fetch(GD_API + '&types=search&source=netease&name=' + encodeURIComponent(kw));
+  const arr = await r.json();
+  return (Array.isArray(arr) ? arr : []).slice(0, limit || 10).map(s => ({
+    songmid: String(s.id),
+    name: s.name || '',
+    singer: (s.artist || []).join(' / '),
+    albumName: s.album || '',
+    interval: '',
+    img: s.pic_id ? ('https://p1.music.126.net/cover/' + s.pic_id + '.jpg') : '',
+    source: 'gd',
+  }));
+}
+async function gdResolve(id) {
+  const r = await fetch(GD_API + '&types=url&source=netease&id=' + encodeURIComponent(id) + '&br=128');
+  const d = await r.json();
+  return (d && d.url) ? d.url : '';
+}
+async function gdLyric(id) {
+  try {
+    const r = await fetch(GD_API + '&types=lyric&source=netease&id=' + encodeURIComponent(id));
+    const d = await r.json();
+    return (d && d.lyric) || '';
+  } catch (e) { return ''; }
+}
+
 function qsCachePut(tid, data, ext) {
   qsCache.set(tid, { data, ext });
   while (qsCache.size > 12) {
@@ -179,8 +207,16 @@ const server = http.createServer((req, res) => {
     const mobile = (q.get('mobile') || '').trim();
     Promise.resolve().then(() => qs.sendSmsCode(mobile))
       .then(r => {
-        console.error('[qs-sms-send]', mobile.slice(0,3)+'****'+mobile.slice(-4), JSON.stringify({ok: r && r.ok, msg: r && r.message, code: r && r.errorCode}));
-        return json(res, 200, { ok: !!(r && r.ok), message: (r && r.message) || (r && r.ok ? '验证码已发送' : '发送失败') });
+        console.error('[qs-sms-send]', mobile.slice(0,3)+'****'+mobile.slice(-4), 'raw=', JSON.stringify(r && r.raw).slice(0, 800));
+        // 从上游原始响应里提取图形验证码/风控验证 URL
+        let captchaUrl = '';
+        try {
+          const raw = (r && r.raw) || {};
+          const data = raw.data || raw;
+          captchaUrl = data.captcha_url || data.verify_url || data.captcha_url_new || data.verification_url || data.url || data.redirect_url || '';
+          if (captchaUrl && !/^https?:/i.test(captchaUrl)) captchaUrl = '';
+        } catch (_e) {}
+        return json(res, 200, { ok: !!(r && r.ok), message: (r && r.message) || (r && r.ok ? '验证码已发送' : '发送失败'), captchaUrl });
       })
       .catch(e => {
         console.error('[qs-sms-send] error:', (e && e.message) || e);
@@ -241,6 +277,11 @@ const server = http.createServer((req, res) => {
         .then(list => json(res, 200, { ok: true, list }))
         .catch(e => json(res, 200, { ok: false, err: String(e && e.message || e) })), qsQueue);
     }
+    if (source === 'gd') {
+      return enqueue(() => gdSearch(kw, limit)
+        .then(list => json(res, 200, { ok: true, list }))
+        .catch(e => json(res, 200, { ok: false, err: 'GDAPI搜索失败:' + String(e && e.message || e) })));
+    }
     return enqueue(() => api.search(source, kw, { page, limit })
       .then(r => json(res, 200, { ok: true, list: (r.list || []).map(s => ({
         songmid: s.songmid, name: s.name, singer: s.singer, albumName: s.albumName,
@@ -277,6 +318,16 @@ const server = http.createServer((req, res) => {
           pic: info.img || '',
         });
       }).catch(e => json(res, 200, { ok: false, err: '音源错误:' + String(e && e.message || e) })), qsQueue);
+    }
+
+    if (source === 'gd') {
+      return enqueue(() => Promise.all([
+        gdResolve(songmid),
+        gdLyric(songmid),
+      ]).then(([url, lrc]) => {
+        if (!url) return json(res, 200, { ok: false, err: 'GDAPI解析播放地址失败（可能无版权或VIP）' });
+        return json(res, 200, { ok: true, url, lyric: lrc || '', pic: info.img || '' });
+      }).catch(e => json(res, 200, { ok: false, err: 'GDAPI错误:' + String(e && e.message || e) })));
     }
 
     return enqueue(() => Promise.all([

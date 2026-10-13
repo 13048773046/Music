@@ -1465,10 +1465,11 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
 
 <div class="sec"><b>采集平台</b>（多选）</div>
 <div class="chips" id="platChips">
-  <div class="chip on" data-v="kw">酷我</div>
-  <div class="chip on" data-v="wy">网易云</div>
+  <div class="chip" data-v="kw">酷我</div>
+  <div class="chip" data-v="wy">网易云</div>
   <div class="chip" data-v="kg">酷狗</div>
   <div class="chip" data-v="tx">腾讯</div>
+  <div class="chip on" data-v="gd">网易云G</div>
   <div class="chip" data-v="qs">汽水</div>
 </div>
 
