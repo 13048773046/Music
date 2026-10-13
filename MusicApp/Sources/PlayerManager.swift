@@ -154,6 +154,12 @@ final class PlayerManager: NSObject, ObservableObject {
         // 避免被异常状态（如流中断重建、模式切换残留）影响导致忽大忽小
         player.volume = 1.0
 
+        // 关闭 AVQueuePlayer 自动前进（默认 .advance）：
+        // 播完统一由 didPlayToEndTime → next() 唯一驱动前进。若保持系统自动前进，
+        // 系统内部前进与代码 advanceToNextItem 存在时序竞争，偶发「自动切歌跳到下下首」
+        // （实际播放下下首、界面索引仍是下一首，音频与信息错位一位）。
+        player.actionAtItemEnd = .pause
+
         setupRemoteCommands()
         setupInterruptionHandling()
         setupEngineRestoreHandling()
@@ -217,8 +223,15 @@ final class PlayerManager: NSObject, ObservableObject {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
             guard let self else { return }
+            // 只处理「当前正在播放的 item」的播完通知：actionAtItemEnd=.pause 下，
+            // 播完的 item 仍停留在 currentItem，直到这里 advance 才移除。
+            // 旧/残留 item 的迟到通知（用户已手动切走、队列被替换重建等）若也触发
+            // 一次 next()，会再跳一首（播放与索引错位），必须按对象身份过滤。
+            if let item = note.object as? AVPlayerItem, item !== self.player.currentItem {
+                return
+            }
             // 完整听完一首：累计“听了几遍”，并结算收听时长
             if self.listen.trackId == self.current?.id {
                 self.listen.completedPlays += 1
@@ -577,11 +590,11 @@ final class PlayerManager: NSObject, ObservableObject {
 
     func next() {
         guard !queue.isEmpty else { return }
-        // 自动切歌（AVQueuePlayer 播完自动前进）可能先于/晚于 didPlayToEndTime 通知
-        // 改变 currentItem：先把索引同步到实际正在播放的歌曲，避免索引与实际播放错位
-        // （表现为「自动切下一首却跳到下下首」/ UI 显示与音频不符）。
-        // autoAdvanced=true 说明系统已自动前进、下一首正在播：此时绝不能再推进索引
-        // 或 advanceToNextItem，否则会再跳一首（双前进）。
+        // actionAtItemEnd=.pause 后系统不再自动前进，播完统一由 didPlayToEndTime → next()
+        // 手动前进，消除「系统自动前进 与 代码 advanceToNextItem 双前进」的时序竞争
+        // （曾偶发自动切歌跳到下下首：实际播放下下首、界面索引仍是下一首）。
+        // syncIndexWithPlayer 保留作兜底防御：万一仍有外部因素（如遥控/系统行为）
+        // 改变了 currentItem，先把索引同步到实际正在播放的歌曲，再决定是否推进。
         let prevIndex = currentIndex
         let autoAdvanced = syncIndexWithPlayer()
         switch playMode {
