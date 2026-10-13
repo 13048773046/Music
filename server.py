@@ -1763,6 +1763,34 @@ qsBtn.onclick=async()=>{
         else{loginBtn.disabled=false;loginBtn.textContent='手机号登录'}
       }catch(e){tip.textContent='请求失败';loginBtn.disabled=false;loginBtn.textContent='手机号登录'}
     };
+    // —— Cookie 导入（服务器IP过不了风控时的最终通道）——
+    const sep2=document.createElement('div');
+    sep2.style.cssText='margin:14px 0 10px;color:#555;font-size:11px';
+    sep2.textContent='— 以上都失败？粘贴 Cookie 登录 —';card.appendChild(sep2);
+    const guide=document.createElement('p');
+    guide.style.cssText='color:#777;font-size:11px;line-height:1.6;margin:0 0 8px;text-align:left';
+    guide.textContent='电脑 Chrome 打开 qishui.com 登录抖音账号 → F12 → Network → 刷新页面点任意请求 → 请求头里 Cookie 整段复制，粘贴到下方：';
+    card.appendChild(guide);
+    const ckInp=document.createElement('textarea');
+    ckInp.placeholder='粘贴 Cookie 整段（含 sessionid 等）';
+    ckInp.style.cssText='width:100%;height:64px;padding:10px 12px;border-radius:8px;border:1px solid #333;background:#0f0f12;color:#fff;font-size:12px;resize:vertical';
+    card.appendChild(ckInp);
+    const ckBtn=document.createElement('button');
+    ckBtn.textContent='导入 Cookie 登录';
+    ckBtn.style.cssText='width:100%;margin-top:8px;padding:10px;border:0;border-radius:8px;background:#2a6df4;color:#fff;font-size:14px;font-weight:600;cursor:pointer';
+    card.appendChild(ckBtn);
+    ckBtn.onclick=async()=>{
+      const ck=ckInp.value.trim();
+      if(ck.length<20){tip.textContent='Cookie 内容太短，请完整复制';return}
+      ckBtn.disabled=true;ckBtn.textContent='导入中…';
+      try{
+        const r=await fetch('/music/api/collect/qs-cookie-import?cookie='+encodeURIComponent(ck));
+        const d=await r.json();
+        tip.textContent=d.message||(d.ok?'登录成功':'登录失败');
+        if(d.ok){clearInterval(iv);refreshQs();setTimeout(()=>document.body.removeChild(box),1200)}
+        else{ckBtn.disabled=false;ckBtn.textContent='导入 Cookie 登录'}
+      }catch(e){tip.textContent='请求失败';ckBtn.disabled=false;ckBtn.textContent='导入 Cookie 登录'}
+    };
     card.appendChild(closeBtn);box.appendChild(card);document.body.appendChild(box);
     const iv=setInterval(async()=>{
       try{
@@ -1831,7 +1859,8 @@ async function delNotify(id){
             # ---------- 采集控制台 API ----------
             # 汽水音乐（qs）代理：转发到本地音源桥 8789
             if u.path in ("/api/collect/qs-status", "/api/collect/qs-qr", "/api/collect/qs-poll",
-                          "/api/collect/qs-sms-send", "/api/collect/qs-sms-login"):
+                          "/api/collect/qs-sms-send", "/api/collect/qs-sms-login",
+                          "/api/collect/qs-cookie-import"):
                 import urllib.request as _ur
                 if u.path == "/api/collect/qs-poll":
                     _tk = (urllib.parse.parse_qs(u.query).get("token") or [""])[0]
@@ -1844,6 +1873,9 @@ async function delNotify(id){
                     _mb = (_ps.get("mobile") or [""])[0]
                     _cd = (_ps.get("code") or [""])[0]
                     _bp = "/qs/sms/login?mobile=" + urllib.parse.quote(_mb) + "&code=" + urllib.parse.quote(_cd)
+                elif u.path == "/api/collect/qs-cookie-import":
+                    _ck = (urllib.parse.parse_qs(u.query).get("cookie") or [""])[0]
+                    _bp = "/qs/cookie/import?cookie=" + urllib.parse.quote(_ck)
                 elif u.path.endswith("qs-status"):
                     _bp = "/qs/status"
                 else:

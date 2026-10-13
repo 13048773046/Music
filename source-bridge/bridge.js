@@ -211,6 +211,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 汽水音乐 Cookie 导入（服务器IP过不了风控时的备用通道）
+  if (p === '/qs/cookie/import') {
+    const cookie = (q.get('cookie') || '').trim();
+    if (!cookie) return bad(res, 'cookie required');
+    Promise.resolve().then(() => qs.importCookie('qishui', cookie))
+      .then(() => {
+        qsAuthed = true;
+        try { fs.writeFileSync(QS_SESSION_FILE, JSON.stringify(qs.exportSession())); } catch (_e) {}
+        return json(res, 200, { ok: true, authed: true, message: 'Cookie 导入成功，已登录汽水音乐' });
+      })
+      .catch(e => {
+        console.error('[qs-cookie] error:', (e && e.message) || e);
+        return json(res, 200, { ok: false, authed: qsAuthed, message: (e && e.message) || 'Cookie 无效：' + ((e && e.message) || e) });
+      });
+    return;
+  }
+
   if (p === '/search') {
     const source = q.get('source') || 'wy';
     const kw = (q.get('kw') || '').trim();
