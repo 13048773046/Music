@@ -720,10 +720,8 @@ private struct NoLyricPlaceholder: View {
             let c = Int(t.truncatingRemainder(dividingBy: Self.period * 2) / Self.period)
             // 段内进度：0=本行开始，scroll=滚动完，period=本行结束
             let seg = t.truncatingRemainder(dividingBy: Self.period)
-            // 切行重置 + 滚动进度单调化（跨段跳变不回弹）
-            if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-            let rawSeg = min(max(seg / Self.scroll, 0), 1)
-            if rawSeg > tracker.maxT { tracker.maxT = rawSeg }
+            // 切行重置 + 滚动进度单调化（副作用在辅助函数中完成，ViewBuilder 内只声明式调用）
+            let _ = advanceTracker(c: c, seg: seg)
             let raw = tracker.maxT
             let eased = 1 - (1 - raw) * (1 - raw) * (1 - raw)   // easeOutCubic
             let scrolling = raw < 1
@@ -744,6 +742,14 @@ private struct NoLyricPlaceholder: View {
             .clipped()
         }
         .frame(height: Self.viewHeight, alignment: .top)
+    }
+
+    /// 切行重置 + 滚动进度单调化：ViewBuilder 里不允许直接写 if 副作用语句，
+    /// 收敛到本辅助函数，在 body 内以 `let _ = advanceTracker(...)` 声明式调用
+    private func advanceTracker(c: Int, seg: Double) {
+        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
+        let rawSeg = min(max(seg / Self.scroll, 0), 1)
+        if rawSeg > tracker.maxT { tracker.maxT = rawSeg }
     }
 
     /// 单行：当前行高亮主色；被替换行（滚动来源）滚动期间淡出缩小，停留期正常显示
