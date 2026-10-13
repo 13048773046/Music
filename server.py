@@ -1469,6 +1469,7 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="chip on" data-v="wy">网易云</div>
   <div class="chip" data-v="kg">酷狗</div>
   <div class="chip" data-v="tx">腾讯</div>
+  <div class="chip" data-v="qs">汽水</div>
 </div>
 
 <div class="sec"><b>采集方式</b></div>
@@ -1491,6 +1492,8 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="lbl" id="runLbl">已完成 / 未设置目标</div>
   <div class="st" id="runState">尚未开始</div>
 </div>
+
+<div class="sec"><b>汽水音乐</b> <span id="qsState" class="tag no">未登录</span> <button id="qsBtn" style="margin-left:8px;padding:3px 10px;border:0;border-radius:6px;background:#1e3a2a;color:#5cd68a;cursor:pointer">扫码登录</button><span style="color:#555;font-size:11px;margin-left:8px">登录后可在下方搜索「汽水」平台并采集，支持抖音热歌</span></div>
 
 <div class="sec"><b>搜索歌名，点采集入库</b></div>
 <div class="searchbox">
@@ -1521,6 +1524,8 @@ const kwSec=document.getElementById('kwSec');
 const kwInput=document.getElementById('kwInput');
 const searchBtn=document.getElementById('searchBtn');
 const searchList=document.getElementById('searchList');
+const qsState=document.getElementById('qsState');
+const qsBtn=document.getElementById('qsBtn');
 let running=false, mode='search';
 
 // 初始化关键词 chips（预设 + 从 localStorage 恢复的自定义）
@@ -1683,6 +1688,55 @@ searchBtn.onclick=async()=>{
 kwInput.addEventListener('keydown',e=>{if(e.key==='Enter')searchBtn.click()});
 load();setInterval(load,1500);
 
+// 汽水音乐：登录状态 / 扫码登录
+async function refreshQs(){
+  try{
+    const r=await fetch('/music/api/collect/qs-status');
+    const d=await r.json();
+    qsState.textContent=d.authed?'已登录':'未登录';
+    qsState.className='tag'+(d.authed?' on':' no');
+    qsBtn.style.display=d.authed?'none':'';
+  }catch(e){}
+}
+qsBtn.onclick=async()=>{
+  qsBtn.disabled=true;
+  try{
+    const r=await fetch('/music/api/collect/qs-qr');
+    const d=await r.json();
+    if(!d.ok){alert(d.err||'二维码生成失败');qsBtn.disabled=false;return}
+    const box=document.createElement('div');
+    box.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:99';
+    const card=document.createElement('div');
+    card.style.cssText='background:#1a1a1e;padding:24px;border-radius:14px;text-align:center;color:#fff;max-width:320px';
+    card.innerHTML='<h3 style="margin:0 0 8px">汽水音乐扫码登录</h3><p style="color:#aaa;font-size:12px;margin:0 0 14px">打开「抖音」或「汽水音乐」App 扫码<br/>登录后服务器才能解析完整音频</p>';
+    const img=document.createElement('img');
+    img.src=d.qrcode;img.style.width='220px';img.style.height='220px';img.style.borderRadius='8px';
+    card.appendChild(img);
+    const tip=document.createElement('p');tip.id='qsTip';tip.style.cssText='color:#5cd68a;font-size:12px;margin:12px 0 0';
+    tip.textContent='等待扫码…';card.appendChild(tip);
+    const closeBtn=document.createElement('button');
+    closeBtn.textContent='关闭';
+    closeBtn.style.cssText='margin-top:12px;padding:8px 20px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer';
+    closeBtn.onclick=()=>document.body.removeChild(box);
+    card.appendChild(closeBtn);box.appendChild(card);document.body.appendChild(box);
+    const iv=setInterval(async()=>{
+      try{
+        const r2=await fetch('/music/api/collect/qs-poll?token='+encodeURIComponent(d.token));
+        const d2=await r2.json();
+        if(d2.ok&&d2.authed){
+          clearInterval(iv);tip.textContent='登录成功！';
+          refreshQs();setTimeout(()=>document.body.removeChild(box),900);
+        }else{
+          tip.textContent=d2.err||'等待扫码…';
+        }
+      }catch(e){}
+    },2500);
+    setTimeout(()=>clearInterval(iv),120000);
+  }catch(e){alert('请求失败：'+e)}
+  qsBtn.disabled=false;
+};
+refreshQs();setInterval(refreshQs,15000);
+
 async function loadNotify(){
   const d=await api('/official-messages?admin=1');
   let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
@@ -1723,6 +1777,21 @@ async function delNotify(id){
                 return
 
             # ---------- 采集控制台 API ----------
+            # 汽水音乐（qs）代理：转发到本地音源桥 8789
+            if u.path in ("/api/collect/qs-status", "/api/collect/qs-qr", "/api/collect/qs-poll"):
+                import urllib.request as _ur
+                if u.path == "/api/collect/qs-poll":
+                    _tk = (urllib.parse.parse_qs(u.query).get("token") or [""])[0]
+                    _bp = "/qs/poll?token=" + urllib.parse.quote(_tk)
+                else:
+                    _bp = "/qs/status" if u.path.endswith("qs-status") else "/qs/qr"
+                try:
+                    with _ur.urlopen("http://127.0.0.1:8789" + _bp, timeout=35) as _r:
+                        _qsd = json.loads(_r.read().decode())
+                    self._json(200, _qsd)
+                except Exception as _e:
+                    self._json(200, {"ok": False, "err": "汽水音乐服务异常:" + str(_e)})
+                return
             if u.path == "/api/collect/status":
                 import subprocess
                 try:
