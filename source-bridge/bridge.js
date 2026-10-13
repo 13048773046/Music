@@ -138,24 +138,25 @@ const server = http.createServer((req, res) => {
     return json(res, 200, { ok: true, authed: qsAuthed });
   }
 
-  // 汽水音乐二维码登录：生成二维码
+  // 汽水音乐二维码登录：生成二维码（查询类接口，不进串行队列）
   if (p === '/qs/qr') {
     if (!qs) return json(res, 200, { ok: false, err: '汽水音乐模块未加载' });
-    return enqueue(() => qs.createQrLogin()
+    Promise.resolve().then(() => qs.createQrLogin())
       .then(r => {
         qsPending = { token: r.token };
         return json(res, 200, { ok: true, token: r.token, qrcode: r.qrcode });
       })
-      .catch(e => json(res, 200, { ok: false, err: '二维码生成失败:' + (e && e.message || e) })), qsQueue);
+      .catch(e => json(res, 200, { ok: false, err: '二维码生成失败:' + (e && e.message || e) }));
+    return;
   }
 
-  // 汽水音乐二维码登录：轮询扫码结果
+  // 汽水音乐二维码登录：轮询扫码结果（轻量查询，并发执行不排队）
   if (p === '/qs/poll') {
     const token = q.get('token') || (qsPending && qsPending.token);
     if (!token) return bad(res, 'token required');
-    return enqueue(() => Promise.race([
-      qs.pollQrLogin(token),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('poll timeout')), 30000)),
+    Promise.race([
+      Promise.resolve().then(() => qs.pollQrLogin(token)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('等待扫码')), 10000)),
     ]).then(() => {
       const st = qs.getAuthState();
       if (st.authenticated) {
@@ -164,7 +165,8 @@ const server = http.createServer((req, res) => {
         qsPending = null;
       }
       return json(res, 200, { ok: true, authed: qsAuthed });
-    }).catch(e => json(res, 200, { ok: false, authed: qsAuthed, err: '等待扫码:' + (e && e.message || e) })), qsQueue);
+    }).catch(e => json(res, 200, { ok: false, authed: qsAuthed, err: '等待扫码' }));
+    return;
   }
 
   if (p === '/search') {

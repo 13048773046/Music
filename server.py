@@ -1786,7 +1786,7 @@ async function delNotify(id){
                 else:
                     _bp = "/qs/status" if u.path.endswith("qs-status") else "/qs/qr"
                 try:
-                    with _ur.urlopen("http://127.0.0.1:8789" + _bp, timeout=35) as _r:
+                    with _ur.urlopen("http://127.0.0.1:8789" + _bp, timeout=15) as _r:
                         _qsd = json.loads(_r.read().decode())
                     self._json(200, _qsd)
                 except Exception as _e:
