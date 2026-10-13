@@ -882,6 +882,16 @@ final class PlayerManager: NSObject, ObservableObject {
         //    切到它时封面立即显示、歌词区直接命中，无需再等网络。
         await prefetchCover(for: t)
         await prefetchLyric(for: t)
+        // 4) 预提取封面主色：切歌时播放页背景/侧边栏立即有主色，无需现算
+        await prefetchPalette(for: t)
+    }
+
+    /// 预提取封面主色到 CoverPalette 缓存：命中缓存则直接返回；未命中则下载封面+提取主色+入库。
+    /// 这样切到下一首时，loadBackground 的 CoverPalette.color 立即命中，
+    /// 背景色与侧边栏主色（playerCardDominant 压暗 0.3）无需再等网络/计算。
+    private func prefetchPalette(for t: Track) async {
+        guard let url = t.coverURL, !Task.isCancelled else { return }
+        _ = await CoverPalette.color(for: t.id, from: url)
     }
 
     /// 预取封面图到内存缓存（CoverImageCache）：切歌时 CachedCoverImage 立即命中。
