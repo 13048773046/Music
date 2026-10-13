@@ -104,6 +104,101 @@ async function gdLyric(id) {
   } catch (e) { return ''; }
 }
 
+// ─── go-music-dl 聚合音源（本机 127.0.0.1:18080，systemd: music-dl.service）───
+//   soda     = 汽水音乐（免登录可搜索/解析，音频加密已由其解密）
+//   gm_migu  = 咪咕音乐
+//   gm_fivesing = 5sing 原创音乐
+//   gm_joox  = JOOX 海外
+const GM_BASE = process.env.GM_BASE || 'http://127.0.0.1:18080/gm';
+const GM_MAP = { soda: 'soda', gm_migu: 'migu', gm_fivesing: 'fivesing', gm_joox: 'joox' };
+
+function gmDecode(s) { try { return decodeURIComponent(s); } catch (_e) { return s; } }
+
+async function gmSearch(bridgeSource, kw, limit, page) {
+  const gmSrc = GM_MAP[bridgeSource];
+  if (!gmSrc) throw new Error('unknown gm source: ' + bridgeSource);
+  const url = `${GM_BASE}/search?q=${encodeURIComponent(kw)}&type=song&sources=${gmSrc}&page=${page || 1}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  const html = await res.text();
+  // 搜索页是服务端渲染 HTML，按 song-card 切块提取 data-* 属性
+  const blocks = html.split(/class="[^"]*song-card[^"]*"/).slice(1);
+  const list = [];
+  for (const b of blocks) {
+    const tag = b.slice(0, b.indexOf('>') + 1);
+    const get = (n) => {
+      const m = tag.match(new RegExp('data-' + n + '="([^"]*)"'));
+      return m ? gmDecode(m[1]) : '';
+    };
+    const id = get('id');
+    if (!id) continue;
+    list.push({
+      songmid: id,
+      name: get('name'),
+      singer: get('artist'),
+      albumName: get('album'),
+      interval: '',
+      img: get('cover'),
+      source: bridgeSource,
+    });
+    if (list.length >= limit) break;
+  }
+  return list;
+}
+
+async function gmResolve(bridgeSource, id) {
+  const gmSrc = GM_MAP[bridgeSource];
+  try {
+    const r = await fetch(`${GM_BASE}/inspect?id=${encodeURIComponent(id)}&source=${gmSrc}`,
+      { signal: AbortSignal.timeout(25000) });
+    const d = await r.json();
+    return (d && d.valid && d.url) ? d.url : '';
+  } catch (_e) { return ''; }
+}
+
+async function gmLyric(bridgeSource, id) {
+  const gmSrc = GM_MAP[bridgeSource];
+  try {
+    const r = await fetch(`${GM_BASE}/lyric?id=${encodeURIComponent(id)}&source=${gmSrc}`,
+      { signal: AbortSignal.timeout(20000) });
+    const t = await r.text();
+    // 兜底：错误页是 HTML
+    return (t && t.charAt(0) !== '<') ? t.trim() : '';
+  } catch (_e) { return ''; }
+}
+
+// ─── LRCLIB 社区歌词库兜底（任何源取不到歌词时，按歌名+歌手匹配）───
+async function lrcLibFallback(name, singer) {
+  if (!name) return '';
+  try {
+    const r = await fetch(
+      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(singer || '')}&track_name=${encodeURIComponent(name)}`,
+      { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return '';
+    const d = await r.json();
+    return d.syncedLyrics || d.plainLyrics || '';
+  } catch (_e) { return ''; }
+}
+
+// ─── qs2：yuntts 托管汽水链接解析（第三方服务器代取流，绕开本机 IP 风控）───
+// 仅支持「汽水分享链接 → 音频直链+逐字歌词」，不支持关键词搜索。
+// 需要环境变量 QS2_API_KEY（yuntts 开放平台申请后配置进 systemd）。
+const QS2_API = process.env.QS2_API_URL || 'https://www.yuntts.com/api/v1/soda';
+const QS2_KEY = process.env.QS2_API_KEY || '';
+
+// yuntts 歌词是毫秒 [beginMs,endMs]<...>字 格式，转标准 KRC 秒级 [mm:ss.xxx]<...>字
+function qs2LyricToKrc(lrc) {
+  if (!lrc || typeof lrc !== 'string') return '';
+  if (lrc.indexOf('暂无歌词') !== -1) return '';
+  return lrc.split(/\r?\n/).map(line => {
+    const m = line.match(/^\[(\d+),(\d+)\](.*)$/);
+    if (!m) return line;
+    const begin = parseInt(m[1], 10) / 1000;
+    const mm = Math.floor(begin / 60);
+    const ss = (begin - mm * 60).toFixed(3).padStart(6, '0');
+    return `[${String(mm).padStart(2, '0')}:${ss}]${m[3]}`;
+  }).join('\n');
+}
+
 function qsCachePut(tid, data, ext) {
   qsCache.set(tid, { data, ext });
   while (qsCache.size > 12) {
@@ -158,6 +253,7 @@ const server = http.createServer((req, res) => {
   if (p === '/ping') {
     const plats = api.getSupportedPlatforms().slice();
     if (qs) plats.push('qs');
+    plats.push(...Object.keys(GM_MAP));
     return json(res, 200, { ok: true, platforms: plats, qsAuthed });
   }
 
@@ -264,6 +360,45 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // qs2 托管汽水解析状态
+  if (p === '/qs2/status') {
+    return json(res, 200, { ok: true, configured: !!QS2_KEY });
+  }
+
+  // qs2 托管汽水链接解析：?url=汽水分享链接（qishui.douyin.com/s/...）
+  // 返回音频直链 + KRC 逐字歌词；不走本机 IP，由 yuntts 代取流。
+  if (p === '/qs2/parse') {
+    const share = (q.get('url') || '').trim();
+    if (!share) return bad(res, 'url required');
+    if (!QS2_KEY) return json(res, 200, { ok: false, err: 'qs2 未配置：需要环境变量 QS2_API_KEY（yuntts 开放平台申请）' });
+    return enqueue(async () => {
+      try {
+        const r = await fetch(QS2_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + QS2_KEY },
+          body: JSON.stringify({ url: share }),
+          signal: AbortSignal.timeout(25000),
+        });
+        const d = await r.json();
+        if (!d || d.code !== 200 || !d.data || !d.data.url) {
+          return json(res, 200, { ok: false, err: (d && d.message) || '托管解析失败' });
+        }
+        return json(res, 200, {
+          ok: true,
+          url: d.data.url,
+          lyric: qs2LyricToKrc(d.data.lyric || ''),
+          singer: d.data.artistsname || '',
+          album: d.data.albumname || '',
+          cover: d.data.artistsavatar || '',
+          bitrate: d.data.bitrate || 0,
+          size: d.data.size || 0,
+        });
+      } catch (e) {
+        return json(res, 200, { ok: false, err: '托管解析错误:' + String(e && e.message || e) });
+      }
+    });
+  }
+
   if (p === '/search') {
     const source = q.get('source') || 'wy';
     const kw = (q.get('kw') || '').trim();
@@ -281,6 +416,11 @@ const server = http.createServer((req, res) => {
       return enqueue(() => gdSearch(kw, limit)
         .then(list => json(res, 200, { ok: true, list }))
         .catch(e => json(res, 200, { ok: false, err: 'GDAPI搜索失败:' + String(e && e.message || e) })));
+    }
+    if (GM_MAP[source]) {
+      return enqueue(() => gmSearch(source, kw, limit, page)
+        .then(list => json(res, 200, { ok: true, list }))
+        .catch(e => json(res, 200, { ok: false, err: '聚合源搜索失败:' + String(e && e.message || e) })));
     }
     return enqueue(() => api.search(source, kw, { page, limit })
       .then(r => json(res, 200, { ok: true, list: (r.list || []).map(s => ({
@@ -324,19 +464,32 @@ const server = http.createServer((req, res) => {
       return enqueue(() => Promise.all([
         gdResolve(songmid),
         gdLyric(songmid),
-      ]).then(([url, lrc]) => {
+      ]).then(async ([url, lrc]) => {
         if (!url) return json(res, 200, { ok: false, err: 'GDAPI解析播放地址失败（可能无版权或VIP）' });
+        if (!lrc) lrc = await lrcLibFallback(info.name, info.singer);
         return json(res, 200, { ok: true, url, lyric: lrc || '', pic: info.img || '' });
       }).catch(e => json(res, 200, { ok: false, err: 'GDAPI错误:' + String(e && e.message || e) })));
+    }
+
+    if (GM_MAP[source]) {
+      return enqueue(() => Promise.all([
+        gmResolve(source, songmid),
+        gmLyric(source, songmid),
+      ]).then(async ([url, lrc]) => {
+        if (!url) return json(res, 200, { ok: false, err: '聚合源解析播放地址失败（可能无版权或VIP）' });
+        if (!lrc) lrc = await lrcLibFallback(info.name, info.singer);
+        return json(res, 200, { ok: true, url, lyric: lrc || '', pic: info.img || '' });
+      }).catch(e => json(res, 200, { ok: false, err: '聚合源错误:' + String(e && e.message || e) })));
     }
 
     return enqueue(() => Promise.all([
       api.getMusicUrl(source, info, '128k').catch(e => 'ERR:' + e),
       api.getLyric(source, info).catch(e => 'ERR:' + e),
       api.getPic(source, info).catch(e => 'ERR:' + e),
-    ]).then(([url, lrc, pic]) => {
+    ]).then(async ([url, lrc, pic]) => {
       const lyricText = (typeof lrc === 'object' && lrc) ? (typeof lrc.lyric === 'string' ? lrc.lyric : JSON.stringify(lrc)) : String(lrc);
-      return json(res, 200, { ok: true, url: String(url), lyric: lyricText, pic: String(pic) });
+      const finalLrc = lyricText && lyricText.indexOf('ERR:') !== 0 ? lyricText : await lrcLibFallback(info.name, info.singer);
+      return json(res, 200, { ok: true, url: String(url), lyric: finalLrc || '', pic: String(pic) });
     }).catch(e => json(res, 200, { ok: false, err: String(e && e.message || e) })));
   }
 
