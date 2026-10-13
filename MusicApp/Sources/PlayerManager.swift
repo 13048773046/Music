@@ -114,6 +114,21 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 缓冲卡死判定阈值：缓冲超过 15s 且进度无变化
     private let stallTimeout: TimeInterval = 15
 
+    // MARK: - 下一首预加载（只预热签名 URL + 连接头部，不整首下载）
+
+    /// 预加载窗口：当前歌之后预加载的歌曲数（下一首、下下一首、下下下一首…）
+    private let prefetchAheadCount = 3
+    /// 签名播放 URL 缓存：trackId → URL。
+    /// 切歌时优先复用，省去再向后端签发的网络往返，显著缩短切歌等待（“秒开”）；用掉即移除。
+    private var signedURLPool: [String: URL] = [:]
+    /// 签名 URL 缓存的 FIFO 顺序（超限时淘汰最旧）
+    private var urlPoolOrder: [String] = []
+    /// 签名 URL 缓存上限（超出淘汰最旧，防止无限堆积）
+    private let urlPoolLimit = 12
+    /// 进行中的预加载任务（切歌/队列变化时取消，防错加载）
+    private var prefetchTask: Task<Void, Never>?
+
+
     // MARK: - 收听行为追踪（个性化推荐数据源）
 
     /// 单曲收听状态：按 trackId 归属，切歌/重播时更新
@@ -758,6 +773,62 @@ final class PlayerManager: NSObject, ObservableObject {
         return target
     }
 
+    // MARK: - 下一首预加载
+
+    /// 根据当前播放位置，为「接下来 N 首」预加载：
+    /// 1) 预取并缓存签名播放 URL（切歌免再请求，缩短等待）；
+    /// 2) 用 AVURLAsset 预热连接/资源头部（只拉前一小部分 metadata，不整首下载）。
+    /// 播放位置或队列变化时重新计算窗口；同一位置只预加载一次。
+    /// 幂等且防重：切歌会取消旧任务，队列再变也不会错取已不在队列的歌。
+    private func schedulePrefetch() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        guard !queue.isEmpty, queue.indices.contains(currentIndex) else { return }
+        let start = currentIndex + 1
+        let end = min(start + prefetchAheadCount, queue.count)
+        guard start < end else { return }
+        // 快照目标，异步期间队列变化不影响本次预取目标
+        let targets = Array(queue[start..<end])
+        prefetchTask = Task { [weak self] in
+            for t in targets {
+                guard !Task.isCancelled else { return }
+                await self?.warmTrack(t)
+            }
+        }
+    }
+
+    /// 预热单首：取/缓存签名 URL，并用 AVURLAsset 预热连接与资源头部。
+    private func warmTrack(_ t: Track) async {
+        // 1) 取/缓存签名 URL（URL 池只允许主线程访问）
+        var url: URL?
+        let cached = await MainActor.run { [weak self] in self?.signedURLPool[t.id] }
+        if let cached {
+            url = cached
+        } else {
+            guard let fetched = await API.signedStreamURL(for: t.id), !Task.isCancelled else { return }
+            let saved = await MainActor.run { [weak self] () -> Bool in
+                guard let self else { return false }
+                if self.signedURLPool.count >= self.urlPoolLimit {
+                    if let oldest = self.urlPoolOrder.first {
+                        self.signedURLPool.removeValue(forKey: oldest)
+                        self.urlPoolOrder.removeFirst()
+                    }
+                }
+                self.signedURLPool[t.id] = fetched
+                self.urlPoolOrder.append(t.id)
+                return true
+            }
+            guard saved else { return }
+            url = fetched
+        }
+        guard let url, !Task.isCancelled else { return }
+        // 2) 预热连接/资源头部：AVURLAsset 异步加载关键属性会建立连接并读取头部/metadata
+        //    （mp3/flac 拉 header+metadata；m3u8 拉 playlist），只占“前一小部分”，不整首下载。
+        let asset = AVURLAsset(url: url)
+        _ = try? await asset.load(.duration, .isPlayable)
+    }
+
+
     func seek(toFraction fraction: Double) {
         if duration > 0 {
             if usingEngine {
@@ -834,13 +905,27 @@ final class PlayerManager: NSObject, ObservableObject {
         player.replaceCurrentItem(with: nil)
         enginePlayer.stop()
 
-        let task = Task {
-            // 优先获取签名时效播放 URL（防链接泄露/盗链），失败自动回退普通 URL
-            let url = await API.signedStreamURL(for: current.id)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let trackId = current.id
+            // 优先复用预取缓存 URL（切歌免再向后端签发，缩短切歌等待）；未命中才实时请求
+            let url: URL
+            let cached = await MainActor.run { () -> URL? in
+                guard let self else { return nil }
+                guard let c = self.signedURLPool[trackId] else { return nil }
+                self.signedURLPool.removeValue(forKey: trackId)
+                self.urlPoolOrder.removeAll { $0 == trackId }
+                return c
+            }
+            if let cached {
+                url = cached
+            } else {
+                url = await API.signedStreamURL(for: trackId)
+            }
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 // 切歌后旧任务迟到响应直接丢弃，防止覆盖新歌状态
-                guard self.current?.id == current.id else { return }
+                guard self.current?.id == trackId else { return }
                 if self.usingEngine {
                     self.enginePlayer.onProgress = { [weak self] cur, dur in
                         guard let self = self else { return }
@@ -899,6 +984,8 @@ final class PlayerManager: NSObject, ObservableObject {
                     }
                 }
                 self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
+                // 新歌开始播放后，为「接下来 N 首」启动预加载（预热签名 URL + 连接头部）
+                self.schedulePrefetch()
             }
         }
         loadTask = task
