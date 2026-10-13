@@ -240,9 +240,16 @@ final class AudioEnginePlayer {
         task.resume()
     }
 
+    /// 调度世代号：每次 schedule/stop 递增，完成回调据此识别「正常播完」与「被 stop 打断」。
+    /// AVAudioPlayerNode.stop() 会触发尚未播完 segment 的 completionHandler，
+    /// 若不区分，拖动条 seek / 切歌时旧回调会误判为播放完成 → 误切下一首。
+    private var scheduleGen = 0
+
     private func schedule(from frame: AVAudioFramePosition) {
         guard let file = audioFile, let format = fileFormat else { return }
         playerNode.stop()
+        scheduleGen += 1
+        let gen = scheduleGen
         let framesToPlay = totalFrames - frame
         guard framesToPlay > 0 else { return }
         playerNode.scheduleSegment(
@@ -252,7 +259,7 @@ final class AudioEnginePlayer {
             at: nil
         ) {
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, self.isPlaying else { return }
+                guard let self = self, self.scheduleGen == gen, self.isPlaying else { return }
                 self.onCompletion?()
             }
         }
@@ -281,6 +288,7 @@ final class AudioEnginePlayer {
         currentTask = nil
         pendingURL = nil
         playerNode.stop()
+        scheduleGen += 1   // 失效所有未播完 segment 的完成回调
         isPlaying = false
         pausedFrame = 0
         playStartFrame = 0
@@ -308,6 +316,21 @@ final class AudioEnginePlayer {
             guard self.progressTimer == nil else { return }
             self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 guard let self = self else { return }
+                // 播放完成兜底：scheduleSegment 的 completionHandler 在部分 iOS 版本/
+                // 部分文件格式下播放到末尾不触发（AVAudioPlayerNode 已知问题），
+                // 若完全依赖它，「播完自动切下一首」会失效。
+                // 用进度时钟判定播到末尾（容差 1024 帧 ≈ 23ms），触发完成回调。
+                // 幂等：先置 isPlaying=false 再回调，无论 completionHandler 是否已触发，
+                // 另一路径的 guard isPlaying 都会拦住，保证只切一次歌。
+                if self.isPlaying, self.totalFrames > 0,
+                   self.currentFrame() >= self.totalFrames - 1024 {
+                    print("[AudioEngine] playback completed (timer fallback)")
+                    self.isPlaying = false
+                    self.pausedFrame = self.totalFrames
+                    self.stopTimer()
+                    self.onCompletion?()
+                    return
+                }
                 self.onProgress?(self.currentSeconds(), self.durationSeconds())
             }
         }
