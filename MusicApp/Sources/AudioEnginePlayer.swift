@@ -333,6 +333,9 @@ final class AudioEnginePlayer {
         guard isPlaying else { return }
         guard !engine.isRunning else { return }
         do {
+            // 重启前先复位主输出音量：系统/后台优化可能改变 mixer 增益，
+            // 不复位会出现「重启后声音变小」。
+            engine.mainMixerNode.outputVolume = 1.0
             let resume = currentFrame()   // 引擎停止期间进度时钟仍在走，以推算位置续播
             try engine.start()
             schedule(from: resume)
@@ -344,6 +347,11 @@ final class AudioEnginePlayer {
         } catch {
             print("[AudioEngine] restart failed: \(error)")
         }
+    }
+
+    /// 恢复主输出音量（打断/闪避/后台降权后统一复位，防「声音变小」残留）
+    func restoreVolume() {
+        engine.mainMixerNode.outputVolume = 1.0
     }
 
     /// 调度世代号：每次 schedule/stop 递增，完成回调据此识别「正常播完」与「被 stop 打断」。

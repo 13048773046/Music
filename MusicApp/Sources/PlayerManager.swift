@@ -268,6 +268,8 @@ final class PlayerManager: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             self?.flushListen(.background)
+            // 保持音频会话激活：防止后台期间会话被降权/停用导致音量被压低或无声
+            try? AVAudioSession.sharedInstance().setActive(true)
         }
     }
 
@@ -575,17 +577,42 @@ final class PlayerManager: NSObject, ObservableObject {
 
     func next() {
         guard !queue.isEmpty else { return }
+        // 自动切歌（AVQueuePlayer 播完自动前进）可能先于/晚于 didPlayToEndTime 通知
+        // 改变 currentItem：先把索引同步到实际正在播放的歌曲，避免索引与实际播放错位
+        // （表现为「自动切下一首却跳到下下首」/ UI 显示与音频不符）。
+        // autoAdvanced=true 说明系统已自动前进、下一首正在播：此时绝不能再推进索引
+        // 或 advanceToNextItem，否则会再跳一首（双前进）。
+        let prevIndex = currentIndex
+        let autoAdvanced = syncIndexWithPlayer()
         switch playMode {
         case .singleLoop:
+            // 单曲循环：无论自动前进到哪，都重播「刚播完的这首」
+            currentIndex = prevIndex
             playCurrent()
             return
         case .shuffle:
+            // shuffle 始终随机下一首：无论是否自动前进，队列顺序不适用随机语义。
+            // （autoAdvanced 后 currentIndex 已同步到实际播放的歌，随机排除它即可）
             let target = randomIndex(excluding: currentIndex)
             currentIndex = target
+            playCurrent()
         default:  // listLoop
-            if currentIndex < queue.count - 1 {
-                // 未到队尾：顺序切下一首
+            if autoAdvanced {
+                // 下一首已在播：不再推进；到队尾时按模式续播/回绕，并补队列保持预缓冲
+                adoptAutoAdvancedTrack()
+                topUpQueue()
+                if currentIndex >= queue.count - 1 {
+                    if listenMode == .normal {
+                        loadNextBatchOrLoop()
+                    } else {
+                        currentIndex = 0
+                        playCurrent()
+                    }
+                }
+            } else if currentIndex < queue.count - 1 {
+                // 未到队尾：顺序切下一首（走 playCurrent 的 advance/重建逻辑）
                 currentIndex += 1
+                playCurrent()
             } else if listenMode == .normal {
                 // 默认模式已到队尾：不立即回绕重播第一组，而是异步加载下一组随机新歌续播。
                 // 之前列表循环在追加前就 `% queue.count` 回绕到第 0 首，
@@ -595,9 +622,32 @@ final class PlayerManager: NSObject, ObservableObject {
             } else {
                 // 非默认模式（喜欢/新鲜）到队尾：按列表循环回绕第一首
                 currentIndex = 0
+                playCurrent()
             }
         }
-        playCurrent()
+    }
+
+    /// 自动切歌辅助：把 currentIndex 同步到 AVQueuePlayer 当前实际播放的歌曲（按 id 匹配）。
+    /// 返回是否发生了同步，即 AVQueuePlayer 已自动前进、当前正在播「索引所指之外」的歌。
+    @discardableResult
+    private func syncIndexWithPlayer() -> Bool {
+        guard !queue.isEmpty,
+              let itemId = player.currentItem.flatMap({ Self.trackId(of: $0) }),
+              let idx = queue.firstIndex(where: { $0.id == itemId }) else { return false }
+        guard idx != currentIndex else { return false }
+        currentIndex = idx
+        return true
+    }
+
+    /// 自动切歌已生效（AVQueuePlayer 已在播新歌，未走 playCurrent）时：
+    /// 结算上一首收听并把收听状态/自动重试机会切到新歌，避免时长记到上一首头上。
+    private func adoptAutoAdvancedTrack() {
+        guard let cur = current else { return }
+        if listen.trackId != cur.id {
+            flushListen(.switchTrack)   // 听完整首切走 frac≈1，不会产生 skip 信号
+            listen = ListenState(trackId: cur.id)
+            autoRetriedTrackId = nil
+        }
     }
 
     /// 默认模式队尾续播：异步拉取下一组随机歌，追加成功则从「新歌第一首」接续播放；
@@ -1241,20 +1291,33 @@ final class PlayerManager: NSObject, ObservableObject {
                   let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
 
             if typeValue == AVAudioSession.InterruptionType.began.rawValue {
-                // 被打断（如微信发语音）：UI 显示暂停状态
+                // 被打断（其他 App 抢占 / 来电 / 语音）：真正暂停当前播放器。
+                // 之前只改 isPlaying 状态，AVPlayer 仍被系统静音挂着，
+                // 恢复时容易状态错乱；引擎/原音两个播放器必须都停（防叠加）。
+                self.enginePlayer.pause()
+                self.player.pause()
                 self.isPlaying = false
+                self.updateNowPlaying(force: true)
             } else if typeValue == AVAudioSession.InterruptionType.ended.rawValue {
-                // 打断结束：系统允许恢复时重新激活会话并继续播放。
+                // 打断结束：系统允许恢复时重新激活会话、复位音量并继续播放。
                 // 必须按当前实际播放器恢复：引擎音效走 enginePlayer，原音走 AVPlayer。
                 // 之前无条件 player.play() 会导致 3D 模式下两个播放器同时输出同一首歌，
                 // 音量叠加翻倍、声音错乱（时大时小的直接来源）。
                 guard let option = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
                 if AVAudioSession.InterruptionOptions(rawValue: option).contains(.shouldResume) {
                     try? AVAudioSession.sharedInstance().setActive(true)
+                    self.restoreOutputVolume()
                     self.resumePlayback()
                 }
             }
         }
+    }
+
+    /// 恢复输出音量：系统可能因打断 / 音频闪避（ducking）/ 后台降权改变输出增益，
+    /// 恢复播放前统一复位，避免「切到其他应用再回来声音变小/变小后不复原」。
+    private func restoreOutputVolume() {
+        player.volume = 1.0
+        enginePlayer.restoreVolume()
     }
 
     /// 引擎被系统停止后的自动恢复：
@@ -1268,9 +1331,17 @@ final class PlayerManager: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // 先确保音频会话激活（后台期间可能被停用），再恢复引擎
+            guard let self else { return }
+            // 先确保音频会话激活（后台期间可能被停用），再复位音量、恢复引擎
             try? AVAudioSession.sharedInstance().setActive(true)
-            self?.enginePlayer.restartIfNeeded()
+            self.restoreOutputVolume()
+            self.enginePlayer.restartIfNeeded()
+            // 后台期间若被系统静音/暂停（无 interruption 通知的场景），回前台恢复播放
+            if self.isPlaying, !self.usingEngine,
+               self.player.rate == 0, self.player.currentItem != nil,
+               !self.loadFailed {
+                self.player.play()
+            }
         }
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
