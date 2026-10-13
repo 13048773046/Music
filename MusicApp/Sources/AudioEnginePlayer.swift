@@ -175,8 +175,11 @@ final class AudioEnginePlayer {
 
     // MARK: - 播放控制
 
-    /// 从 URL 加载并播放（先下载到临时文件）
-    func load(url: URL, mode: Mode) {
+    /// 从 URL 加载并播放（先下载到临时文件）。
+    /// - startSeconds: 初始播放位置（无缝续播：跨播放器切换时从该秒数接续，0 = 从头）
+    /// - autoPlay: 下载完成后是否立即播放（false = 就绪但保持暂停，pausedFrame 已定位，
+    ///   之后 play() 会从该位置续播）
+    func load(url: URL, mode: Mode, startSeconds: Double = 0, autoPlay: Bool = true) {
         stop()
         onLoadingChanged?(true)
         pendingURL = url
@@ -214,12 +217,16 @@ final class AudioEnginePlayer {
                 self.audioFile = file
                 self.fileFormat = file.processingFormat
                 self.totalFrames = file.length
-                self.pausedFrame = 0
+                // 无缝续播：初始位置 = startSeconds（clamp 到文件范围），
+                // 播放中切换引擎时从当前位置接续，而不是从头播
+                let sampleRate = file.processingFormat.sampleRate
+                let target = AVAudioFramePosition(startSeconds * sampleRate)
+                self.pausedFrame = max(0, min(target, file.length - 1))
                 self.apply(mode: mode)
 
                 try self.engine.start()
-                self.schedule(from: 0)
-                self.play()
+                self.schedule(from: self.pausedFrame)
+                if autoPlay { self.play() }
                 DispatchQueue.main.async { self.onLoadingChanged?(false) }
             } catch {
                 print("[AudioEngine] load error: \(error)")

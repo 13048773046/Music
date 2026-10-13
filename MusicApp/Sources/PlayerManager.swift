@@ -259,9 +259,16 @@ final class PlayerManager: NSObject, ObservableObject {
             }
             // 原音 → 原音：无操作
         } else {
+            // 原音 ↔ 引擎：跨播放器切换。记录切换瞬间进度与播放状态，
+            // 加载完成后从该位置无缝续播（不从头、不闪零）；暂停中切换则保持暂停。
+            let wasPlaying = isPlaying
+            let resumeSeconds = currentTime
             selectedEQ = name
             usingEngine = isEngine
-            playCurrent(flushReason: .heartbeat)
+            playCurrent(flushReason: .heartbeat,
+                        resumeSeconds: resumeSeconds,
+                        autoResume: wasPlaying,
+                        preserveProgress: true)
         }
     }
 
@@ -584,7 +591,10 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - Private
 
-    private func playCurrent(flushReason: ListenFlushReason? = nil) {
+    private func playCurrent(flushReason: ListenFlushReason? = nil,
+                             resumeSeconds: Double? = nil,
+                             autoResume: Bool = true,
+                             preserveProgress: Bool = false) {
         guard let current = current else { return }
         // 取消上一首的加载任务（快速连续切歌时旧签名 URL 请求不再继续）
         loadTask?.cancel()
@@ -600,12 +610,17 @@ final class PlayerManager: NSObject, ObservableObject {
             autoRetriedTrackId = nil
         }
         usingEngine = (selectedEQ != "原音")
-        // 状态立即重置，UI 先反馈（避免切歌后旧状态残留）
-        isPlaying = true
-        duration = 0
-        progress = 0
-        currentTime = 0
-        bufferProgress = 0
+        // 状态立即重置，UI 先反馈（避免切歌后旧状态残留）。
+        // autoResume=false（暂停中跨播放器切换）：保持暂停态，恢复播放时从续播位置走
+        isPlaying = autoResume
+        // 跨播放器无缝续播（原音↔引擎音效）：保留当前进度显示，
+        // 加载完成后从 resumeSeconds 位置接续，避免进度闪烁归零
+        if !preserveProgress {
+            duration = 0
+            progress = 0
+            currentTime = 0
+            bufferProgress = 0
+        }
         isBuffering = true
         loadFailed = false
         pendingArtwork = nil
@@ -656,10 +671,25 @@ final class PlayerManager: NSObject, ObservableObject {
                             self.handlePlaybackFailure()
                         }
                     }
-                    self.enginePlayer.load(url: url, mode: Self.engineMode(for: self.selectedEQ))
+                    self.enginePlayer.load(url: url,
+                                           mode: Self.engineMode(for: self.selectedEQ),
+                                           startSeconds: resumeSeconds ?? 0,
+                                           autoPlay: autoResume)
                 } else {
-                    self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
-                    self.player.play()
+                    let item = AVPlayerItem(url: url)
+                    self.player.replaceCurrentItem(with: item)
+                    if let rs = resumeSeconds {
+                        // 无缝续播：先定位到切换前进度，再按原播放状态决定是否播放
+                        if autoResume {
+                            self.player.seek(to: CMTime(seconds: rs)) { _ in
+                                DispatchQueue.main.async { self.player.play() }
+                            }
+                        } else {
+                            self.player.seek(to: CMTime(seconds: rs))
+                        }
+                    } else if autoResume {
+                        self.player.play()
+                    }
                 }
                 self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
             }
