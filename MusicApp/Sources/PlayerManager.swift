@@ -44,7 +44,7 @@ enum ListenMode: String, CaseIterable {
 final class PlayerManager: NSObject, ObservableObject {
     static let shared = PlayerManager()
 
-    let player = AVPlayer()
+    let player = AVQueuePlayer()
     /// 引擎音效实时处理引擎（3D 立体/360 环绕/复古/现场/流行/摇滚）
     private let enginePlayer = AudioEnginePlayer()
     /// 当前是否在用引擎播放（任一引擎音效模式；歌词等组件据此决定取数源）
@@ -429,6 +429,56 @@ final class PlayerManager: NSObject, ObservableObject {
     var current: Track? {
         guard queue.indices.contains(currentIndex) else { return nil }
         return queue[currentIndex]
+    }
+
+    // MARK: - AVPlayerItem ↔ 歌曲 id 关联（判断 AVQueuePlayer 队列是否已预取到目标歌）
+
+    private static var trackIdAssocKey: UInt8 = 0
+    /// 取 AVPlayerItem 上关联的歌曲 id（nil = 未关联）
+    static func trackId(of item: AVPlayerItem) -> String? {
+        objc_getAssociatedObject(item, &trackIdAssocKey) as? String
+    }
+    /// 在 AVPlayerItem 上关联歌曲 id（队列连续性判断用）
+    static func setTrackId(_ id: String, on item: AVPlayerItem) {
+        objc_setAssociatedObject(item, &trackIdAssocKey, id, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
+    /// 重建 AVQueuePlayer 队列：当前歌 + 后续若干首（用预取签名 URL，未命中的跳过）。
+    /// AVQueuePlayer 会自动预取下一个 item 的数据，顺序切下一首时可秒开、无需等网络首包。
+    private func prepareQueuePlayer(currentIndex idx: Int, currentURL: URL) {
+        player.removeAllItems()
+        let cur = AVPlayerItem(url: currentURL)
+        Self.setTrackId(queue[idx].id, on: cur)
+        player.insert(cur, after: nil)
+        // 后续限 prefetchAheadCount 首，用已缓存的签名 URL（缓存未命中则先跳过，切到时兜底重建）
+        let end = min(idx + 1 + prefetchAheadCount, queue.count)
+        for i in (idx + 1)..<end {
+            guard let u = signedURLPool[queue[i].id] else { continue }
+            let item = AVPlayerItem(url: u)
+            Self.setTrackId(queue[i].id, on: item)
+            player.insert(item, after: nil)
+        }
+    }
+
+    /// 顺序切歌（advanceToNextItem）后补充队列：把「队列末尾歌之后」的后续歌补 insert，
+    /// 让 AVQueuePlayer 始终保有「当前歌之后 prefetchAheadCount 首」可预取，避免连续切歌几首后队列耗尽。
+    /// 已存在的项不重复插入；预取 URL 未命中的跳过（切到时兜底重建）。
+    private func topUpQueue() {
+        guard !queue.isEmpty, let lastItem = player.items().last,
+              let lastId = Self.trackId(of: lastItem),
+              let lastIdx = queue.firstIndex(where: { $0.id == lastId }) else { return }
+        let end = min(lastIdx + 1 + prefetchAheadCount, queue.count)
+        var inserted = [String]()
+        let existingIDs = player.items().compactMap { Self.trackId(of: $0) }
+        for i in (lastIdx + 1)..<end {
+            let t = queue[i]
+            guard let u = signedURLPool[t.id] else { continue }
+            guard !inserted.contains(t.id), !existingIDs.contains(t.id) else { continue }
+            inserted.append(t.id)
+            let item = AVPlayerItem(url: u)
+            Self.setTrackId(t.id, on: item)
+            player.insert(item, after: nil)
+        }
     }
 
     func play(_ track: Track, in tracks: [Track]) {
@@ -897,13 +947,22 @@ final class PlayerManager: NSObject, ObservableObject {
         currentArtwork = nil
         bufferingStallStart = nil
 
-        // 关键：切歌瞬间同步终止上一首的播放与加载，而不是等新歌 URL 就绪后再替换——
-        // 1) AVPlayer：清空当前 item，立刻断开旧音频流（正在进行的缓冲/播放立即停止）
-        // 2) 引擎播放器：取消正在进行的整曲下载任务并停止引擎
-        // 这样即使新歌的签名 URL 还在网络请求中，上一首也已经不再发声、不再占用带宽
-        player.pause()
-        player.volume = 1.0   // 切歌时音量增益复位，防止残留状态影响新歌
-        player.replaceCurrentItem(with: nil)
+        // 顺序切下一首时，AVQueuePlayer 队列已预取目标歌（下一项）→ 保留队列不清空，
+        // 在播放分支里用 advanceToNextItem 秒开；其余场景（跳播/插播/模式切换）才清空重建。
+        let nextTrackId = player.items().count > 1 ? Self.trackId(of: player.items()[1]) : nil
+        let canAdvance = (nextTrackId == current.id)
+        if !canAdvance {
+            // 关键：切歌瞬间同步终止上一首的播放与加载，而不是等新歌 URL 就绪后再替换——
+            // AVPlayer：清空当前 item，立刻断开旧音频流（正在进行的缓冲/播放立即停止），
+            // 这样即使新歌的签名 URL 还在网络请求中，上一首也已经不再发声、不再占用带宽
+            player.pause()
+            player.volume = 1.0   // 切歌时音量增益复位，防止残留状态影响新歌
+            player.replaceCurrentItem(with: nil)
+        } else if !autoResume {
+            // B17：暂停状态下顺序切歌（复用预取队列但保持暂停）——
+            // 先停掉上一首的出声，避免"有声音却显示暂停"的不一致状态
+            player.pause()
+        }
         enginePlayer.stop()
 
         let task = Task { [weak self] in
@@ -969,8 +1028,14 @@ final class PlayerManager: NSObject, ObservableObject {
                                            startSeconds: resumeSeconds ?? 0,
                                            autoPlay: autoResume)
                 } else {
-                    let item = AVPlayerItem(url: url)
-                    self.player.replaceCurrentItem(with: item)
+                    // 顺序切歌且队列已预取目标歌：直接 advanceToNextItem 秒开（AVQueuePlayer 已预缓冲音频）；
+                    // 否则重建队列：当前歌 + 后续若干首（用预取签名 URL），系统随后自动预取下一首
+                    if canAdvance {
+                        self.player.advanceToNextItem()
+                        self.topUpQueue()   // 补充队列，保持后续始终有可预取
+                    } else {
+                        self.prepareQueuePlayer(currentIndex: self.currentIndex, currentURL: url)
+                    }
                     if let rs = resumeSeconds {
                         // 无缝续播：先定位到切换前进度，再按原播放状态决定是否播放
                         if autoResume {
