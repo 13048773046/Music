@@ -805,7 +805,8 @@ final class PlayerManager: NSObject, ObservableObject {
         if let cached {
             url = cached
         } else {
-            guard let fetched = await API.signedStreamURL(for: t.id), !Task.isCancelled else { return }
+            let fetched = await API.signedStreamURL(for: t.id)   // 非 Optional，恒返回可用 URL
+            guard !Task.isCancelled else { return }
             let saved = await MainActor.run { [weak self] () -> Bool in
                 guard let self else { return false }
                 if self.signedURLPool.count >= self.urlPoolLimit {
@@ -911,7 +912,7 @@ final class PlayerManager: NSObject, ObservableObject {
             // 优先复用预取缓存 URL（切歌免再向后端签发，缩短切歌等待）；未命中才实时请求
             let url: URL
             let cached = await MainActor.run { () -> URL? in
-                guard let self else { return nil }
+                // self 已由外层 guard let self 解包为非 Optional，直接访问
                 guard let c = self.signedURLPool[trackId] else { return nil }
                 self.signedURLPool.removeValue(forKey: trackId)
                 self.urlPoolOrder.removeAll { $0 == trackId }
