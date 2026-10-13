@@ -160,13 +160,54 @@ const server = http.createServer((req, res) => {
     ]).then((r) => {
       const st = qs.getAuthState();
       const status = (r && r.status) || 'waiting';
+      console.error('[qs-poll] upstream:', JSON.stringify({ token: String(token).slice(0, 12), status, message: (r && r.message) || '', authed: st.authenticated }));
       if (st.authenticated || status === 'confirmed') {
         qsAuthed = true;
         try { fs.writeFileSync(QS_SESSION_FILE, JSON.stringify(qs.exportSession())); } catch (_e) {}
         qsPending = null;
       }
       return json(res, 200, { ok: true, authed: qsAuthed, status, message: (r && r.message) || '' });
-    }).catch(e => json(res, 200, { ok: false, authed: qsAuthed, status: 'error', err: '等待扫码' }));
+    }).catch(e => {
+      console.error('[qs-poll] error:', (e && e.message) || e);
+      return json(res, 200, { ok: false, authed: qsAuthed, status: 'error', err: '等待扫码' });
+    });
+    return;
+  }
+
+  // 汽水音乐短信登录：发送验证码
+  if (p === '/qs/sms/send') {
+    const mobile = (q.get('mobile') || '').trim();
+    Promise.resolve().then(() => qs.sendSmsCode(mobile))
+      .then(r => {
+        console.error('[qs-sms-send]', mobile.slice(0,3)+'****'+mobile.slice(-4), JSON.stringify({ok: r && r.ok, msg: r && r.message, code: r && r.errorCode}));
+        return json(res, 200, { ok: !!(r && r.ok), message: (r && r.message) || (r && r.ok ? '验证码已发送' : '发送失败') });
+      })
+      .catch(e => {
+        console.error('[qs-sms-send] error:', (e && e.message) || e);
+        return json(res, 200, { ok: false, message: (e && e.message) || '发送失败' });
+      });
+    return;
+  }
+
+  // 汽水音乐短信登录：验证码登录
+  if (p === '/qs/sms/login') {
+    const mobile = (q.get('mobile') || '').trim();
+    const code = (q.get('code') || '').trim();
+    Promise.resolve().then(() => qs.smsLogin(mobile, code))
+      .then(r => {
+        const st = qs.getAuthState();
+        console.error('[qs-sms-login]', mobile.slice(0,3)+'****'+mobile.slice(-4), JSON.stringify({ok: r && r.ok, authed: st.authenticated, msg: r && r.message}));
+        if (st.authenticated || (r && r.ok)) {
+          qsAuthed = true;
+          try { fs.writeFileSync(QS_SESSION_FILE, JSON.stringify(qs.exportSession())); } catch (_e) {}
+          qsPending = null;
+        }
+        return json(res, 200, { ok: !!(r && r.ok), authed: qsAuthed, message: (r && r.message) || '' });
+      })
+      .catch(e => {
+        console.error('[qs-sms-login] error:', (e && e.message) || e);
+        return json(res, 200, { ok: false, authed: qsAuthed, message: (e && e.message) || '登录失败' });
+      });
     return;
   }
 

@@ -1718,6 +1718,51 @@ qsBtn.onclick=async()=>{
     closeBtn.textContent='关闭';
     closeBtn.style.cssText='margin-top:12px;padding:8px 20px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer';
     closeBtn.onclick=()=>document.body.removeChild(box);
+    // —— 手机号登录表单（扫码被限备用）——
+    const sep=document.createElement('div');
+    sep.style.cssText='margin:14px 0 10px;color:#555;font-size:11px';
+    sep.textContent='— 扫码失败？用手机号登录 —';card.appendChild(sep);
+    const mobileInp=document.createElement('input');
+    mobileInp.placeholder='手机号';mobileInp.type='tel';mobileInp.maxLength=11;
+    mobileInp.style.cssText='width:100%;padding:10px 12px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0f0f12;color:#fff;font-size:14px';
+    card.appendChild(mobileInp);
+    const smsRow=document.createElement('div');smsRow.style.cssText='display:flex;gap:8px';
+    const codeInp=document.createElement('input');
+    codeInp.placeholder='短信验证码';codeInp.type='tel';codeInp.maxLength=6;
+    codeInp.style.cssText='flex:1;padding:10px 12px;border-radius:8px;border:1px solid #333;background:#0f0f12;color:#fff;font-size:14px';
+    const sendBtn=document.createElement('button');
+    sendBtn.textContent='发送验证码';
+    sendBtn.style.cssText='padding:10px 14px;border:0;border-radius:8px;background:#1e3a2a;color:#5cd68a;font-size:13px;cursor:pointer';
+    smsRow.appendChild(codeInp);smsRow.appendChild(sendBtn);card.appendChild(smsRow);
+    const loginBtn=document.createElement('button');
+    loginBtn.textContent='手机号登录';
+    loginBtn.style.cssText='width:100%;margin-top:8px;padding:10px;border:0;border-radius:8px;background:#5cd68a;color:#06210f;font-size:14px;font-weight:600;cursor:pointer';
+    card.appendChild(loginBtn);
+    sendBtn.onclick=async()=>{
+      const m=mobileInp.value.trim();
+      if(!/^1\d{10}$/.test(m)){tip.textContent='请输入正确的 11 位手机号';return}
+      sendBtn.disabled=true;sendBtn.textContent='发送中…';
+      try{
+        const r=await fetch('/music/api/collect/qs-sms-send?mobile='+encodeURIComponent(m));
+        const d=await r.json();
+        tip.textContent=d.message||(d.ok?'验证码已发送':'发送失败');
+        if(d.ok){let s=60;sendBtn.textContent=s+'s';const t=setInterval(()=>{s--;if(s<=0){clearInterval(t);sendBtn.disabled=false;sendBtn.textContent='重新发送'}else sendBtn.textContent=s+'s'},1000)}
+        else{sendBtn.disabled=false;sendBtn.textContent='重发'}
+      }catch(e){tip.textContent='请求失败';sendBtn.disabled=false;sendBtn.textContent='发送验证码'}
+    };
+    loginBtn.onclick=async()=>{
+      const m=mobileInp.value.trim();const c=codeInp.value.trim();
+      if(!/^1\d{10}$/.test(m)){tip.textContent='请输入正确的 11 位手机号';return}
+      if(!/^\d{4,6}$/.test(c)){tip.textContent='请输入短信验证码';return}
+      loginBtn.disabled=true;loginBtn.textContent='登录中…';
+      try{
+        const r=await fetch('/music/api/collect/qs-sms-login?mobile='+encodeURIComponent(m)+'&code='+encodeURIComponent(c));
+        const d=await r.json();
+        tip.textContent=d.message||(d.ok?'登录成功':'登录失败');
+        if(d.ok){clearInterval(iv);refreshQs();setTimeout(()=>document.body.removeChild(box),1000)}
+        else{loginBtn.disabled=false;loginBtn.textContent='手机号登录'}
+      }catch(e){tip.textContent='请求失败';loginBtn.disabled=false;loginBtn.textContent='手机号登录'}
+    };
     card.appendChild(closeBtn);box.appendChild(card);document.body.appendChild(box);
     const iv=setInterval(async()=>{
       try{
@@ -1777,6 +1822,7 @@ async function delNotify(id){
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(body)
@@ -1784,13 +1830,24 @@ async function delNotify(id){
 
             # ---------- 采集控制台 API ----------
             # 汽水音乐（qs）代理：转发到本地音源桥 8789
-            if u.path in ("/api/collect/qs-status", "/api/collect/qs-qr", "/api/collect/qs-poll"):
+            if u.path in ("/api/collect/qs-status", "/api/collect/qs-qr", "/api/collect/qs-poll",
+                          "/api/collect/qs-sms-send", "/api/collect/qs-sms-login"):
                 import urllib.request as _ur
                 if u.path == "/api/collect/qs-poll":
                     _tk = (urllib.parse.parse_qs(u.query).get("token") or [""])[0]
                     _bp = "/qs/poll?token=" + urllib.parse.quote(_tk)
+                elif u.path == "/api/collect/qs-sms-send":
+                    _mb = (urllib.parse.parse_qs(u.query).get("mobile") or [""])[0]
+                    _bp = "/qs/sms/send?mobile=" + urllib.parse.quote(_mb)
+                elif u.path == "/api/collect/qs-sms-login":
+                    _ps = urllib.parse.parse_qs(u.query)
+                    _mb = (_ps.get("mobile") or [""])[0]
+                    _cd = (_ps.get("code") or [""])[0]
+                    _bp = "/qs/sms/login?mobile=" + urllib.parse.quote(_mb) + "&code=" + urllib.parse.quote(_cd)
+                elif u.path.endswith("qs-status"):
+                    _bp = "/qs/status"
                 else:
-                    _bp = "/qs/status" if u.path.endswith("qs-status") else "/qs/qr"
+                    _bp = "/qs/qr"
                 try:
                     with _ur.urlopen("http://127.0.0.1:8789" + _bp, timeout=15) as _r:
                         _qsd = json.loads(_r.read().decode())
