@@ -65,6 +65,8 @@ final class AuthManager: ObservableObject {
     static let shared = AuthManager()
 
     @Published var currentUser: User?
+    /// 注册成功后由后端生成的账号（6 位数字），用于首页弹窗提示用户牢记
+    @Published var justRegisteredAccount: String?
     var isLoggedIn: Bool { currentUser != nil }
     /// 当前登录用户的 Bearer Token（可能为 nil：旧会话，后端兼容模式下仍可用）
     var authToken: String? { currentUser?.token }
@@ -99,13 +101,14 @@ final class AuthManager: ObservableObject {
         saveSession(user)
     }
 
-    func register(account: String, password: String, name: String, avatarData: Data?,
+    func register(password: String, name: String, avatarData: Data?,
                   gender: String, age: Int, signature: String,
                   backgroundData: Data?) async throws {
-        let user = try await API.register(account: account, password: password, name: name,
+        let user = try await API.register(password: password, name: name,
                                           avatarData: avatarData, gender: gender, age: age,
                                           signature: signature, backgroundData: backgroundData)
         saveSession(user)
+        justRegisteredAccount = user.account
     }
 
     func logout() {

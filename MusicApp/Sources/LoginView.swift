@@ -2,8 +2,8 @@ import SwiftUI
 import PhotosUI
 
 /// 登录 / 注册页：未登录用户启动后看到。
-/// 注册：账号 + 密码 + 昵称 + 头像 + 性别 + 年龄 + 签名 + 背景图；
-/// 成功后自动写入 Keychain 直接进首页，杀后台重进免登录。
+/// 注册：密码 + 昵称 + 头像 + 性别 + 年龄 + 签名 + 背景图；账号由后端自动生成 6 位数字；
+/// 成功后自动写入 Keychain 直接进首页，并在首页弹窗提示记住账号。
 struct LoginView: View {
     @EnvironmentObject private var auth: AuthManager
 
@@ -27,9 +27,10 @@ struct LoginView: View {
 
     private var canSubmit: Bool {
         !busy
-            && !account.trimmingCharacters(in: .whitespaces).isEmpty
             && !password.isEmpty
-            && (!isRegister || !name.trimmingCharacters(in: .whitespaces).isEmpty)
+            && (isRegister
+                ? !name.trimmingCharacters(in: .whitespaces).isEmpty
+                : !account.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     var body: some View {
@@ -56,9 +57,14 @@ struct LoginView: View {
                         field("年龄", text: $ageText)
                             .keyboardType(.numberPad)
                         field("签名（一句话介绍自己）", text: $signature)
+                        Text("账号将由系统自动生成 6 位数字，注册成功后请牢记")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
                     }
 
-                    field("账号", text: $account)
+                    if !isRegister {
+                        field("账号", text: $account)
+                    }
                     SecureFieldCustom("密码", text: $password)
 
                     Button {
@@ -217,7 +223,6 @@ struct LoginView: View {
         do {
             if isRegister {
                 try await auth.register(
-                    account: account.trimmingCharacters(in: .whitespaces),
                     password: password,
                     name: name.trimmingCharacters(in: .whitespaces),
                     avatarData: avatarData,

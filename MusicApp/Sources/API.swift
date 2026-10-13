@@ -395,12 +395,12 @@ enum API {
 
     // MARK: - 用户注册 / 登录（multipart）
 
-    static func register(account: String, password: String, name: String,
+    /// 注册：账号由后端自动生成 6 位数字，无需客户端提交
+    static func register(password: String, name: String,
                          avatarData: Data?,
                          gender: String = "", age: Int = 0, signature: String = "",
                          backgroundData: Data?) async throws -> User {
         var body = MultipartBody()
-        body.field("account", account)
         body.field("password", password)
         body.field("name", name)
         body.field("gender", gender)

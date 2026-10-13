@@ -3782,9 +3782,9 @@ async function delNotify(id){
                     if fields is None:
                         self._err(400, "need multipart")
                         return
-                    account = (fields.get("account") or "").strip()
+                    # 账号由后端自动生成 6 位数字（不再接受用户自定义账号）
                     password = fields.get("password") or ""
-                    name = (fields.get("name") or "").strip()[:MAX_NAME] or account
+                    name = (fields.get("name") or "").strip()[:MAX_NAME]
                     gender = (fields.get("gender") or "").strip()[:8]
                     signature = (fields.get("signature") or "").strip()[:100]
                     try:
@@ -3792,21 +3792,25 @@ async function delNotify(id){
                     except Exception:
                         age = 0
                     age = max(0, min(age, 150))
-                    if not account or not password:
-                        self._err(400, "账号和密码不能为空")
-                        return
-                    if len(account) > 40:
-                        self._err(400, "账号过长")
+                    if not password:
+                        self._err(400, "密码不能为空")
                         return
                     if len(password) < 6 or len(password) > 64:
                         self._err(400, "密码长度需在 6-64 位之间")
                         return
                     c = db()
-                    dup = c.execute("SELECT 1 FROM users WHERE account=?", (account,)).fetchone()
-                    if dup:
+                    # 生成 6 位数字账号（100000-999999），冲突则重试
+                    account = ""
+                    for _ in range(50):
+                        _cand = str(random.randint(100000, 999999))
+                        if not c.execute("SELECT 1 FROM users WHERE account=?", (_cand,)).fetchone():
+                            account = _cand
+                            break
+                    if not account:
                         c.close()
-                        self._err(409, "账号已被注册")
+                        self._err(500, "账号生成失败，请重试")
                         return
+                    name = name or ("用户" + account)
                     uid = uuid.uuid4().hex
                     avatar_fname = ""
                     avatar = files.get("avatar")

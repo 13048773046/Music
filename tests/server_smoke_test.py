@@ -144,31 +144,33 @@ def run_all(port, root, strict_port, strict_root):
     check("health 200", s == 200)
     check("health json", json.loads(body).get("ok") is True, body[:100])
 
-    print("== 2. 注册（新用户，返回 token）==")
-    body, ct = multipart({"account": "test_user", "password": "secret123",
+    print("== 2. 注册（账号由后端自动生成 6 位数字）==")
+    body, ct = multipart({"password": "secret123",
                           "name": "测试用户", "gender": "保密", "age": "18",
                           "signature": "hello"}, {})
     s, body, _ = req("POST", "/api/register", body, {"Content-Type": ct})
     u = json.loads(body)
     check("register 200", s == 200, body[:200])
     check("register 返回 token", bool(u.get("token")), body[:200])
+    acc = u.get("account", "")
+    check("register 账号为6位数字", len(acc) == 6 and acc.isdigit(), body[:200])
     token = u.get("token", "")
     uid = u.get("id", "")
     AUTH = {"Authorization": f"Bearer {token}"}
 
     print("== 3. 弱密码拒绝 ==")
-    body, ct = multipart({"account": "weak_user", "password": "123"}, {})
+    body, ct = multipart({"password": "123"}, {})
     s, body, _ = req("POST", "/api/register", body, {"Content-Type": ct})
     check("弱密码 400", s == 400, body[:100])
 
     print("== 4. 登录（新 token）==")
-    body, ct = multipart({"account": "test_user", "password": "secret123"}, {})
+    body, ct = multipart({"account": acc, "password": "secret123"}, {})
     s, body, _ = req("POST", "/api/login", body, {"Content-Type": ct})
     u2 = json.loads(body)
     check("login 200 且新 token", s == 200 and u2.get("token") and u2["token"] != token, body[:100])
 
     print("== 5. 错误密码 401 ==")
-    body, ct = multipart({"account": "test_user", "password": "wrongpass"}, {})
+    body, ct = multipart({"account": acc, "password": "wrongpass"}, {})
     s, body, _ = req("POST", "/api/login", body, {"Content-Type": ct})
     check("错误密码 401", s == 401)
 
@@ -454,7 +456,7 @@ def run_all(port, root, strict_port, strict_root):
     check("admin users 无 token 401", s == 401, f"s={s}")
     s, body, _ = req("GET", "/api/admin/users", headers=ADMIN)
     us = json.loads(body)
-    check("admin users 200 含 test_user", s == 200 and any(u.get("account") == "test_user"
+    check("admin users 200 含注册用户", s == 200 and any(u.get("account") == acc
                                                           for u in us.get("list", [])), body[:100])
 
     print("== 21. WebSocket 握手与鉴权 ==")
@@ -501,7 +503,7 @@ def run_all(port, root, strict_port, strict_root):
     print("== 22. 限流（登录连续 12 次）==")
     codes = []
     for i in range(12):
-        body, ct = multipart({"account": "test_user", "password": "wrongpass"}, {})
+        body, ct = multipart({"account": acc, "password": "wrongpass"}, {})
         s, _, _ = req("POST", "/api/login", body, {"Content-Type": ct})
         codes.append(s)
     check("登录限流触发 429", 429 in codes, str(codes))
