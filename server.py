@@ -1010,7 +1010,7 @@ async function loadNotify(){
   if(d.list)d.list.forEach(m=>{
     const t=new Date(m.created*1000);
     const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
-    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\\''+m.id+'\\')">删除</button></td></tr>';
   });
   h+='</table></div>';
   h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
@@ -1643,7 +1643,7 @@ async function loadNotify(){
   if(d.list)d.list.forEach(m=>{
     const t=new Date(m.created*1000);
     const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
-    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\\''+m.id+'\\')">删除</button></td></tr>';
   });
   h+='</table></div>';
   h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
@@ -2091,7 +2091,7 @@ async function loadNotify(){
   if(d.list)d.list.forEach(m=>{
     const t=new Date(m.created*1000);
     const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
-    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\\''+m.id+'\\')">删除</button></td></tr>';
   });
   h+='</table></div>';
   h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
