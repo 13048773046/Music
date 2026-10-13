@@ -521,11 +521,15 @@ struct PlayerCard: View {
         }
         .task(id: track.id) {
             await loadBackground()
-            // 加载歌词
+            // 加载歌词：预加载已把歌词入缓存则直接命中（切歌立即显示）；
+            // 否则拉取并解析，同时入库供下次/其他页复用
             lyricLines = []
-            if track.hasLyric == true {
+            if let cached = LyricsCache.shared.lines(for: track.id) {
+                lyricLines = cached
+            } else if track.hasLyric == true {
                 if let text = try? await API.fetchLyric(track.id) {
                     lyricLines = parseLyrics(text)
+                    if !lyricLines.isEmpty { LyricsCache.shared.store(lyricLines, for: track.id) }
                 }
             }
         }

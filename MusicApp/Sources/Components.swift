@@ -76,6 +76,29 @@ final class CoverImageCache {
     }
 }
 
+// MARK: - 歌词内存缓存（配合预加载：切歌时歌词立即命中，无需等待网络）
+
+/// 已解析歌词的内存缓存：trackId → [KRCLine]。预加载时提前拉取并解析入库，
+/// 播放页切歌时先查缓存再回退网络，避免切到下一首歌词区还转圈。
+/// NSCache 自动淘汰（内存压力/上限），线程安全无需自加锁。
+final class LyricsCache {
+    static let shared = LyricsCache()
+    private let cache = NSCache<NSString, NSArray>()
+
+    func lines(for id: String) -> [KRCLine]? {
+        cache.object(forKey: id as NSString) as? [KRCLine]
+    }
+
+    func store(_ lines: [KRCLine], for id: String) {
+        cache.setObject(lines as NSArray, forKey: id as NSString)
+    }
+
+    /// 清理全部歌词缓存（设置页「清理缓存」）
+    func clear() {
+        cache.removeAllObjects()
+    }
+}
+
 /// 带内存缓存的封面图：首次下载后缓存，切页/列表重建不再重复请求
 struct CachedCoverImage<Placeholder: View>: View {
     let url: URL

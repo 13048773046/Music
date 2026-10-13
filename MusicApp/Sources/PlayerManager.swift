@@ -244,6 +244,7 @@ final class PlayerManager: NSObject, ObservableObject {
             queue: .main
         ) { _ in
             CoverImageCache.shared.clear()
+            LyricsCache.shared.clear()
             CoverPalette.clearCache()
             API.clearLyricCache()
         }
@@ -877,6 +878,30 @@ final class PlayerManager: NSObject, ObservableObject {
         //    （mp3/flac 拉 header+metadata；m3u8 拉 playlist），只占“前一小部分”，不整首下载。
         let asset = AVURLAsset(url: url)
         _ = try? await asset.load(.duration, .isPlayable)
+        // 3) 像音乐预加载一样：同步预取该首的封面图 + 歌词到内存缓存，
+        //    切到它时封面立即显示、歌词区直接命中，无需再等网络。
+        await prefetchCover(for: t)
+        await prefetchLyric(for: t)
+    }
+
+    /// 预取封面图到内存缓存（CoverImageCache）：切歌时 CachedCoverImage 立即命中。
+    private func prefetchCover(for t: Track) async {
+        guard let url = t.coverURL, !Task.isCancelled else { return }
+        if CoverImageCache.shared.image(for: url) != nil { return }   // 已缓存
+        guard !Task.isCancelled else { return }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let img = UIImage(data: data), !Task.isCancelled else { return }
+        CoverImageCache.shared.store(img, for: url)
+    }
+
+    /// 预取歌词到内存缓存（LyricsCache）：切歌时播放页直接查缓存，跳过网络+解析。
+    private func prefetchLyric(for t: Track) async {
+        guard t.hasLyric == true, !Task.isCancelled else { return }
+        if LyricsCache.shared.lines(for: t.id) != nil { return }       // 已缓存
+        guard !Task.isCancelled else { return }
+        guard let text = try? await API.fetchLyric(t.id), !Task.isCancelled else { return }
+        let lines = parseLyrics(text)
+        if !lines.isEmpty { LyricsCache.shared.store(lines, for: t.id) }
     }
 
 

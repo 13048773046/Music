@@ -238,9 +238,10 @@ struct SettingsView: View {
 
     // MARK: - 逻辑
 
-    /// 清理缓存：封面内存缓存 + URL 会话缓存
+    /// 清理缓存：封面内存缓存 + 歌词缓存 + URL 会话缓存
     private func clearCache() {
         CoverImageCache.shared.clear()
+        LyricsCache.shared.clear()
         URLCache.shared.removeAllCachedResponses()
         showClearAlert = true
     }
