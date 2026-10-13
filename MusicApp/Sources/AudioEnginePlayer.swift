@@ -1,29 +1,41 @@
 import AVFoundation
+import QuartzCore   // CACurrentMediaTime（可靠单调时钟）
 
-/// 3D 环绕音效实时处理引擎。
+/// 音效实时处理引擎（原音 + 5 种引擎音效）。
 ///
-/// 管线（3D 模式）：
+/// 管线：
 /// ```
-/// playerNode ──┬─→ eqLow  (lowPass 250Hz)  ──→ leftBus  (pan -0.45, 微延迟)
-///              ├─→ eqMid  (bandPass 250–6k) ─→ centerBus (pan 0)
-///              └─→ eqHigh (highPass 6kHz)   ─→ rightBus (pan +0.45, 微延迟)
-///                                                         │
-///                                                  reverb (wet 35%)
-///                                                         │
-///                                                    outputNode
+/// playerNode ──→ directMix ───────────────────────────────→ output   （原音直通）
+/// playerNode ──→ eqLow  → delayLow → mixLow ─┐
+/// playerNode ──→ eqMid  →──────────→ mixMid ──┼→ reverb → distortion → output
+/// playerNode ──→ eqHigh → delayHigh → mixHigh┘
 /// ```
-/// 原音模式：playerNode → outputNode 直通。
+/// 每种音效 = 一组参数（三分频 EQ 增益/分频点、左右延迟、混响预设、三路混音增益、失真染色），
+/// 运行时切换参数即切换音效：不重建图、不重新下载整曲，进度与歌词保持连续。
+///
+/// 进度计算不依赖 AVAudioEngine 渲染时间线（playerNode.lastRenderTime /
+/// playerTime(forNodeTime:) 在真机上采样时间域与文件采样率可能不一致、
+/// sampleTime 可能无效，导致进度恒为 0 —— 进度条/歌词全部卡死的根源），
+/// 改为「真实单调时钟 + 文件采样率」推算：play 时记录起点帧与时刻，
+/// currentFrame = 起点帧 + 已播放秒数 × 文件采样率，与硬件采样率/引擎状态无关。
 final class AudioEnginePlayer {
 
-    enum Mode: String {
-        case original       // 原音
-        case surround3D     // 3D 环绕
+    /// 音效模式。与 UI 选项一一对应（PlayerManager 负责名称 → 模式的映射）
+    enum Mode: String, CaseIterable {
+        case original     // 原音
+        case surround3D   // 3D 立体音效
+        case surround360  // 360 环绕
+        case retro        // 复古
+        case live         // 现场
+        case pop          // 流行
+        case rock         // 摇滚
     }
 
     // MARK: - 节点
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    /// 三分频路由：低通 250Hz（贝斯/底鼓）/ 带通 1.8k（人声主体）/ 高通 6kHz（镲片/空气感）
     private let eqLow = AVAudioUnitEQ(numberOfBands: 1)
     private let eqMid = AVAudioUnitEQ(numberOfBands: 1)
     private let eqHigh = AVAudioUnitEQ(numberOfBands: 1)
@@ -33,6 +45,8 @@ final class AudioEnginePlayer {
     private let delayLow = AVAudioUnitDelay()
     private let delayHigh = AVAudioUnitDelay()
     private let reverb = AVAudioUnitReverb()
+    /// 失真染色（复古磁带感 / 摇滚失真）；wetDryMix=0 时纯干直通
+    private let distortion = AVAudioUnitDistortion()
     /// 直通 mixer（原音模式用）
     private let directMix = AVAudioMixerNode()
 
@@ -43,9 +57,10 @@ final class AudioEnginePlayer {
     private var totalFrames: AVAudioFramePosition = 0
     private var isPlaying = false
     private var mode: Mode = .original
-    private var startedFrame: AVAudioFramePosition = 0
+    /// 播放起点帧与起点时刻（可靠时钟进度计算）
+    private var playStartFrame: AVAudioFramePosition = 0
+    private var playStartTime: TimeInterval = 0
     private var pausedFrame: AVAudioFramePosition = 0
-    private var isConfigured = false
     private var progressTimer: Timer?
     /// 当前下载任务与目标 URL：快速切歌时取消旧任务、丢弃旧回调，防止旧歌覆盖新歌
     private var currentTask: URLSessionDownloadTask?
@@ -96,22 +111,21 @@ final class AudioEnginePlayer {
             band.bandwidth = 0.5
             band.gain = 0
         }
-        // 左右微延迟制造相位差立体感（不要混响/回声）。
-        // 注意：wetDryMix 必须保持低值——干湿信号叠加会形成梳状滤波，
-        // 某些频段随音乐时变被增强/抵消，听感就是声音时大时小、飘忽。
-        delayLow.delayTime = 0.018   // 低频略偏左
+        // 延迟默认参数（apply(mode:) 会按音效覆盖）
+        delayLow.delayTime = 0.018
         delayLow.feedback = 0
         delayLow.wetDryMix = 12
-        delayHigh.delayTime = 0.012  // 高频略偏右
+        delayHigh.delayTime = 0.012
         delayHigh.feedback = 0
         delayHigh.wetDryMix = 12
-        // 小房间自然反射（不是大厅环绕感）：近场音响在房间里的听感
+        // 混响默认（apply 覆盖）
         reverb.loadFactoryPreset(.smallRoom)
         reverb.wetDryMix = 8
-
-        // 分频声像：三条分频路信号叠加输出，若各路增益保持 0.9/1.0/0.9 会整体过载
-        // （总响度约为原音的 1.6~2.8 倍，切到 3D 模式瞬间音量猛增）。
-        // 补偿为 0.55/0.6/0.55，三路 RMS 叠加 ≈ 1.0，与「原音」响度基本一致。
+        // 失真默认纯干直通
+        distortion.loadFactoryPreset(.speechTape)
+        distortion.wetDryMix = 0
+        // 分频混音默认（apply 覆盖）。三路 RMS 叠加 ≈ 1.0，响度与原音基本一致，
+        // 避免「切音效瞬间音量猛增/时大时小」
         mixLow.outputVolume = 0.55
         mixMid.outputVolume = 0.6
         mixHigh.outputVolume = 0.55
@@ -128,6 +142,7 @@ final class AudioEnginePlayer {
         engine.attach(delayLow)
         engine.attach(delayHigh)
         engine.attach(reverb)
+        engine.attach(distortion)
         engine.attach(directMix)
 
         let output = engine.outputNode
@@ -138,7 +153,7 @@ final class AudioEnginePlayer {
         engine.connect(playerNode, to: directMix, format: format)
         engine.connect(directMix, to: output, format: format)
 
-        // 3D 分频链（默认也连上，但通过 mute 控制开关）
+        // 三分频链
         engine.connect(playerNode, to: eqLow, format: format)
         engine.connect(eqLow, to: delayLow, format: format)
         engine.connect(delayLow, to: mixLow, format: format)
@@ -150,11 +165,12 @@ final class AudioEnginePlayer {
         engine.connect(eqHigh, to: delayHigh, format: format)
         engine.connect(delayHigh, to: mixHigh, format: format)
 
-        // 三路分频 → reverb → output
+        // 三路分频 → 混响 → 失真染色 → 输出
         engine.connect(mixLow, to: reverb, format: format)
         engine.connect(mixMid, to: reverb, format: format)
         engine.connect(mixHigh, to: reverb, format: format)
-        engine.connect(reverb, to: output, format: format)
+        engine.connect(reverb, to: distortion, format: format)
+        engine.connect(distortion, to: output, format: format)
     }
 
     // MARK: - 播放控制
@@ -233,13 +249,15 @@ final class AudioEnginePlayer {
                 self.onCompletion?()
             }
         }
-        startedFrame = frame
     }
 
     func play() {
         guard !isPlaying else { return }
         playerNode.play()
         isPlaying = true
+        // 记录播放起点（可靠时钟进度）
+        playStartFrame = pausedFrame
+        playStartTime = CACurrentMediaTime()
         startTimer()
     }
 
@@ -258,6 +276,7 @@ final class AudioEnginePlayer {
         playerNode.stop()
         isPlaying = false
         pausedFrame = 0
+        playStartFrame = 0
         stopTimer()
         // 释放已打开音频文件句柄与格式引用（切歌后旧文件不再被引用，
         // 避免文件句柄残留导致磁盘/内存资源占用）
@@ -291,47 +310,129 @@ final class AudioEnginePlayer {
         if isPlaying {
             schedule(from: clamped)
             playerNode.play()
+            playStartFrame = clamped
+            playStartTime = CACurrentMediaTime()
         }
     }
 
+    /// 运行时切换音效参数（引擎模式之间切换用，不重载音频、进度连续）
     func setMode(_ mode: Mode) {
         self.mode = mode
         apply(mode: mode)
     }
 
+    /// 每种音效的参数表：先全部关断，再按模式开启对应组合。
+    /// 参数设计原则：三路分频混音叠加后 RMS ≈ 1.0，保证各音效响度一致、切换不突兀。
     private func apply(mode: Mode) {
         self.mode = mode
+        // 全关
+        directMix.outputVolume = 0
+        mixLow.outputVolume = 0
+        mixMid.outputVolume = 0
+        mixHigh.outputVolume = 0
+        reverb.wetDryMix = 0
+        distortion.wetDryMix = 0
+        delayLow.feedback = 0
+        delayLow.wetDryMix = 0
+        delayHigh.feedback = 0
+        delayHigh.wetDryMix = 0
+        // 分频点复位（复古会下调高频分频点）
+        eqHigh.bands.first?.frequency = 6000
+
         switch mode {
         case .original:
-            // 原音：直通 mixer 开，3D 链 mute
+            // 原音：仅直通
             directMix.outputVolume = 1.0
-            mixLow.outputVolume = 0
-            mixMid.outputVolume = 0
-            mixHigh.outputVolume = 0
-            reverb.wetDryMix = 0
+
         case .surround3D:
-            // 3D 立体：直通关，分频链开，小房间自然反射。
-            // 增益已按三路叠加补偿（见 configureNodes），响度与原音一致，不会时大时小
-            directMix.outputVolume = 0
+            // 3D 立体音效：三分频 + 左右微延迟相位差 + 小房间自然反射
             mixLow.outputVolume = 0.55
             mixMid.outputVolume = 0.6
             mixHigh.outputVolume = 0.55
+            delayLow.delayTime = 0.018   // 低频略偏左
+            delayLow.feedback = 0
+            delayLow.wetDryMix = 12
+            delayHigh.delayTime = 0.012  // 高频略偏右
+            delayHigh.feedback = 0
+            delayHigh.wetDryMix = 12
+            reverb.loadFactoryPreset(.smallRoom)
             reverb.wetDryMix = 8
+
+        case .surround360:
+            // 360 环绕：左右延迟差拉大（声像更宽）+ 中厅反射 → 环绕流动感
+            mixLow.outputVolume = 0.5
+            mixMid.outputVolume = 0.55
+            mixHigh.outputVolume = 0.5
+            delayLow.delayTime = 0.030   // 左路更晚 → 偏右
+            delayLow.feedback = 0
+            delayLow.wetDryMix = 20
+            delayHigh.delayTime = 0.006  // 右路更早 → 偏左
+            delayHigh.feedback = 0
+            delayHigh.wetDryMix = 20
+            reverb.loadFactoryPreset(.mediumHall)
+            reverb.wetDryMix = 18
+
+        case .retro:
+            // 复古：高频路衰减（磁带高切）+ 原音混底保清晰 + 磁带感失真 + 轻微单声道回声
+            directMix.outputVolume = 0.25
+            mixLow.outputVolume = 0.5
+            mixMid.outputVolume = 0.5
+            mixHigh.outputVolume = 0.35
+            eqHigh.bands.first?.frequency = 4500   // 高切：高频分频点下调
+            delayLow.delayTime = 0.085
+            delayLow.feedback = 0.35
+            delayLow.wetDryMix = 18
+            delayHigh.delayTime = 0.06
+            delayHigh.feedback = 0.3
+            delayHigh.wetDryMix = 16
+            distortion.loadFactoryPreset(.speechTape)
+            distortion.wetDryMix = 18
+
+        case .live:
+            // 现场：大厅混响 + 原音干湿混合（更自然的现场距离感）
+            directMix.outputVolume = 0.35
+            mixLow.outputVolume = 0.5
+            mixMid.outputVolume = 0.55
+            mixHigh.outputVolume = 0.5
+            reverb.loadFactoryPreset(.largeHall)
+            reverb.wetDryMix = 26
+
+        case .pop:
+            // 流行：人声路（中频）更突出 + 轻厅堂润色
+            directMix.outputVolume = 0.2
+            mixLow.outputVolume = 0.45
+            mixMid.outputVolume = 0.7
+            mixHigh.outputVolume = 0.5
+            reverb.loadFactoryPreset(.mediumHall)
+            reverb.wetDryMix = 10
+
+        case .rock:
+            // 摇滚：V 形 EQ（低频/高频更响、中频稍收）+ 轻微失真染色 + 紧凑混响
+            directMix.outputVolume = 0.15
+            mixLow.outputVolume = 0.65
+            mixMid.outputVolume = 0.45
+            mixHigh.outputVolume = 0.6
+            delayLow.delayTime = 0.014
+            delayLow.feedback = 0
+            delayLow.wetDryMix = 10
+            delayHigh.delayTime = 0.010
+            delayHigh.feedback = 0
+            delayHigh.wetDryMix = 10
+            reverb.loadFactoryPreset(.mediumRoom)
+            reverb.wetDryMix = 12
+            distortion.loadFactoryPreset(.multiDistortedSquared)
+            distortion.wetDryMix = 12
         }
     }
 
-    // MARK: - 进度
+    // MARK: - 进度（可靠时钟，与引擎渲染时间线解耦）
 
     private func currentFrame() -> AVAudioFramePosition {
-        guard isPlaying, let nodeTime = playerNode.lastRenderTime,
-              nodeTime.isSampleTimeValid else {
-            return pausedFrame
-        }
-        guard let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
-              playerTime.isSampleTimeValid else {
-            return pausedFrame
-        }
-        return startedFrame + playerTime.sampleTime
+        guard isPlaying, let format = fileFormat, format.sampleRate > 0 else { return pausedFrame }
+        let elapsed = CACurrentMediaTime() - playStartTime
+        guard elapsed >= 0, elapsed.isFinite else { return playStartFrame }
+        let frames = playStartFrame + AVAudioFramePosition(elapsed * format.sampleRate)
+        return min(frames, max(totalFrames - 1, 0))
     }
 
     func currentSeconds() -> Double {

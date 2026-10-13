@@ -258,28 +258,27 @@ struct VerticalPager: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - 音效预设（UI 先做，功能后续接）
+// MARK: - 音效预设（全部已实现真实音频处理）
 
 struct EQOption: Identifiable {
     let id = UUID().uuidString
     let name: String
     let icon: String
-    /// 是否已实现真实音效：仅「原音 / 3D 环绕」有引擎实现，其余为占位（禁用置灰）
-    let implemented: Bool
 }
 
 private let eqOptions: [EQOption] = [
-    EQOption(name: "原音", icon: "speaker.fill", implemented: true),
-    EQOption(name: "3D 环绕", icon: "wave.3.right.circle.fill", implemented: true),
-    EQOption(name: "360 环绕", icon: "arrow.triangle.2.circlepath.circle.fill", implemented: false),
-    EQOption(name: "复古", icon: "clock.arrow.circlepath", implemented: false),
-    EQOption(name: "现场", icon: "music.mic", implemented: false),
-    EQOption(name: "流行", icon: "music.note", implemented: false),
-    EQOption(name: "摇滚", icon: "guitars", implemented: false),
+    EQOption(name: "原音", icon: "speaker.fill"),
+    EQOption(name: "3D 立体音效", icon: "wave.3.right.circle.fill"),
+    EQOption(name: "360 环绕", icon: "arrow.triangle.2.circlepath.circle.fill"),
+    EQOption(name: "复古", icon: "clock.arrow.circlepath"),
+    EQOption(name: "现场", icon: "music.mic"),
+    EQOption(name: "流行", icon: "music.note"),
+    EQOption(name: "摇滚", icon: "guitars"),
 ]
 
 private struct EQBSheet: View {
     @Binding var selected: String
+    @EnvironmentObject private var player: PlayerManager
     @Environment(\.dismiss) private var dismiss
 
     private let columns = [GridItem(.flexible(), spacing: 12),
@@ -291,7 +290,8 @@ private struct EQBSheet: View {
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(eqOptions) { opt in
                         Button {
-                            selected = opt.name
+                            // 直接应用音效（引擎模式间切换不重载，进度/歌词连续）
+                            player.applyEQ(opt.name)
                             dismiss()
                         } label: {
                             VStack(spacing: 8) {
@@ -299,11 +299,6 @@ private struct EQBSheet: View {
                                     .font(.system(size: 22))
                                 Text(opt.name)
                                     .font(.system(size: 14, weight: .medium))
-                                if !opt.implemented {
-                                    Text("敬请期待")
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                }
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 18)
@@ -319,9 +314,6 @@ private struct EQBSheet: View {
                             )
                             .foregroundColor(selected == opt.name ? Color.accentColor : .primary)
                         }
-                        // 未实现的音效置灰禁用，避免「选了没效果」的误导
-                        .disabled(!opt.implemented)
-                        .opacity(opt.implemented ? 1 : 0.4)
                     }
                 }
                 .padding(16)
@@ -526,12 +518,11 @@ struct PlayerCard: View {
         }
         .sheet(isPresented: $showEQ) {
             EQBSheet(selected: $player.selectedEQ)
+                .environmentObject(player)
                 .presentationDetents([.medium])
         }
-        .onChange(of: player.selectedEQ) { _ in
-            // 切换音效后重新加载当前歌曲
-            player.reloadCurrent()
-        }
+        // 音效切换统一走 EQBSheet 的 player.applyEQ（引擎同类切换不重载、进度连续），
+        // 不再监听 selectedEQ 变化重载整曲。
     }
 
     // MARK: - 互动按钮（点赞 / 评论 / 分享）

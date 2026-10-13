@@ -45,7 +45,7 @@ final class PlayerManager: NSObject, ObservableObject {
     static let shared = PlayerManager()
 
     let player = AVPlayer()
-    /// 3D 环绕音效实时引擎
+    /// 引擎音效实时处理引擎（3D 立体/360 环绕/复古/现场/流行/摇滚）
     private let enginePlayer = AudioEnginePlayer()
     /// 当前是否在用引擎播放（3D 模式）
     private var usingEngine = false
@@ -231,6 +231,46 @@ final class PlayerManager: NSObject, ObservableObject {
         loadTask?.cancel()
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
+        }
+    }
+
+    /// 切换音效：直接应用（EQBSheet 调用入口）。
+    /// - 引擎音效之间切换：只换引擎参数，不重新下载整曲，进度/歌词连续；
+    /// - 原音 ↔ 引擎：跨播放器切换，重载当前歌曲（引擎需下载整曲 / AVPlayer 走流）。
+    /// - 加载失败状态下切换 = 重试加载。
+    func applyEQ(_ name: String) {
+        guard name != selectedEQ else { return }
+        if loadFailed {
+            selectedEQ = name
+            reloadCurrent()   // 失败态：切音效即重试（playCurrent 按新音效加载）
+            return
+        }
+        let isEngine = (name != "原音")
+        if usingEngine == isEngine {
+            selectedEQ = name
+            if isEngine {
+                // 引擎模式间切换：直接换参数，无需重载
+                enginePlayer.setMode(Self.engineMode(for: name))
+                updateNowPlaying(force: true)
+            }
+            // 原音 → 原音：无操作
+        } else {
+            selectedEQ = name
+            usingEngine = isEngine
+            playCurrent(flushReason: .heartbeat)
+        }
+    }
+
+    /// 音效名称 → 引擎模式映射（与 VerticalPager eqOptions 一一对应）
+    static func engineMode(for name: String) -> AudioEnginePlayer.Mode {
+        switch name {
+        case "3D 立体音效": return .surround3D
+        case "360 环绕": return .surround360
+        case "复古": return .retro
+        case "现场": return .live
+        case "流行": return .pop
+        case "摇滚": return .rock
+        default: return .original
         }
     }
 
@@ -555,7 +595,7 @@ final class PlayerManager: NSObject, ObservableObject {
             // 新歌重新获得一次自动重试机会（自动重试按歌曲 id 防重）
             autoRetriedTrackId = nil
         }
-        usingEngine = (selectedEQ == "3D 环绕")
+        usingEngine = (selectedEQ != "原音")
         // 状态立即重置，UI 先反馈（避免切歌后旧状态残留）
         isPlaying = true
         duration = 0
@@ -570,7 +610,7 @@ final class PlayerManager: NSObject, ObservableObject {
 
         // 关键：切歌瞬间同步终止上一首的播放与加载，而不是等新歌 URL 就绪后再替换——
         // 1) AVPlayer：清空当前 item，立刻断开旧音频流（正在进行的缓冲/播放立即停止）
-        // 2) 3D 环绕引擎：取消正在进行的整曲下载任务并停止引擎
+        // 2) 引擎播放器：取消正在进行的整曲下载任务并停止引擎
         // 这样即使新歌的签名 URL 还在网络请求中，上一首也已经不再发声、不再占用带宽
         player.pause()
         player.volume = 1.0   // 切歌时音量增益复位，防止残留状态影响新歌
@@ -612,7 +652,7 @@ final class PlayerManager: NSObject, ObservableObject {
                             self.handlePlaybackFailure()
                         }
                     }
-                    self.enginePlayer.load(url: url, mode: .surround3D)
+                    self.enginePlayer.load(url: url, mode: Self.engineMode(for: self.selectedEQ))
                 } else {
                     self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
                     self.player.play()
@@ -700,7 +740,7 @@ final class PlayerManager: NSObject, ObservableObject {
                 self.isPlaying = false
             } else if typeValue == AVAudioSession.InterruptionType.ended.rawValue {
                 // 打断结束：系统允许恢复时重新激活会话并继续播放。
-                // 必须按当前实际播放器恢复：3D 环绕走 enginePlayer，原音走 AVPlayer。
+                // 必须按当前实际播放器恢复：引擎音效走 enginePlayer，原音走 AVPlayer。
                 // 之前无条件 player.play() 会导致 3D 模式下两个播放器同时输出同一首歌，
                 // 音量叠加翻倍、声音错乱（时大时小的直接来源）。
                 guard let option = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
@@ -712,7 +752,7 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
-    /// 恢复播放：按当前播放器分派（3D 环绕 → enginePlayer；原音 → AVPlayer）。
+    /// 恢复播放：按当前播放器分派（引擎音效 → enginePlayer；原音 → AVPlayer）。
     /// 锁屏/通知栏/来电恢复都走这里，避免双播放器同播导致音量叠加。
     /// 加载失败状态下点播放 = 重试加载（当前无有效 item，直接 play 会空转假播放）。
     private func resumePlayback() {
