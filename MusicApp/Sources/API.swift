@@ -27,6 +27,17 @@ enum API {
         return try JSONDecoder().decode([Track].self, from: data)
     }
 
+    /// 单曲详情：按 id 精确查询（用户上传 + 采集歌曲都覆盖，通知点击跳转播放用）
+    static func track(id: String) async throws -> Track {
+        var req = URLRequest(url: base.appendingPathComponent("track/\(id)"))
+        req.timeoutInterval = 15
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(Track.self, from: data)
+    }
+
     /// 搜索歌曲：按歌名/歌手模糊匹配
     static func search(_ keyword: String) async throws -> [Track] {
         var components = URLComponents(url: base.appendingPathComponent("search"),

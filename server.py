@@ -809,6 +809,22 @@ def _track_info(c, tid):
         return ""
 
 
+def _track_owner(c, tid):
+    """歌曲上传者 (user_id, title)：优先用户上传表，其次采集表；查不到返回 (None, None)。
+    点赞/评论/分享通知与双表计数均依赖此函数，避免采集歌曲的 owner 收不到通知。"""
+    if not tid:
+        return None, None
+    try:
+        row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
+        if not row:
+            row = c.execute("SELECT user_id, title FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+        if not row:
+            return None, None
+        return row[0], row[1]
+    except Exception:
+        return None, None
+
+
 # ---------------- HTTP ----------------
 
 class H(BaseHTTPRequestHandler):
@@ -2275,6 +2291,60 @@ async function delNotify(id){
                 random.shuffle(merged)
                 c.close()
                 self._json(200, merged)
+                return
+
+            # 单曲详情（通知点击跳转播放用：按 id 精确查，用户上传表 + 采集表都覆盖；
+            # /api/tracks 无参数时只随机返回 10 首，无法保证命中通知里的那首歌）
+            if u.path.startswith("/api/track/"):
+                if not rate_limit(self, "tracks"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                tid = u.path.rsplit("/", 1)[-1]
+                c = db()
+                tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
+                viewer_id = tok_uid or ""
+                row = c.execute(
+                    """SELECT t.id,t.title,t.artist,t.album,t.cover,t.fname,t.size,t.dur,t.created,
+                              t.play_count,t.like_count,t.share_count,t.user_id,t.lrc,
+                              COALESCE(u.name,''),
+                              (SELECT COUNT(*) FROM comments cm WHERE cm.track_id=t.id),
+                              MAX(CASE WHEN l.user_id IS NOT NULL THEN 1 ELSE 0 END)
+                              FROM tracks t LEFT JOIN users u ON u.id=t.user_id
+                              LEFT JOIN likes l ON l.track_id=t.id AND l.user_id=?
+                              WHERE t.id=? AND t.offline=0 GROUP BY t.id""",
+                    (viewer_id, tid)).fetchone()
+                if row:
+                    out = {"id": row[0], "title": row[1], "artist": row[2], "album": row[3],
+                           "cover": row[4], "fname": row[5], "size": row[6], "dur": row[7],
+                           "durText": _fmt_dur(row[7]), "created": row[8],
+                           "playCount": row[9] or 0, "likeCount": row[10] or 0,
+                           "shareCount": row[11] or 0, "userId": row[12] or "",
+                           "userName": row[14] or "", "hasLyric": bool(row[13]),
+                           "commentCount": row[15] or 0, "isLiked": bool(row[16])}
+                else:
+                    crow = c.execute(
+                        """SELECT id,title,artist,album,cover,duration,size,created,
+                                  play_count,like_count,share_count,user_id,lrc
+                           FROM collected_tracks WHERE id=? AND offline=0""",
+                        (tid,)).fetchone()
+                    if not crow:
+                        c.close()
+                        self._err(404, "not found")
+                        return
+                    uname = ""
+                    urow = c.execute("SELECT name FROM users WHERE id=?", (crow[11] or "",)).fetchone()
+                    if urow:
+                        uname = urow[0]
+                    out = {"id": crow[0], "title": crow[1], "artist": crow[2], "album": crow[3],
+                           "cover": "1", "fname": "",
+                           "size": int(crow[6]) if crow[6] is not None else 0,
+                           "dur": crow[5], "durText": _fmt_dur(crow[5]), "created": crow[7],
+                           "playCount": crow[8] or 0, "likeCount": crow[9] or 0,
+                           "shareCount": crow[10] or 0, "userId": crow[11] or "",
+                           "userName": uname, "hasLyric": bool(crow[12]),
+                           "commentCount": 0, "isLiked": False}
+                c.close()
+                self._json(200, out)
                 return
 
             # 采集歌曲列表（独立表 collected_tracks，与用户上传 tracks 分开）
@@ -3877,38 +3947,40 @@ async function delNotify(id){
                     if ex:
                         c.execute("DELETE FROM likes WHERE user_id=? AND track_id=?", (uid, tid))
                         c.execute("UPDATE tracks SET like_count=MAX(0,like_count-1) WHERE id=?", (tid,))
+                        c.execute("UPDATE collected_tracks SET like_count=MAX(0,like_count-1) WHERE id=?", (tid,))
                         liked = False
                     else:
                         c.execute("INSERT OR IGNORE INTO likes(user_id,track_id,created) VALUES(?,?,?)",
                                   (uid, tid, time.time()))
                         c.execute("UPDATE tracks SET like_count=like_count+1 WHERE id=?", (tid,))
+                        c.execute("UPDATE collected_tracks SET like_count=like_count+1 WHERE id=?", (tid,))
                         liked = True
                     c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "like", 1.0 if liked else 0.0,
                                "", _track_info(c, tid), time.time()))
-                    # 点赞通知：给歌曲上传者
+                    # 点赞通知：给歌曲上传者（用户上传表 + 采集表都覆盖）
                     if liked:
-                        track_row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
-                        if track_row and track_row[0] and track_row[0] != uid:
+                        owner_id, owner_title = _track_owner(c, tid)
+                        if owner_id and owner_id != uid:
                             notif_id = uuid.uuid4().hex
                             from_user_name = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
                             uname = from_user_name[0] if from_user_name else "有人"
                             c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
                                          VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                                      (notif_id, track_row[0], "like", "收到新点赞",
-                                       f"{uname}赞了你的歌曲《{track_row[1]}》",
-                                       uid, uname, tid, track_row[1], 0, time.time()))
+                                      (notif_id, owner_id, "like", "收到新点赞",
+                                       f"{uname}赞了你的歌曲《{owner_title}》",
+                                       uid, uname, tid, owner_title, 0, time.time()))
                             # 实时推送（WebSocket）
-                            ws_push(track_row[0], {
+                            ws_push(owner_id, {
                                 "kind": "notification",
                                 "notification": {"id": notif_id, "type": "like",
                                                  "title": "收到新点赞",
-                                                 "content": f"{uname}赞了你的歌曲《{track_row[1]}》",
+                                                 "content": f"{uname}赞了你的歌曲《{owner_title}》",
                                                  "fromUserId": uid, "fromUser": uname,
-                                                 "trackId": tid, "trackTitle": track_row[1],
+                                                 "trackId": tid, "trackTitle": owner_title,
                                                  "isRead": 0, "created": time.time()},
-                                "unread": _notif_unread(c, track_row[0])})
+                                "unread": _notif_unread(c, owner_id)})
                     c.commit()
                     row = c.execute("SELECT like_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -3931,33 +4003,36 @@ async function delNotify(id){
                         self._err(401, "未登录或登录已过期")
                         return
                     c.execute("UPDATE tracks SET share_count=share_count+1 WHERE id=?", (tid,))
+                    c.execute("UPDATE collected_tracks SET share_count=share_count+1 WHERE id=?", (tid,))
                     c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "share", 1.0,
                                "", _track_info(c, tid), time.time()))
-                    # 分享通知：给歌曲上传者
-                    track_row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
-                    if track_row and track_row[0] and track_row[0] != uid:
+                    # 分享通知：给歌曲上传者（用户上传表 + 采集表都覆盖）
+                    owner_id, owner_title = _track_owner(c, tid)
+                    if owner_id and owner_id != uid:
                         notif_id = uuid.uuid4().hex
                         from_user = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
                         uname = from_user[0] if from_user else "有人"
                         c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
                                      VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                                  (notif_id, track_row[0], "share", "收到新分享",
-                                   f"{uname}分享了你的歌曲《{track_row[1]}》",
-                                   uid, uname, tid, track_row[1], 0, time.time()))
+                                  (notif_id, owner_id, "share", "收到新分享",
+                                   f"{uname}分享了你的歌曲《{owner_title}》",
+                                   uid, uname, tid, owner_title, 0, time.time()))
                         # 实时推送（WebSocket）
-                        ws_push(track_row[0], {
+                        ws_push(owner_id, {
                             "kind": "notification",
                             "notification": {"id": notif_id, "type": "share",
                                              "title": "收到新分享",
-                                             "content": f"{uname}分享了你的歌曲《{track_row[1]}》",
+                                             "content": f"{uname}分享了你的歌曲《{owner_title}》",
                                              "fromUserId": uid, "fromUser": uname,
-                                             "trackId": tid, "trackTitle": track_row[1],
+                                             "trackId": tid, "trackTitle": owner_title,
                                              "isRead": 0, "created": time.time()},
-                            "unread": _notif_unread(c, track_row[0])})
+                            "unread": _notif_unread(c, owner_id)})
                     c.commit()
                     row = c.execute("SELECT share_count FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        row = c.execute("SELECT share_count FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
                     self._json(200, {"shareCount": row[0] if row else 0})
                 except Exception as e:
@@ -4001,26 +4076,26 @@ async function delNotify(id){
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "comment", 1.0,
                                "", _track_info(c, tid), time.time()))
-                    # 评论通知：给歌曲上传者
-                    track_row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
-                    if track_row and track_row[0] and track_row[0] != uid:
+                    # 评论通知：给歌曲上传者（用户上传表 + 采集表都覆盖）
+                    owner_id, owner_title = _track_owner(c, tid)
+                    if owner_id and owner_id != uid:
                         notif_id = uuid.uuid4().hex
                         c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created, comment_id)
                                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                                  (notif_id, track_row[0], "comment", "收到新评论",
-                                   f"{uname}评论了你的歌曲《{track_row[1]}》：{content[:50]}",
-                                   uid, uname, tid, track_row[1], 0, time.time(), cid))
+                                  (notif_id, owner_id, "comment", "收到新评论",
+                                   f"{uname}评论了你的歌曲《{owner_title}》：{content[:50]}",
+                                   uid, uname, tid, owner_title, 0, time.time(), cid))
                         # 实时推送（WebSocket）
-                        ws_push(track_row[0], {
+                        ws_push(owner_id, {
                             "kind": "notification",
                             "notification": {"id": notif_id, "type": "comment",
                                              "title": "收到新评论",
-                                             "content": f"{uname}评论了你的歌曲《{track_row[1]}》：{content[:50]}",
+                                             "content": f"{uname}评论了你的歌曲《{owner_title}》：{content[:50]}",
                                              "fromUserId": uid, "fromUser": uname,
                                              "commentId": cid,
-                                             "trackId": tid, "trackTitle": track_row[1],
+                                             "trackId": tid, "trackTitle": owner_title,
                                              "isRead": 0, "created": time.time()},
-                            "unread": _notif_unread(c, track_row[0])})
+                            "unread": _notif_unread(c, owner_id)})
                     c.commit()
                     c.close()
                     self._json(200, {"id": cid})

@@ -285,8 +285,8 @@ struct NotificationsView: View {
     private func handleTap(_ n: API.Notification) async {
         guard let trackId = n.trackId, !trackId.isEmpty else { return }
         do {
-            let allTracks = try await API.tracks()
-            guard let t = allTracks.first(where: { $0.id == trackId }) else { return }
+            // 单曲精确查询（tracks/collected 都覆盖；tracks() 只随机返回 10 首，无法保证命中）
+            let t = try await API.track(id: trackId)
             player.play(t, in: [t])
             dismiss()
             if n.type == "comment" {
