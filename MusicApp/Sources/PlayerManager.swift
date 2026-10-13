@@ -457,6 +457,32 @@ final class PlayerManager: NSObject, ObservableObject {
         play(track, in: tracks)
     }
 
+    /// 通知点击播放：延续用户当前听歌模式与音乐流。
+    /// 通知歌曲成为当前播放；播完后自动接回原有队列（不替换整个流、不丢上下文），
+    /// 避免「只有一首歌」播完即停。
+    func playNotificationTrack(_ track: Track) {
+        guard !queue.isEmpty else {
+            // 无当前流（冷启动直接点通知）：退化为单曲播放
+            play(track, in: [track])
+            return
+        }
+        let idx = (queue.indices.contains(currentIndex) ? currentIndex : 0)
+        if queue[idx].id == track.id {
+            // 已是当前位置的歌曲：直接续播
+            currentIndex = idx
+        } else if let found = queue.firstIndex(where: { $0.id == track.id }) {
+            // 本就在当前流中：定位播放（不改变队列）
+            currentIndex = found
+        } else {
+            // 不在当前流：替换当前位置（播完自然续接原流下一位，模式/队列保持）
+            var q = queue
+            q[idx] = track
+            queue = q
+            currentIndex = idx
+        }
+        playCurrent()
+    }
+
     func toggle() {
         guard current != nil else { return }
         if isPlaying {

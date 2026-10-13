@@ -204,14 +204,21 @@ struct NotificationsView: View {
 
     @ViewBuilder
     private func albumCover(for n: API.Notification) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.card.opacity(0.7))
-                .frame(width: 40, height: 40)
-            Image(systemName: "music.note")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundColor(Theme.textTertiary)
-        }
+        // 真实歌曲封面（/api/cover/{trackId}：上传歌返回本地封面，采集歌由后端 302 到第三方）
+        CachedCoverImage(
+            url: API.coverURL(n.trackId ?? ""),
+            title: n.trackTitle ?? "",
+            placeholder: ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.card.opacity(0.7))
+                    .frame(width: 40, height: 40)
+                Image(systemName: "music.note")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundColor(Theme.textTertiary)
+            }
+        )
+        .frame(width: 40, height: 40)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func notificationText(for n: API.Notification) -> String {
@@ -287,7 +294,8 @@ struct NotificationsView: View {
         do {
             // 单曲精确查询（tracks/collected 都覆盖；tracks() 只随机返回 10 首，无法保证命中）
             let t = try await API.track(id: trackId)
-            player.play(t, in: [t])
+            // 延续用户当前听歌模式与音乐流（播完接回原队列），不是单曲孤立播放
+            player.playNotificationTrack(t)
             dismiss()
             if n.type == "comment" {
                 router.jumpToHome(play: t, openComment: true, commentId: n.commentId)
