@@ -122,7 +122,32 @@ async function gmSearch(bridgeSource, kw, limit, page) {
   const url = `${GM_BASE}/search?q=${encodeURIComponent(kw)}&type=song&sources=${gmSrc}&page=${page || 1}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
   const html = await res.text();
-  // 搜索页是服务端渲染 HTML，按 song-card 切块提取 data-* 属性
+  return gmParseSongCards(html, bridgeSource, limit);
+}
+
+async function gmResolve(bridgeSource, id) {
+  const gmSrc = GM_MAP[bridgeSource];
+  try {
+    const r = await fetch(`${GM_BASE}/inspect?id=${encodeURIComponent(id)}&source=${gmSrc}`,
+      { signal: AbortSignal.timeout(25000) });
+    const d = await r.json();
+    return (d && d.valid && d.url) ? d.url : '';
+  } catch (_e) { return ''; }
+}
+
+async function gmLyric(bridgeSource, id) {
+  const gmSrc = GM_MAP[bridgeSource];
+  try {
+    const r = await fetch(`${GM_BASE}/lyric?id=${encodeURIComponent(id)}&source=${gmSrc}`,
+      { signal: AbortSignal.timeout(20000) });
+    const t = await r.text();
+    // 兜底：错误页是 HTML
+    return (t && t.charAt(0) !== '<') ? t.trim() : '';
+  } catch (_e) { return ''; }
+}
+
+// 解析 music-dl SSR 页面里的 song-card 列表（搜索页/榜单详情页通用）
+function gmParseSongCards(html, bridgeSource, limit) {
   const blocks = html.split(/class="[^"]*song-card[^"]*"/).slice(1);
   const list = [];
   for (const b of blocks) {
@@ -147,25 +172,35 @@ async function gmSearch(bridgeSource, kw, limit, page) {
   return list;
 }
 
-async function gmResolve(bridgeSource, id) {
+// 官方热歌榜：拉 music-dl 榜单列表，优先「热歌榜/飙升榜」，返回榜单歌曲
+async function gmTop(bridgeSource, limit) {
   const gmSrc = GM_MAP[bridgeSource];
-  try {
-    const r = await fetch(`${GM_BASE}/inspect?id=${encodeURIComponent(id)}&source=${gmSrc}`,
-      { signal: AbortSignal.timeout(25000) });
-    const d = await r.json();
-    return (d && d.valid && d.url) ? d.url : '';
-  } catch (_e) { return ''; }
-}
-
-async function gmLyric(bridgeSource, id) {
-  const gmSrc = GM_MAP[bridgeSource];
-  try {
-    const r = await fetch(`${GM_BASE}/lyric?id=${encodeURIComponent(id)}&source=${gmSrc}`,
-      { signal: AbortSignal.timeout(20000) });
-    const t = await r.text();
-    // 兜底：错误页是 HTML
-    return (t && t.charAt(0) !== '<') ? t.trim() : '';
-  } catch (_e) { return ''; }
+  if (!gmSrc) throw new Error('unknown gm source: ' + bridgeSource);
+  const tlRes = await fetch(`${GM_BASE}/toplists?sources=${gmSrc}`,
+    { signal: AbortSignal.timeout(30000) });
+  const tlHtml = await tlRes.text();
+  // 榜单卡片链接：/gm/toplist_songs?...&source=X&toplist_id=Y&toplist_name=Z
+  const charts = [];
+  const linkRe = /toplist_songs\?([^"'>]+)/g;
+  let m;
+  while ((m = linkRe.exec(tlHtml)) !== null) {
+    const qp = new URLSearchParams(m[1].replace(/&amp;/g, '&'));
+    const tid = qp.get('toplist_id');
+    const tname = qp.get('toplist_name') || '';
+    const tsrc = qp.get('source') || gmSrc;
+    if (tid && tsrc === gmSrc) charts.push({ tid, tname });
+  }
+  if (!charts.length) throw new Error('榜单列表为空: ' + gmSrc);
+  // 优先官方热歌榜/飙升榜，其次第一个
+  charts.sort((a, b) => {
+    const score = (n) => /热歌|飙升|热门/.test(n) ? 0 : 1;
+    return score(a.tname) - score(b.tname);
+  });
+  const picked = charts[0];
+  const sRes = await fetch(`${GM_BASE}/toplist_songs?source=${gmSrc}&toplist_id=${encodeURIComponent(picked.tid)}`,
+    { signal: AbortSignal.timeout(30000) });
+  const sHtml = await sRes.text();
+  return { chart: picked.tname, list: gmParseSongCards(sHtml, bridgeSource, limit || 50) };
 }
 
 // ─── LRCLIB 社区歌词库兜底（任何源取不到歌词时，按歌名+歌手匹配）───
@@ -497,9 +532,15 @@ const server = http.createServer((req, res) => {
 
   if (p === '/hot') {
     const source = q.get('source') || 'wy';
+    const limit = Math.min(parseInt(q.get('limit') || '10', 10), 50);
+    // 聚合源走 music-dl 官方热歌榜（免关键词）
+    if (GM_MAP[source]) {
+      return enqueue(() => gmTop(source, limit)
+        .then(r => json(res, 200, { ok: true, chart: r.chart, list: r.list }))
+        .catch(e => json(res, 200, { ok: false, err: String(e && e.message || e) })));
+    }
     if (source === 'qs') return bad(res, 'qs hot not supported');
     const page = parseInt(q.get('page') || '1', 10);
-    const limit = Math.min(parseInt(q.get('limit') || '10', 10), 30);
     return enqueue(() => api.getHot(source, { page, limit })
       .then(r => json(res, 200, { ok: true, list: (r.list || []).map(s => ({
         songmid: s.songmid, name: s.name, singer: s.singer, albumName: s.albumName,
