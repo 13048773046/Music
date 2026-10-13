@@ -125,6 +125,12 @@ final class AuthManager: ObservableObject {
         saveSession(updated)
     }
 
+    /// WebSocket 推送资料更新（多端同步）：合并当前 token 后刷新登录态
+    func applyRemoteProfile(_ user: User) {
+        guard currentUser != nil else { return }
+        saveSession(user)
+    }
+
     /// 修改密码（校验旧密码后更新）
     func changePassword(old: String, new: String) async throws {
         try await API.changePassword(old: old, new: new)

@@ -62,6 +62,27 @@ struct WSPayload {
     }
 }
 
+/// 实时数据事件（服务器数据变化 → 前端对应页面刷新）
+/// event: stats（听歌统计）/ profile（资料更新）/ my_tracks（我的作品变化）
+///        track_list（全局歌曲列表变化）/ recommend（个性化推荐更新）
+struct WSDataEvent {
+    let event: String
+    let totalSeconds: Int?
+    let trackCount: Int?
+    let user: [String: Any]?
+    let action: String?
+    let reason: String?
+
+    init(dict: [String: Any]) {
+        event = dict["event"] as? String ?? ""
+        totalSeconds = dict["totalSeconds"] as? Int
+        trackCount = dict["trackCount"] as? Int
+        user = dict["user"] as? [String: Any]
+        action = dict["action"] as? String
+        reason = dict["reason"] as? String
+    }
+}
+
 /// App 全局通知总线：WebSocket 长连接实时接收新通知，驱动未读红点与通知列表刷新
 final class NotificationBus: ObservableObject {
     static let shared = NotificationBus()
@@ -70,6 +91,8 @@ final class NotificationBus: ObservableObject {
     @Published var unreadCount = 0
     /// 最近一次实时推送的通知（通知页监听此值刷新列表）
     @Published private(set) var lastEvent: WSPayload?
+    /// 最近一次实时数据事件（各页面监听此值刷新对应数据）
+    @Published private(set) var lastDataEvent: WSDataEvent?
 
     private var task: URLSessionWebSocketTask?
     private var heartbeat: Timer?
@@ -164,13 +187,19 @@ final class NotificationBus: ObservableObject {
 
     private func handle(_ s: String) {
         guard let d = s.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              (obj["kind"] as? String) == "notification" else { return }
-        if let unread = obj["unread"] as? Int {
-            unreadCount = unread
-        }
-        if let n = obj["notification"] as? [String: Any] {
-            lastEvent = WSPayload(dict: n)
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+        switch obj["kind"] as? String {
+        case "notification":
+            if let unread = obj["unread"] as? Int {
+                unreadCount = unread
+            }
+            if let n = obj["notification"] as? [String: Any] {
+                lastEvent = WSPayload(dict: n)
+            }
+        case "event":
+            lastDataEvent = WSDataEvent(dict: obj)
+        default:
+            break
         }
     }
 

@@ -94,6 +94,21 @@ struct MineView: View {
             .onReceive(NotificationBus.shared.$unreadCount) { n in
                 unreadNotifCount = n
             }
+            // 实时数据事件：听歌时长统计 / 我的作品列表变化
+            .onReceive(NotificationBus.shared.$lastDataEvent) { ev in
+                guard let ev else { return }
+                switch ev.event {
+                case "stats":
+                    if let t = ev.totalSeconds {
+                        listenSeconds = t
+                    }
+                    Task { await loadStats() }
+                case "my_tracks":
+                    Task { await refreshWorks() }
+                default:
+                    break
+                }
+            }
         }
         .fileImporter(
             isPresented: $showImporter,

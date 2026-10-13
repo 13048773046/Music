@@ -311,6 +311,22 @@ struct MainTabView: View {
         }
         // 全局手势：整个屏幕左右拖动实时跟手；松手由官方弹簧时序按速度继承落位
         .gesture(dragGesture)
+        // 实时数据事件：全局歌曲列表变化 → 刷新 Library（首页/发现页自动更新）；资料更新 → 多端同步
+        .onReceive(NotificationBus.shared.$lastDataEvent) { ev in
+            guard let ev else { return }
+            switch ev.event {
+            case "track_list":
+                Task { await Library.shared.load(force: true) }
+            case "profile":
+                if let u = ev.user,
+                   let data = try? JSONSerialization.data(withJSONObject: u),
+                   let user = try? JSONDecoder().decode(User.self, from: data) {
+                    AuthManager.shared.applyRemoteProfile(user)
+                }
+            default:
+                break
+            }
+        }
         // 评论定位弹窗：通知点击评论类 → 回首页并打开评论弹窗定位到那条评论
         .sheet(isPresented: $router.showCommentSheet) {
             if let t = router.pendingCommentTrack {

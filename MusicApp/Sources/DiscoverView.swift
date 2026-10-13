@@ -51,6 +51,21 @@ struct DiscoverView: View {
                 }
             }
         }
+        // 实时数据事件：个性化推荐更新 / 歌曲列表变化
+        .onReceive(NotificationBus.shared.$lastDataEvent) { ev in
+            guard let ev else { return }
+            switch ev.event {
+            case "recommend":
+                Task { await loadRecommended() }
+            case "track_list":
+                Task {
+                    await library.load(force: true)
+                    applySections()
+                }
+            default:
+                break
+            }
+        }
         .tint(Theme.accent)
     }
 

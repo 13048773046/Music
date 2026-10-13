@@ -335,6 +335,7 @@ COLLECT_KEY = os.environ.get("COLLECT_KEY", "liuying-collect-7f3a9c2e")
 WS_LOCK = threading.Lock()
 WS_CLIENTS = {}          # user_id -> set(sock)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WS_STATS_THROTTLE = {}   # uid -> 上次推送 stats/recommend 时间（行为上报节流，防止高频推送）
 
 
 def _notif_unread(c, uid):
@@ -3177,6 +3178,8 @@ async function delNotify(id){
                     else:
                         c.execute(f"UPDATE {tbl} SET offline=0, offline_reason='' WHERE id=?", (rid,))
                     c.commit()
+                    # 实时数据事件：歌曲下架/恢复 → 全局列表更新（广播在线用户）
+                    ws_broadcast({"kind": "event", "event": "track_list", "reason": "offline"})
                 finally:
                     c.close()
                 self._json(200, {"ok": True}); return
@@ -3247,6 +3250,8 @@ async function delNotify(id){
                             if fp and os.path.exists(fp):
                                 try: os.remove(fp)
                                 except Exception: pass
+                        # 实时数据事件：删除歌曲 → 全局列表更新（广播在线用户）
+                        ws_broadcast({"kind": "event", "event": "track_list", "reason": "delete"})
                     elif typ == "collected":
                         row = c.execute("SELECT play_url FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                         c.execute("DELETE FROM collected_tracks WHERE id=?", (tid,))
@@ -3256,6 +3261,8 @@ async function delNotify(id){
                             if fp and os.path.exists(fp):
                                 try: os.remove(fp)
                                 except Exception: pass
+                        # 实时数据事件：删除采集歌曲 → 全局列表更新
+                        ws_broadcast({"kind": "event", "event": "track_list", "reason": "delete"})
                     elif typ == "user":
                         c.execute("DELETE FROM users WHERE id=?", (tid,))
                         c.commit()
@@ -3568,6 +3575,9 @@ async function delNotify(id){
                     else:
                         skip += 1
                 c.commit()
+                # 实时数据事件：采集入库 → 全局歌曲列表更新（广播在线用户）
+                if ins:
+                    ws_broadcast({"kind": "event", "event": "track_list", "reason": "collect"})
                 c.close()
                 self._json(200, {"ok": True, "inserted": ins, "skipped": skip, "owner": owner})
                 return
@@ -3814,8 +3824,11 @@ async function delNotify(id){
                     row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
                                       gender,age,background_image,signature,ip_address
                                       FROM users WHERE id=?""", (uid,)).fetchone()
+                    _pub = public_user(row)
                     c.close()
-                    self._json(200, public_user(row))
+                    # 实时数据事件：资料（头像/签名/昵称/背景）更新后推送，多端同步
+                    ws_push(uid, {"kind": "event", "event": "profile", "user": _pub})
+                    self._json(200, _pub)
                 except Exception as e:
                     self._internal_error(e)
                 return
@@ -4073,6 +4086,20 @@ async function delNotify(id){
                               (uuid.uuid4().hex, uid, tid, ev, val, meta_s, tinfo, now))
                     ins += 1
                 c.commit()
+                # 实时数据事件：行为上报后推送听歌时长统计 & 个性化推荐刷新（节流 15s，避免高频推送）
+                if ins and any(str(it.get("event") or "") == "listen" for it in evs):
+                    _now = time.time()
+                    _last = WS_STATS_THROTTLE.get(uid, 0)
+                    if _now - _last >= 15:
+                        WS_STATS_THROTTLE[uid] = _now
+                        _r1 = c.execute("SELECT COALESCE(SUM(value),0) FROM behavior_events"
+                                        " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
+                        _r2 = c.execute("SELECT COUNT(DISTINCT track_id) FROM behavior_events"
+                                        " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
+                        ws_push(uid, {"kind": "event", "event": "stats",
+                                      "totalSeconds": int(_r1[0]) if _r1 else 0,
+                                      "trackCount": int(_r2[0]) if _r2 else 0})
+                        ws_push(uid, {"kind": "event", "event": "recommend"})
                 c.close()
                 self._json(200, {"ok": True, "count": ins})
                 return
@@ -4158,6 +4185,9 @@ async function delNotify(id){
                            (fields.get("album") or "").strip()[:MAX_NAME],
                            cover_fname, lrc_fname, stored, len(filedata), dur, time.time(), uid))
                 c.commit()
+                # 实时数据事件：我的作品列表更新 + 全局歌曲列表更新（广播在线用户）
+                ws_push(uid, {"kind": "event", "event": "my_tracks", "action": "upload"})
+                ws_broadcast({"kind": "event", "event": "track_list", "reason": "upload"})
                 c.close()
                 self._json(200, {"id": tid, "title": title, "cover": cover_fname,
                                  "dur": dur, "durText": _fmt_dur(dur)})
