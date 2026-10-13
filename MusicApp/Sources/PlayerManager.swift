@@ -999,17 +999,24 @@ final class PlayerManager: NSObject, ObservableObject {
 
         // 顺序切下一首时，AVQueuePlayer 队列已预取目标歌（下一项）→ 保留队列不清空，
         // 在播放分支里用 advanceToNextItem 秒开；其余场景（跳播/插播/模式切换）才清空重建。
+        // 三态判断：
+        //  alreadyOnTarget —— AVQueuePlayer 已自动切到目标歌（播完自动续播）：不重建不 advance，直接续播；
+        //  canAdvance      —— 队列下一项正是目标歌（预取就绪）：advanceToNextItem 秒开；
+        //  两者皆否        —— 跳播/插播/模式切换：清空重建。
+        let currentItemId = player.currentItem.flatMap { Self.trackId(of: $0) }
         let nextTrackId = player.items().count > 1 ? Self.trackId(of: player.items()[1]) : nil
+        let alreadyOnTarget = (currentItemId == current.id)
         let canAdvance = (nextTrackId == current.id)
-        if !canAdvance {
+        if !alreadyOnTarget && !canAdvance {
             // 关键：切歌瞬间同步终止上一首的播放与加载，而不是等新歌 URL 就绪后再替换——
             // AVPlayer：清空当前 item，立刻断开旧音频流（正在进行的缓冲/播放立即停止），
             // 这样即使新歌的签名 URL 还在网络请求中，上一首也已经不再发声、不再占用带宽
             player.pause()
             player.volume = 1.0   // 切歌时音量增益复位，防止残留状态影响新歌
             player.replaceCurrentItem(with: nil)
-        } else if !autoResume {
-            // B17：暂停状态下顺序切歌（复用预取队列但保持暂停）——
+        }
+        if (alreadyOnTarget || canAdvance) && !autoResume {
+            // B17：暂停状态下切歌（复用预取队列但保持暂停）——
             // 先停掉上一首的出声，避免"有声音却显示暂停"的不一致状态
             player.pause()
         }
@@ -1079,11 +1086,12 @@ final class PlayerManager: NSObject, ObservableObject {
                                            autoPlay: autoResume)
                 } else {
                     // 顺序切歌且队列已预取目标歌：直接 advanceToNextItem 秒开（AVQueuePlayer 已预缓冲音频）；
-                    // 否则重建队列：当前歌 + 后续若干首（用预取签名 URL），系统随后自动预取下一首
+                    // 已由 AVQueuePlayer 自动切到目标歌（播完自动续播）：不重建不 advance，直接续播；
+                    // 其余（跳播/插播/模式切换）：重建队列——当前歌 + 后续若干首（用预取签名 URL）
                     if canAdvance {
                         self.player.advanceToNextItem()
                         self.topUpQueue()   // 补充队列，保持后续始终有可预取
-                    } else {
+                    } else if !alreadyOnTarget {
                         self.prepareQueuePlayer(currentIndex: self.currentIndex, currentURL: url)
                     }
                     if let rs = resumeSeconds {
