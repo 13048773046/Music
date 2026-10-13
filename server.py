@@ -1969,7 +1969,7 @@ async function loadTracks(page){
   if(!d.list.length)h+='<tr><td colspan="7" class="empty">无歌曲</td></tr>';
   d.list.forEach(t=>{
     const st=t.offline?'<span class="tag off">已下架</span>':'<span class="tag on">在售</span>';
-    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\\'hidden\\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td>'+st+'</td><td>'+esc(t.uname||'-')+'</td><td>'+t.play_count+'</td><td class="act"><button class="gray" onclick="editTrack('+t.id+')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineTrack('+t.id+')">上架</button>':'<button onclick="offlineTrack('+t.id+')">下架</button>')+' <button onclick="delTrack('+t.id+')">删除</button></td></tr>';
+    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\\'hidden\\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td>'+st+'</td><td>'+esc(t.uname||'-')+'</td><td>'+t.play_count+'</td><td class="act"><button class="gray" onclick="editTrack(\\''+t.id+'\\')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineTrack('+t.id+')">上架</button>':'<button onclick="offlineTrack('+t.id+')">下架</button>')+' <button onclick="delTrack('+t.id+')">删除</button></td></tr>';
   });
   h+='</table></div>';
   h+=pager(curPage.tracks,d.total,'loadTracks');
@@ -1983,7 +1983,7 @@ async function loadCollected(page){
   if(!d.list.length)h+='<tr><td colspan="6" class="empty">无歌曲</td></tr>';
   d.list.forEach(t=>{
     const st=t.offline?'<span class="tag off">已下架</span>':'<span class="tag on">在售</span>';
-    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\\'hidden\\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td><span class="tag '+t.source+'">'+t.source+'</span></td><td>'+st+'</td><td class="act"><button class="gray" onclick="editCol('+t.id+')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineCol('+t.id+')">上架</button>':'<button onclick="offlineCol('+t.id+')">下架</button>')+' <button onclick="delCol('+t.id+')">删除</button></td></tr>';
+    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\\'hidden\\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td><span class="tag '+t.source+'">'+t.source+'</span></td><td>'+st+'</td><td class="act"><button class="gray" onclick="editCol(\\''+t.id+'\\')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineCol('+t.id+')">上架</button>':'<button onclick="offlineCol('+t.id+')">下架</button>')+' <button onclick="delCol('+t.id+')">删除</button></td></tr>';
   });
   h+='</table></div>';
   h+=pager(curPage.collected,d.total,'loadCollected');
@@ -4268,6 +4268,38 @@ async function delNotify(id){
                                  "dur": dur, "durText": _fmt_dur(dur)})
             except Exception as e:
                 self._internal_error(e)
+        except (socket.timeout, TimeoutError):
+            self._err(408, "request timeout")
+        except Exception as e:
+            self._internal_error(e)
+
+    # ---- DELETE（管理端删除类接口） ----
+
+    def do_DELETE(self):
+        try:
+            u = urllib.parse.urlparse(self.path)
+            # 删除官方通知：DELETE /api/admin/official-message/<id>
+            # 同时清理该通知在用户侧 notifications 表（type=official）里的关联记录，
+            # 否则删除按钮点击后用户端仍残留已删通知。
+            if u.path.startswith("/api/admin/official-message/"):
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                mid = u.path.rsplit("/", 1)[-1]
+                c = db()
+                row = c.execute("SELECT content FROM official_messages WHERE id=?", (mid,)).fetchone()
+                if not row:
+                    c.close()
+                    self._err(404, "not found"); return
+                content = row[0]
+                c.execute("DELETE FROM official_messages WHERE id=?", (mid,))
+                # 官方通知发布时按内容为每个用户生成一条 notifications 记录；
+                # 无外键关联，按 type+content 匹配删除（官方通知内容一般唯一）。
+                c.execute("DELETE FROM notifications WHERE type='official' AND content=?", (content,))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True}); return
+
+            self._err(404, "unknown")
         except (socket.timeout, TimeoutError):
             self._err(408, "request timeout")
         except Exception as e:

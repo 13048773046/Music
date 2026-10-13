@@ -511,10 +511,45 @@ final class PlayerManager: NSObject, ObservableObject {
         case .shuffle:
             let target = randomIndex(excluding: currentIndex)
             currentIndex = target
-        default:
-            currentIndex = (currentIndex + 1) % queue.count
+        default:  // listLoop
+            if currentIndex < queue.count - 1 {
+                // 未到队尾：顺序切下一首
+                currentIndex += 1
+            } else if listenMode == .normal {
+                // 默认模式已到队尾：不立即回绕重播第一组，而是异步加载下一组随机新歌续播。
+                // 之前列表循环在追加前就 `% queue.count` 回绕到第 0 首，
+                // 导致「听完一组→加载第二组」时听到的仍是第一组。
+                loadNextBatchOrLoop()
+                return
+            } else {
+                // 非默认模式（喜欢/新鲜）到队尾：按列表循环回绕第一首
+                currentIndex = 0
+            }
         }
         playCurrent()
+    }
+
+    /// 默认模式队尾续播：异步拉取下一组随机歌，追加成功则从「新歌第一首」接续播放；
+    /// 无新歌（曲库不足/拉取失败）才回绕第一首（列表循环兜底，避免卡在队尾）。
+    /// 追加期间若用户已手动切走（不再停在队尾），不覆盖用户当前位置。
+    private func loadNextBatchOrLoop() {
+        let lastIndex = currentIndex   // 队尾索引
+        let baseCount = queue.count    // 追加前长度
+        Task { @MainActor in
+            await Library.shared.loadMore()
+            let grew = queue.count > baseCount
+            let stillAtEnd = currentIndex == lastIndex
+            if grew, stillAtEnd, listenMode == .normal {
+                // 新歌追加成功且仍停在队尾：从新歌第一首续播
+                currentIndex = baseCount
+                playCurrent()
+            } else if !grew, stillAtEnd {
+                // 无新歌可用：回绕第一首，维持列表循环
+                currentIndex = 0
+                playCurrent()
+            }
+            // 追加成功但用户已切走：保持用户当前位置，不干预
+        }
     }
 
     func previous() {
