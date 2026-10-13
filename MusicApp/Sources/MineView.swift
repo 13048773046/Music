@@ -246,6 +246,11 @@ struct MineView: View {
                         Text(u?.name ?? "未登录")
                             .font(.system(size: 20, weight: .bold))
                             .foregroundColor(.white)
+                        if let acc = u?.account, !acc.isEmpty {
+                            Text("账号：\(acc)")
+                                .font(.system(size: 13))
+                                .foregroundColor(.white.opacity(0.75))
+                        }
                         HStack(spacing: 8) {
                             if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
                                 tag(gender)

@@ -62,15 +62,6 @@ struct MusicApp: App {
                     .presentationDetents([.medium])
             }
             .preferredColorScheme(.dark)
-            // 注册成功：弹窗提示后端自动生成的 6 位数字账号，请用户牢记
-            .alert("注册成功", isPresented: Binding(
-                get: { auth.justRegisteredAccount != nil },
-                set: { if !$0 { auth.justRegisteredAccount = nil } }
-            )) {
-                Button("好的，记住了") { auth.justRegisteredAccount = nil }
-            } message: {
-                Text(auth.justRegisteredAccount.map { "你的账号是：\($0)\n请牢记，下次登录需要使用该账号。" } ?? "")
-            }
         }
     }
 
