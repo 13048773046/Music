@@ -1463,15 +1463,21 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="tgtrow"><input id="tgt" type="number" min="1" inputmode="numeric" placeholder="目标数量"><span class="tgtlbl">目标</span></div>
 </div>
 
-<div class="sec"><b>采集平台</b>（多选）</div>
+<div class="sec"><b>采集平台</b>（多选；默认勾选的可直接采集，G 后缀=聚合源）</div>
 <div class="chips" id="platChips">
+  <div class="chip on" data-v="gd">网易云G</div>
+  <div class="chip on" data-v="soda">汽水Soda</div>
+  <div class="chip" data-v="gm_migu">咪咕G*</div>
+  <div class="chip" data-v="gm_kugou">酷狗G*</div>
+  <div class="chip" data-v="gm_kuwo">酷我G*</div>
+  <div class="chip" data-v="gm_qq">QQG*</div>
+  <div class="chip" data-v="qs">汽水登录版</div>
   <div class="chip" data-v="kw">酷我</div>
   <div class="chip" data-v="wy">网易云</div>
   <div class="chip" data-v="kg">酷狗</div>
   <div class="chip" data-v="tx">腾讯</div>
-  <div class="chip on" data-v="gd">网易云G</div>
-  <div class="chip" data-v="qs">汽水</div>
 </div>
+<div style="color:#666;font-size:11px;margin:4px 0 0 2px">* 标星 G 源搜索可用、取流需在 music-dl 设置页扫码登录对应平台 Cookie 后解锁</div>
 
 <div class="sec"><b>采集方式</b></div>
 <div class="chips" id="modeChips">
@@ -1494,7 +1500,7 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="st" id="runState">尚未开始</div>
 </div>
 
-<div class="sec"><b>汽水音乐</b> <span id="qsState" class="tag no">未登录</span> <button id="qsBtn" style="margin-left:8px;padding:3px 10px;border:0;border-radius:6px;background:#1e3a2a;color:#5cd68a;cursor:pointer">扫码登录</button><span style="color:#555;font-size:11px;margin-left:8px">登录后可在下方搜索「汽水」平台并采集，支持抖音热歌</span></div>
+<div class="sec"><b>汽水音乐</b> <span id="qsState" class="tag no">未登录</span> <button id="qsBtn" style="margin-left:8px;padding:3px 10px;border:0;border-radius:6px;background:#1e3a2a;color:#5cd68a;cursor:pointer">扫码登录</button><span style="color:#555;font-size:11px;margin-left:8px">「汽水Soda」免登录即可搜索采集；登录版用于个人歌单/高音质</span></div>
 
 <div class="sec"><b>搜索歌名，点采集入库</b></div>
 <div class="searchbox">
@@ -3595,8 +3601,10 @@ async function delNotify(id){
                 except Exception:
                     pass
                 # 解析新参数：平台/模式/关键词
-                _plats = [x for x in str(_params.get("platforms", ["kw,wy"])[0]).split(",") if x in ("kw","wy","kg","tx")]
-                if not _plats: _plats = ["kw","wy"]
+                _VALID_PLATS = ("kw","wy","kg","tx","gd","qs","soda","gm_migu","gm_fivesing",
+                                "gm_joox","gm_kugou","gm_kuwo","gm_qq")
+                _plats = [x for x in str(_params.get("platforms", ["gd,soda"])[0]).split(",") if x in _VALID_PLATS]
+                if not _plats: _plats = ["gd","soda"]
                 _mode = str(_params.get("mode", ["search"])[0]).strip()
                 if _mode not in ("search","hot"): _mode = "search"
                 _kws = [x for x in str(_params.get("keywords", [""])[0]).split(",") if x.strip()]

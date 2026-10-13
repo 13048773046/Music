@@ -105,12 +105,14 @@ async function gdLyric(id) {
 }
 
 // ─── go-music-dl 聚合音源（本机 127.0.0.1:18080，systemd: music-dl.service）───
-//   soda     = 汽水音乐（免登录可搜索/解析，音频加密已由其解密）
-//   gm_migu  = 咪咕音乐
+//   soda       = 汽水音乐（免登录可搜索/解析，音频加密已由其解密）
+//   gm_migu    = 咪咕音乐
 //   gm_fivesing = 5sing 原创音乐
-//   gm_joox  = JOOX 海外
+//   gm_joox    = JOOX 海外
+//   gm_kugou/gm_kuwo/gm_qq = 酷狗/酷我/QQ（替代长青源里取流失效的 kg/kw/tx）
 const GM_BASE = process.env.GM_BASE || 'http://127.0.0.1:18080/gm';
-const GM_MAP = { soda: 'soda', gm_migu: 'migu', gm_fivesing: 'fivesing', gm_joox: 'joox' };
+const GM_MAP = { soda: 'soda', gm_migu: 'migu', gm_fivesing: 'fivesing', gm_joox: 'joox',
+                 gm_kugou: 'kugou', gm_kuwo: 'kuwo', gm_qq: 'qq' };
 
 function gmDecode(s) { try { return decodeURIComponent(s); } catch (_e) { return s; } }
 
