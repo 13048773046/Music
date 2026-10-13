@@ -108,6 +108,8 @@ final class Library: ObservableObject {
                 let fresh = list.filter { !existing.contains($0.id) }
                 if !fresh.isEmpty {
                     PlayerManager.shared.queue.append(contentsOf: fresh)
+                    // 长时间播放防护：队列超上限时修剪已播放头部，防无限累积
+                    PlayerManager.shared.trimQueueIfNeeded()
                 }
             }
         } catch {

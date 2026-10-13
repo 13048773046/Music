@@ -237,7 +237,7 @@ final class PlayerManager: NSObject, ObservableObject {
             self?.handlePlaybackFailure()
         }
 
-        // 内存压力：清空图片/主色/歌词缓存，防止长滑播放后内存膨胀被系统杀进程
+        // 内存压力：清空图片/主色/歌词/URL 会话缓存，防止长滑播放后内存膨胀被系统杀进程
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
@@ -247,6 +247,7 @@ final class PlayerManager: NSObject, ObservableObject {
             LyricsCache.shared.clear()
             CoverPalette.clearCache()
             API.clearLyricCache()
+            URLCache.shared.removeAllCachedResponses()
         }
 
         // 收听心跳：每秒累计真实播放秒数，每 30s 自动上报一次（防 App 被杀丢失数据）
@@ -828,6 +829,20 @@ final class PlayerManager: NSObject, ObservableObject {
 
     /// 根据当前播放位置，为「接下来 N 首」预加载：
     /// 1) 预取并缓存签名播放 URL（切歌免再请求，缩短等待）；
+    /// 长时间播放防护：控制播放队列上限，防止无限 loadMore 导致内存与索引成本持续累积。
+    /// 队列超过上限且已播放较多时，移除「当前歌之前的已播放头部」（保留最近 keepBefore 首
+    /// 供上滑回退），同步调整 currentIndex 并 bump 版本号通知页面。低频触发（每累积到上限一次）。
+    func trimQueueIfNeeded() {
+        let limit = 200      // 队列保留最近 200 首
+        let keepBefore = 20  // 当前歌之前保留 20 首（可上滑回退）
+        guard queue.count > limit, currentIndex > keepBefore else { return }
+        let removeCount = currentIndex - keepBefore
+        guard removeCount > 0 else { return }
+        queue.removeFirst(removeCount)
+        currentIndex -= removeCount
+        queueRevision += 1   // 队列内容已变：通知 VerticalPager 刷新（当前页索引已同步）
+    }
+
     /// 2) 用 AVURLAsset 预热连接/资源头部（只拉前一小部分 metadata，不整首下载）。
     /// 播放位置或队列变化时重新计算窗口；同一位置只预加载一次。
     /// 幂等且防重：切歌会取消旧任务，队列再变也不会错取已不在队列的歌。
