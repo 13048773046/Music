@@ -121,8 +121,8 @@ final class AudioEnginePlayer {
         // 混响默认（apply 覆盖）
         reverb.loadFactoryPreset(.smallRoom)
         reverb.wetDryMix = 8
-        // 失真默认纯干直通
-        distortion.loadFactoryPreset(.speechTape)
+        // 失真默认纯干直通（预设值在 apply(mode:) 按音效覆盖）
+        distortion.loadFactoryPreset(.multiDecimated1)
         distortion.wetDryMix = 0
         // 分频混音默认（apply 覆盖）。三路 RMS 叠加 ≈ 1.0，响度与原音基本一致，
         // 避免「切音效瞬间音量猛增/时大时小」
@@ -385,7 +385,7 @@ final class AudioEnginePlayer {
             delayHigh.delayTime = 0.06
             delayHigh.feedback = 0.3
             delayHigh.wetDryMix = 16
-            distortion.loadFactoryPreset(.speechTape)
+            distortion.loadFactoryPreset(.multiDecimated1)   // 采样降级：Lo-Fi 磁带质感
             distortion.wetDryMix = 18
 
         case .live:
