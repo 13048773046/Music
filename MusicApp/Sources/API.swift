@@ -539,4 +539,72 @@ enum API {
             throw URLError(.badServerResponse)
         }
     }
+
+    // MARK: - 消息通知
+
+    /// 官方通知消息（聊天记录样式）
+    struct OfficialMessage: Codable, Identifiable, Hashable {
+        let id: String
+        let content: String
+        let created: Double
+        let sender: String?
+    }
+
+    /// 用户互动通知（点赞/评论/分享）
+    struct Notification: Codable, Identifiable, Hashable {
+        let id: String
+        let type: String        // like / comment / share / official
+        let title: String?
+        let content: String?
+        let fromUser: String?
+        let trackId: String?
+        let trackTitle: String?
+        let isRead: Int         // 0=未读 1=已读
+        let created: Double
+
+        var unread: Bool { isRead == 0 }
+    }
+
+    /// 获取官方通知列表（聊天记录，只读）
+    static func officialMessages() async throws -> [OfficialMessage] {
+        let url = base.appendingPathComponent("official-messages")
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        struct MsgList: Decodable { let list: [OfficialMessage] }
+        return try JSONDecoder().decode(MsgList.self, from: data).list
+    }
+
+    /// 获取我的互动通知列表
+    static func notifications() async throws -> (list: [Notification], unread: Int) {
+        let url = base.appendingPathComponent("notifications")
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        struct NotifResp: Decodable {
+            let list: [Notification]
+            let unread: Int
+        }
+        let r = try JSONDecoder().decode(NotifResp.self, from: data)
+        return (r.list, r.unread)
+    }
+
+    /// 标记所有通知为已读
+    static func markNotificationsRead() async {
+        var req = URLRequest(url: base.appendingPathComponent("notifications/read"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        _ = try? await URLSession.shared.data(for: req)
+    }
 }

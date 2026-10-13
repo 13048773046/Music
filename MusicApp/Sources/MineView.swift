@@ -37,6 +37,8 @@ struct MineView: View {
     @State private var pickedFileURL: URL?
     @State private var showUploadSheet = false
     @State private var showSettings = false
+    @State private var showNotifications = false
+    @State private var unreadNotifCount: Int = 0
 
     private static let pageSize = 20
 
@@ -77,6 +79,11 @@ struct MineView: View {
             // 设置页（独立页面，非弹窗）——navigationDestination 必须在 NavigationStack 内部
             .navigationDestination(isPresented: $showSettings) {
                 SettingsView()
+                    .environmentObject(auth)
+            }
+            .navigationDestination(isPresented: $showNotifications) {
+                NotificationsView()
+                    .environmentObject(player)
                     .environmentObject(auth)
             }
             .navigationBarHidden(true)
@@ -135,7 +142,7 @@ struct MineView: View {
                 .frame(maxWidth: .infinity, alignment: .top)
                 .clipShape(BottomRoundedShape(radius: 24))
 
-                // 右上角：上传 + 设置按钮（背景图右上角）
+                // 右上角：上传 + 消息 + 设置按钮（背景图右上角）
                 HStack(spacing: 10) {
                     Button {
                         showImporter = true
@@ -146,6 +153,33 @@ struct MineView: View {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.white)
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+
+                    // 消息通知入口
+                    Button {
+                        showNotifications = true
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(Color.black.opacity(0.35))
+                            Image(systemName: "bell.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                            // 未读红点
+                            if unreadNotifCount > 0 {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 16, height: 16)
+                                    .overlay(
+                                        Text("\(unreadNotifCount > 99 ? "99+" : "\(unreadNotifCount)")")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(.white)
+                                    )
+                                    .offset(x: 12, y: -12)
+                            }
                         }
                         .frame(width: 40, height: 40)
                     }
@@ -615,7 +649,20 @@ struct MineView: View {
         async let w: Void = loadWorks(reset: true)
         async let l: Void = loadLikes(reset: true)
         async let c: Void = loadComments(reset: true)
-        _ = await (s, w, l, c)
+        async let n: Void = loadUnreadCount()
+        _ = await (s, w, l, c, n)
+    }
+
+    /// 加载未读通知数（铃铛红点）
+    @MainActor
+    private func loadUnreadCount() async {
+        guard auth.currentUser != nil else {
+            unreadNotifCount = 0
+            return
+        }
+        if let r = try? await API.notifications() {
+            unreadNotifCount = r.unread
+        }
     }
 
     @MainActor
