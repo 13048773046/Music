@@ -181,6 +181,20 @@ def db():
     for col, default in [("show_once","0"),("type","'announcement'"),("force_update","0"),("download_url","''")]:
         if col not in ann_cols:
             c.execute("ALTER TABLE announcements ADD COLUMN %s TEXT DEFAULT %s" % (col, default))
+    # 通知表：互动通知（点赞/评论/分享）+ 官方通知记录；comment_id 用于评论通知点击定位
+    c.execute("""CREATE TABLE IF NOT EXISTS notifications(
+        id TEXT PRIMARY KEY, user_id TEXT, type TEXT,
+        title TEXT DEFAULT '', content TEXT DEFAULT '',
+        from_user_id TEXT DEFAULT '', from_user_name TEXT DEFAULT '',
+        track_id TEXT DEFAULT '', track_title TEXT DEFAULT '',
+        is_read INTEGER DEFAULT 0, created REAL)""")
+    ncols = [r[1] for r in c.execute("PRAGMA table_info(notifications)")]
+    if "comment_id" not in ncols:
+        c.execute("ALTER TABLE notifications ADD COLUMN comment_id TEXT DEFAULT ''")
+    # 官方消息表：聊天记录样式展示
+    c.execute("""CREATE TABLE IF NOT EXISTS official_messages(
+        id TEXT PRIMARY KEY, content TEXT DEFAULT '', created REAL,
+        sender_name TEXT DEFAULT '流萤音乐官方')""")
     c.commit()
     return c
 
@@ -315,6 +329,212 @@ RATE_LIMITS = {
 
 # 采集入库接口密钥（音乐源采集器调用 POST /api/collect/add 时携带）
 COLLECT_KEY = os.environ.get("COLLECT_KEY", "liuying-collect-7f3a9c2e")
+
+
+# ---------------- WebSocket 实时通知推送（RFC6455 服务端，纯标准库） ----------------
+WS_LOCK = threading.Lock()
+WS_CLIENTS = {}          # user_id -> set(sock)
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _notif_unread(c, uid):
+    """该用户当前未读通知数（调用时需持有数据库连接 c）。"""
+    row = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0",
+                    (uid,)).fetchone()
+    return row[0] if row else 0
+
+
+def _ws_frame(payload, opcode=1):
+    """构造服务端→客户端 WebSocket 数据帧（不掩码）。"""
+    n = len(payload)
+    header = bytearray([0x80 | opcode])
+    if n < 126:
+        header.append(n)
+    elif n < 65536:
+        header.append(126)
+        header += struct.pack(">H", n)
+    else:
+        header.append(127)
+        header += struct.pack(">Q", n)
+    return bytes(header) + payload
+
+
+def ws_register(uid, sock):
+    with WS_LOCK:
+        WS_CLIENTS.setdefault(uid, set()).add(sock)
+
+
+def ws_unregister(uid, sock):
+    with WS_LOCK:
+        s = WS_CLIENTS.get(uid)
+        if s:
+            s.discard(sock)
+            if not s:
+                WS_CLIENTS.pop(uid, None)
+
+
+def ws_push(uid, payload):
+    """向指定用户的全部在线连接推送 JSON 对象（新通知实时送达）。"""
+    with WS_LOCK:
+        socks = list(WS_CLIENTS.get(uid, ()))
+    if not socks:
+        return
+    frame = _ws_frame(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    dead = []
+    for s in socks:
+        try:
+            s.sendall(frame)
+        except Exception:
+            dead.append(s)
+    if dead:
+        with WS_LOCK:
+            for d in dead:
+                for uid2, st in list(WS_CLIENTS.items()):
+                    if d in st:
+                        st.discard(d)
+                        if not st:
+                            WS_CLIENTS.pop(uid2, None)
+
+
+def ws_broadcast(payload):
+    """向所有在线连接广播（官方通知发布用）。"""
+    with WS_LOCK:
+        socks = set()
+        for st in WS_CLIENTS.values():
+            socks |= set(st)
+    if not socks:
+        return
+    frame = _ws_frame(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    dead = []
+    for s in socks:
+        try:
+            s.sendall(frame)
+        except Exception:
+            dead.append(s)
+    if dead:
+        with WS_LOCK:
+            for d in dead:
+                for uid2, st in list(WS_CLIENTS.items()):
+                    if d in st:
+                        st.discard(d)
+                        if not st:
+                            WS_CLIENTS.pop(uid2, None)
+
+
+def _ws_recv_exact(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
+
+def _ws_serve(handler, uid):
+    """握手完成后进入帧循环：响应 ping/pong/close，连接断开自动清理。"""
+    sock = handler.connection
+    ws_register(uid, sock)
+    try:
+        while True:
+            head = _ws_recv_exact(sock, 2)
+            if head is None:
+                break
+            b0, b1 = head[0], head[1]
+            opcode = b0 & 0x0F
+            masked = b1 & 0x80
+            length = b1 & 0x7F
+            if length == 126:
+                ext = _ws_recv_exact(sock, 2)
+                if ext is None:
+                    break
+                length = struct.unpack(">H", ext)[0]
+            elif length == 127:
+                ext = _ws_recv_exact(sock, 8)
+                if ext is None:
+                    break
+                length = struct.unpack(">Q", ext)[0]
+            if length > 16 * 1024 * 1024:
+                break
+            payload = b""
+            while len(payload) < length:
+                chunk = sock.recv(min(length - len(payload), 65536))
+                if not chunk:
+                    payload = None
+                    break
+                payload += chunk
+            if payload is None:
+                break
+            if masked:
+                mask = _ws_recv_exact(sock, 4)
+                if mask is None:
+                    break
+                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if opcode == 0x8:      # close → 回 close 帧后断开
+                try:
+                    sock.sendall(_ws_frame(b"", opcode=8))
+                except Exception:
+                    pass
+                break
+            elif opcode == 0x9:    # ping → pong（保活）
+                try:
+                    sock.sendall(_ws_frame(payload, opcode=0xA))
+                except Exception:
+                    break
+            elif opcode == 0xA:    # pong
+                continue
+            # text(1)/binary(2)：客户端业务消息当前不处理（预留扩展）
+    except Exception:
+        pass
+    finally:
+        ws_unregister(uid, sock)
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _ws_handshake(handler, u):
+    """GET /api/ws?token=xxx → 101 升级为 WebSocket；未鉴权返回 401。"""
+    key = handler.headers.get("Sec-WebSocket-Key", "")
+    if not key:
+        handler._err(400, "missing websocket key")
+        return
+    qs = urllib.parse.parse_qs(u.query)
+    tok = (qs.get("token", [""])[0] or "").strip()
+    c = db()
+    uid = None
+    if tok:
+        row = c.execute("SELECT user_id FROM tokens WHERE token=? AND expires>?",
+                        (tok, time.time())).fetchone()
+        uid = row[0] if row else None
+    c.close()
+    if not uid:
+        try:
+            handler.send_response(401)
+            handler.send_header("Content-Type", "text/plain; charset=utf-8")
+            handler.send_header("Content-Length", "13")
+            handler.end_headers()
+            handler.wfile.write(b"unauthorized")
+        except Exception:
+            pass
+        return
+    accept = base64.b64encode(
+        hashlib.sha1((key + WS_GUID).encode()).digest()).decode("ascii")
+    try:
+        handler.wfile.write(
+            b"HTTP/1.1 101 Switching Protocols\r\n"
+            b"Upgrade: websocket\r\n"
+            b"Connection: Upgrade\r\n"
+            b"Sec-WebSocket-Accept: " + accept.encode("ascii") + b"\r\n\r\n")
+        handler.wfile.flush()
+    except Exception:
+        return
+    _ws_serve(handler, uid)
 
 
 def _ssl_ctx():
@@ -764,6 +984,35 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
   audio.addEventListener('play', function(){ playing = true; setIcon(false); });
   audio.addEventListener('pause', function(){ if (dragging) return; playing = false; setIcon(true); });
 })();
+
+async function loadNotify(){
+  const d=await api('/official-messages?admin=1');
+  let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
+  h+='<div class="tablewrap"><table><tr><th>内容</th><th>发送时间</th><th>操作</th></tr>';
+  if(!d.list||!d.list.length)h+='<tr><td colspan="3" class="empty">暂无官方通知</td></tr>';
+  if(d.list)d.list.forEach(m=>{
+    const t=new Date(m.created*1000);
+    const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function showNotifyModal(){document.getElementById('notifyModal').classList.remove('hidden')}
+function hideNotifyModal(){document.getElementById('notifyModal').classList.add('hidden')}
+async function publishNotify(){
+  const content=document.getElementById('notifyContent').value.trim();
+  if(!content){alert('请输入通知内容');return}
+  const r=await api('/official-message',{method:'POST',body:JSON.stringify({content:content})});
+  if(r.ok){hideNotifyModal();loadNotify();}else{alert(r.err||'发布失败')}
+}
+async function delNotify(id){
+  if(!confirm('确定删除这条通知？'))return;
+  const r=await api('/official-message/'+id,{method:'DELETE'});
+  if(r.ok)loadNotify();else alert(r.err||'删除失败')
+}
+
 </script>
 </body>
 </html>"""
@@ -905,6 +1154,11 @@ display:flex;align-items:center;justify-content:center;transition:opacity .15s}
     def do_GET(self):
         try:
             u = urllib.parse.urlparse(self.path)
+            # WebSocket 实时通知推送：GET /api/ws?token=xxx（需 Upgrade 头）
+            if u.path == "/api/ws":
+                _ws_handshake(self, u)
+                return
+
             if u.path in ("/", "/api/health"):
                 self._json(200, {"ok": True, "service": "music",
                                  "time": time.strftime("%Y-%m-%d %H:%M:%S")})
@@ -1363,6 +1617,35 @@ searchBtn.onclick=async()=>{
 };
 kwInput.addEventListener('keydown',e=>{if(e.key==='Enter')searchBtn.click()});
 load();setInterval(load,1500);
+
+async function loadNotify(){
+  const d=await api('/official-messages?admin=1');
+  let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
+  h+='<div class="tablewrap"><table><tr><th>内容</th><th>发送时间</th><th>操作</th></tr>';
+  if(!d.list||!d.list.length)h+='<tr><td colspan="3" class="empty">暂无官方通知</td></tr>';
+  if(d.list)d.list.forEach(m=>{
+    const t=new Date(m.created*1000);
+    const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function showNotifyModal(){document.getElementById('notifyModal').classList.remove('hidden')}
+function hideNotifyModal(){document.getElementById('notifyModal').classList.add('hidden')}
+async function publishNotify(){
+  const content=document.getElementById('notifyContent').value.trim();
+  if(!content){alert('请输入通知内容');return}
+  const r=await api('/official-message',{method:'POST',body:JSON.stringify({content:content})});
+  if(r.ok){hideNotifyModal();loadNotify();}else{alert(r.err||'发布失败')}
+}
+async function delNotify(id){
+  if(!confirm('确定删除这条通知？'))return;
+  const r=await api('/official-message/'+id,{method:'DELETE'});
+  if(r.ok)loadNotify();else alert(r.err||'删除失败')
+}
+
 </script></body></html>
 """
                 body = html.encode("utf-8")
@@ -1530,6 +1813,7 @@ td.act button.gray{background:#2a2a2e;color:#ddd}
 <button data-t="collected" onclick="tab('collected')">采集歌曲</button>
 <button data-t="comments" onclick="tab('comments')">评论管理</button>
 <button data-t="ann" onclick="tab('ann')">公告管理</button>
+<button data-t="notify" onclick="tab('notify')">官方通知</button>
 </div>
 <div class="main">
 <div class="topbar"><h1 id="title">仪表盘</h1><div><button style="margin-right:8px" onclick="changePwd()">修改密码</button><button onclick="logout()">退出</button></div></div>
@@ -1565,9 +1849,9 @@ function login(){
 function logout(){token='';localStorage.removeItem('admin_token');location.reload()}
 function tab(t){
   document.querySelectorAll('.side button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
-  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理',ann:'公告管理'};
+  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理',ann:'公告管理',notify:'官方通知'};
   document.getElementById('title').textContent=titles[t];
-  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();if(t==='ann')loadAnn();
+  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();if(t==='ann')loadAnn();if(t==='notify')loadNotify();
 }
 let curPage={tracks:1,collected:1,comments:1};
 let curTracks=[],curCols=[];
@@ -1781,6 +2065,35 @@ async function savePwd(){
   else{alert((r&&r.err)||'修改失败');}
 }
 if(token){document.getElementById('loginBox').classList.add('hidden');document.getElementById('appBox').classList.remove('hidden');loadDash();}
+
+async function loadNotify(){
+  const d=await api('/official-messages?admin=1');
+  let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
+  h+='<div class="tablewrap"><table><tr><th>内容</th><th>发送时间</th><th>操作</th></tr>';
+  if(!d.list||!d.list.length)h+='<tr><td colspan="3" class="empty">暂无官方通知</td></tr>';
+  if(d.list)d.list.forEach(m=>{
+    const t=new Date(m.created*1000);
+    const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function showNotifyModal(){document.getElementById('notifyModal').classList.remove('hidden')}
+function hideNotifyModal(){document.getElementById('notifyModal').classList.add('hidden')}
+async function publishNotify(){
+  const content=document.getElementById('notifyContent').value.trim();
+  if(!content){alert('请输入通知内容');return}
+  const r=await api('/official-message',{method:'POST',body:JSON.stringify({content:content})});
+  if(r.ok){hideNotifyModal();loadNotify();}else{alert(r.err||'发布失败')}
+}
+async function delNotify(id){
+  if(!confirm('确定删除这条通知？'))return;
+  const r=await api('/official-message/'+id,{method:'DELETE'});
+  if(r.ok)loadNotify();else alert(r.err||'删除失败')
+}
+
 </script></body></html>"""
                 body=admin_html.encode("utf-8")
                 self.send_response(200)
@@ -2123,6 +2436,39 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                 return
 
             # 个性化推荐：基于用户行为（点赞/评论/打开评论/分享/收听时长/搜索/跳过）推荐相关歌曲
+            # 官方通知列表（用户端）
+            if u.path == "/api/official-messages":
+                c = db()
+                rows = c.execute("SELECT id, content, created, sender_name FROM official_messages ORDER BY created DESC LIMIT 100").fetchall()
+                c.close()
+                self._json(200, {"list": [{"id": r[0], "content": r[1], "created": r[2], "sender": r[3]} for r in rows]})
+                return
+
+            # 用户通知列表
+            if u.path == "/api/notifications":
+                c = db()
+                tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not tok_uid:
+                    c.close()
+                    self._json(200, {"list": [], "unread": 0})
+                    return
+                rows = c.execute("SELECT id, type, title, content, from_user_id, from_user_name, track_id, track_title, comment_id, is_read, created FROM notifications WHERE user_id=? ORDER BY created DESC LIMIT 100", (tok_uid,)).fetchall()
+                unread = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0", (tok_uid,)).fetchone()[0]
+                c.close()
+                self._json(200, {"list": [{"id": r[0], "type": r[1], "title": r[2], "content": r[3], "fromUserId": r[4], "fromUser": r[5], "trackId": r[6], "trackTitle": r[7], "commentId": r[8], "isRead": r[9], "created": r[10]} for r in rows], "unread": unread})
+                return
+
+            # 后台：官方通知列表
+            if u.path == "/api/admin/official-messages":
+                admin_token = self.headers.get("X-Admin-Token", "").strip()
+                if admin_token != _admin_token():
+                    self._err(401, "unauthorized"); return
+                c = db()
+                rows = c.execute("SELECT id, content, created, sender_name FROM official_messages ORDER BY created DESC LIMIT 200").fetchall()
+                c.close()
+                self._json(200, {"list": [{"id": r[0], "content": r[1], "created": r[2], "sender": r[3]} for r in rows]})
+                return
+
             if u.path == "/api/recommend":
                 if not rate_limit(self, "recommend"):
                     self._err(429, "请求过于频繁，请稍后再试")
@@ -3032,7 +3378,57 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                 self._json(200, {"ok": True, "running": False})
                 return
 
-            # ---------- 单首采集入库（H5 搜索后点采集按钮） ----------
+            # 发布官方通知
+            if u.path == "/api/admin/official-message":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 16*1024))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                msg_content = (data.get("content") or "").strip()
+                if not msg_content:
+                    self._err(400, "content required"); return
+                import time as _t
+                msg_id = secrets.token_hex(8)
+                c = db()
+                c.execute("INSERT INTO official_messages(id, content, created, sender_name) VALUES(?,?,?,?)",
+                          (msg_id, msg_content, _t.time(), "流萤音乐官方"))
+                # 给所有用户生成通知
+                all_users = c.execute("SELECT id FROM users").fetchall()
+                for u in all_users:
+                    notif_id = secrets.token_hex(8)
+                    c.execute("INSERT INTO notifications(id, user_id, type, title, content, is_read, created) VALUES(?,?,?,?,?,?,?)",
+                              (notif_id, u[0], "official", "官方通知", msg_content, 0, _t.time()))
+                    # 实时推送（WebSocket）：给每个在线用户推送官方通知
+                    ws_push(u[0], {
+                        "kind": "notification",
+                        "notification": {"id": notif_id, "type": "official",
+                                         "title": "官方通知", "content": msg_content,
+                                         "fromUserId": "", "fromUser": "流萤音乐官方",
+                                         "trackId": "", "trackTitle": "",
+                                         "isRead": 0, "created": _t.time()},
+                        "unread": _notif_unread(c, u[0])})
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "id": msg_id})
+                return
+
+            # 标记通知已读
+            if u.path == "/api/notifications/read":
+                c = db()
+                tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not tok_uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                c.execute("UPDATE notifications SET is_read=1 WHERE user_id=?", (tok_uid,))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True})
+                return
+
+# ---------- 单首采集入库（H5 搜索后点采集按钮） ----------
             if u.path == "/api/collect/one":
                 try:
                     raw = self.rfile.read(min(length, 65536)) if length > 0 else b""
@@ -3478,6 +3874,28 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "like", 1.0 if liked else 0.0,
                                "", _track_info(c, tid), time.time()))
+                    # 点赞通知：给歌曲上传者
+                    if liked:
+                        track_row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
+                        if track_row and track_row[0] and track_row[0] != uid:
+                            notif_id = uuid.uuid4().hex
+                            from_user_name = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+                            uname = from_user_name[0] if from_user_name else "有人"
+                            c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
+                                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                                      (notif_id, track_row[0], "like", "收到新点赞",
+                                       f"{uname}赞了你的歌曲《{track_row[1]}》",
+                                       uid, uname, tid, track_row[1], 0, time.time()))
+                            # 实时推送（WebSocket）
+                            ws_push(track_row[0], {
+                                "kind": "notification",
+                                "notification": {"id": notif_id, "type": "like",
+                                                 "title": "收到新点赞",
+                                                 "content": f"{uname}赞了你的歌曲《{track_row[1]}》",
+                                                 "fromUserId": uid, "fromUser": uname,
+                                                 "trackId": tid, "trackTitle": track_row[1],
+                                                 "isRead": 0, "created": time.time()},
+                                "unread": _notif_unread(c, track_row[0])})
                     c.commit()
                     row = c.execute("SELECT like_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -3504,6 +3922,27 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "share", 1.0,
                                "", _track_info(c, tid), time.time()))
+                    # 分享通知：给歌曲上传者
+                    track_row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if track_row and track_row[0] and track_row[0] != uid:
+                        notif_id = uuid.uuid4().hex
+                        from_user = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+                        uname = from_user[0] if from_user else "有人"
+                        c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
+                                     VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                                  (notif_id, track_row[0], "share", "收到新分享",
+                                   f"{uname}分享了你的歌曲《{track_row[1]}》",
+                                   uid, uname, tid, track_row[1], 0, time.time()))
+                        # 实时推送（WebSocket）
+                        ws_push(track_row[0], {
+                            "kind": "notification",
+                            "notification": {"id": notif_id, "type": "share",
+                                             "title": "收到新分享",
+                                             "content": f"{uname}分享了你的歌曲《{track_row[1]}》",
+                                             "fromUserId": uid, "fromUser": uname,
+                                             "trackId": tid, "trackTitle": track_row[1],
+                                             "isRead": 0, "created": time.time()},
+                            "unread": _notif_unread(c, track_row[0])})
                     c.commit()
                     row = c.execute("SELECT share_count FROM tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
@@ -3549,6 +3988,26 @@ if(token){document.getElementById('loginBox').classList.add('hidden');document.g
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "comment", 1.0,
                                "", _track_info(c, tid), time.time()))
+                    # 评论通知：给歌曲上传者
+                    track_row = c.execute("SELECT user_id, title FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if track_row and track_row[0] and track_row[0] != uid:
+                        notif_id = uuid.uuid4().hex
+                        c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created, comment_id)
+                                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                  (notif_id, track_row[0], "comment", "收到新评论",
+                                   f"{uname}评论了你的歌曲《{track_row[1]}》：{content[:50]}",
+                                   uid, uname, tid, track_row[1], 0, time.time(), cid))
+                        # 实时推送（WebSocket）
+                        ws_push(track_row[0], {
+                            "kind": "notification",
+                            "notification": {"id": notif_id, "type": "comment",
+                                             "title": "收到新评论",
+                                             "content": f"{uname}评论了你的歌曲《{track_row[1]}》：{content[:50]}",
+                                             "fromUserId": uid, "fromUser": uname,
+                                             "commentId": cid,
+                                             "trackId": tid, "trackTitle": track_row[1],
+                                             "isRead": 0, "created": time.time()},
+                            "unread": _notif_unread(c, track_row[0])})
                     c.commit()
                     c.close()
                     self._json(200, {"id": cid})

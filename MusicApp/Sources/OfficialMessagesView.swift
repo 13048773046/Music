@@ -60,9 +60,11 @@ struct OfficialMessagesView: View {
                     Circle()
                         .fill(Theme.accent.opacity(0.2))
                         .frame(width: 32, height: 32)
-                    Image(systemName: "music.note")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(Theme.accent)
+                    Image("AppLogo")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 32, height: 32)
+                        .clipShape(Circle())
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(msg.sender ?? "流萤音乐官方")

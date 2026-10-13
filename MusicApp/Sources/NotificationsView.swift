@@ -4,6 +4,8 @@ import SwiftUI
 struct NotificationsView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var router: AppRouter
+    @Environment(\.dismiss) private var dismiss
 
     @State private var notifications: [API.Notification] = []
     @State private var officialMsg: API.OfficialMessage?
@@ -52,6 +54,11 @@ struct NotificationsView: View {
                 .environmentObject(player)
                 .environmentObject(auth)
         }
+        // WebSocket 实时推送：收到新通知自动刷新列表与红点
+        .onReceive(NotificationBus.shared.$lastEvent) { _ in
+            guard auth.currentUser != nil else { return }
+            Task { await loadAll() }
+        }
         .task { await loadAll() }
     }
 
@@ -62,14 +69,16 @@ struct NotificationsView: View {
             showOfficialChat = true
         } label: {
             HStack(spacing: 12) {
-                // APP Logo（音符图标，圆角方形）
+                // APP Logo（圆角方形头像）
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Theme.card)
                         .frame(width: 48, height: 48)
-                    Image(systemName: "music.note")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(Theme.accent)
+                    Image("AppLogo")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -108,9 +117,7 @@ struct NotificationsView: View {
 
     private func interactionRow(_ n: API.Notification) -> some View {
         Button {
-            if let trackId = n.trackId, !trackId.isEmpty {
-                Task { await playTrack(trackId) }
-            }
+            Task { await handleTap(n) }
         } label: {
             HStack(spacing: 12) {
                 // 点赞者头像
@@ -156,15 +163,30 @@ struct NotificationsView: View {
 
     @ViewBuilder
     private func avatarView(for n: API.Notification) -> some View {
-        ZStack {
-            Circle()
-                .fill(Theme.accentSoft)
-                .frame(width: 44, height: 44)
-            Image(systemName: "person.fill")
-                .font(.system(size: 18))
-                .foregroundColor(Theme.accent)
+        if let uid = n.fromUserId, !uid.isEmpty {
+            // 触发用户真实头像（从触发用户 id 加载）
+            CachedCoverImage(
+                url: API.avatarURL(uid),
+                title: n.fromUser ?? "",
+                placeholder: Circle().fill(Theme.accentSoft)
+                    .overlay(Image(systemName: "person.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(Theme.accent))
+            )
+            .frame(width: 44, height: 44)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 0.5))
+        } else {
+            ZStack {
+                Circle()
+                    .fill(Theme.accentSoft)
+                    .frame(width: 44, height: 44)
+                Image(systemName: "person.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(Theme.accent)
+            }
+            .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 0.5))
         }
-        .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 0.5))
     }
 
     @ViewBuilder
@@ -241,18 +263,27 @@ struct NotificationsView: View {
             // 过滤掉official类型（官方通知单独显示在顶部）
             notifications = r.list.filter { $0.type != "official" }
             unreadCount = r.unread
+            // 同步全局未读数（TabBar/铃铛红点）
+            NotificationBus.shared.setUnread(r.unread)
             Task { await API.markNotificationsRead() }
         } catch {
             loadFailed = true
         }
     }
 
+    /// 点击互动通知：播放歌曲 → 关闭通知页回首页；评论类通知额外打开评论弹窗定位到那条评论
     @MainActor
-    private func playTrack(_ trackId: String) async {
+    private func handleTap(_ n: API.Notification) async {
+        guard let trackId = n.trackId, !trackId.isEmpty else { return }
         do {
             let allTracks = try await API.tracks()
-            if let t = allTracks.first(where: { $0.id == trackId }) {
-                player.play(t, in: [t])
+            guard let t = allTracks.first(where: { $0.id == trackId }) else { return }
+            player.play(t, in: [t])
+            dismiss()
+            if n.type == "comment" {
+                router.jumpToHome(play: t, openComment: true, commentId: n.commentId)
+            } else {
+                router.jumpToHome(play: t)
             }
         } catch {}
     }

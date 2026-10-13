@@ -33,10 +33,22 @@ struct MusicApp: App {
                 Task { await AppPreloader.shared.preload() }
                 Task { await fetchAnnouncement() }
                 Task { await fetchUpdate() }
+                // 已登录（启动自动登录）：直接建立通知 WebSocket
+                if auth.currentUser != nil {
+                    NotificationBus.shared.startIfNeeded()
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     withAnimation(.easeInOut(duration: 0.45)) {
                         showSplash = false
                     }
+                }
+            }
+            // 登录态切换：登录后建立实时通知长连接，退出登录断开
+            .onChange(of: auth.currentUser != nil) { loggedIn in
+                if loggedIn {
+                    NotificationBus.shared.resetAndReconnect()
+                } else {
+                    NotificationBus.shared.stop()
                 }
             }
             // 公告弹窗（半屏）
@@ -227,7 +239,8 @@ final class SidebarHandlers {
 /// 页面索引：0=发现音乐 1=首页播放页 2=我的
 struct MainTabView: View {
     @EnvironmentObject private var player: PlayerManager
-    @State private var selection = 1
+    /// 全局路由：跨页跳转与评论弹窗（通知点击跳转走这里）
+    @StateObject private var router = AppRouter.shared
     /// 侧边栏抽屉驱动（官方交互式动画：跟手 + UISpringTimingParameters 速度继承落位）
     @StateObject private var drawer: SidebarDrawerController
     /// 稳定闭包容器（见 SidebarHandlers 注释）
@@ -259,22 +272,25 @@ struct MainTabView: View {
                 Group {
                     ZStack {
                         DiscoverView()
-                            .opacity(selection == 0 ? 1 : 0)
-                            .allowsHitTesting(selection == 0)
+                            .environmentObject(router)
+                            .opacity(router.selectedTab == 0 ? 1 : 0)
+                            .allowsHitTesting(router.selectedTab == 0)
                         HomeView()
                             .ignoresSafeArea()
-                            .opacity(selection == 1 ? 1 : 0)
-                            .allowsHitTesting(selection == 1)
+                            .environmentObject(router)
+                            .opacity(router.selectedTab == 1 ? 1 : 0)
+                            .allowsHitTesting(router.selectedTab == 1)
                         MineView()
-                            .opacity(selection == 2 ? 1 : 0)
-                            .allowsHitTesting(selection == 2)
+                            .environmentObject(router)
+                            .opacity(router.selectedTab == 2 ? 1 : 0)
+                            .allowsHitTesting(router.selectedTab == 2)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 // 顶部栏只在首页（播放页）展示：切到发现/我的后隐藏，
                 // 内容区完全沉浸，不残留全局顶部栏
-                if selection == 1 {
+                if router.selectedTab == 1 {
                     GlobalTopBar(onOpenSidebar: handlers.onOpen)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
@@ -283,7 +299,7 @@ struct MainTabView: View {
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
 
-                AppTabBar(selection: $selection)
+                AppTabBar(selection: $router.selectedTab)
             }
             .offset(x: drawer.progress * panelWidth)
             // 遮罩常驻：透明度随进度渐显；进度为 0 时不可点击，自动穿透到主界面
@@ -295,6 +311,14 @@ struct MainTabView: View {
         }
         // 全局手势：整个屏幕左右拖动实时跟手；松手由官方弹簧时序按速度继承落位
         .gesture(dragGesture)
+        // 评论定位弹窗：通知点击评论类 → 回首页并打开评论弹窗定位到那条评论
+        .sheet(isPresented: $router.showCommentSheet) {
+            if let t = router.pendingCommentTrack {
+                CommentSheet(track: t, highlightCommentId: router.highlightCommentId)
+                    .environmentObject(player)
+                    .environmentObject(AuthManager.shared)
+            }
+        }
         .onAppear {
             // 只绑定一次：之后拖动导致父视图重算时，闭包引用保持同一实例，子视图不再重建
             handlers.onClose = { drawer.animate(to: 0) }
@@ -309,7 +333,7 @@ struct MainTabView: View {
             .onChanged { v in
                 // 侧滑抽屉只在首页（播放页）生效：发现页/我的页不响应，
                 // 避免在"我的"页面左滑误触侧边栏（那里有自己的左右滑动切页）
-                guard selection == 1 else { return }
+                guard router.selectedTab == 1 else { return }
                 let dx = v.translation.width
                 let dy = v.translation.height
                 // 区分水平/垂直滑动：水平位移远大于垂直才是侧滑（竖滑切歌不受影响）
@@ -318,7 +342,7 @@ struct MainTabView: View {
                 drawer.updateDrag(translationX: dx)
             }
             .onEnded { v in
-                guard selection == 1 else { return }
+                guard router.selectedTab == 1 else { return }
                 drawer.finishDrag(translationX: v.translation.width,
                                  velocityX: v.velocity.width)
             }
@@ -429,8 +453,17 @@ struct AppTabBar: View {
             }
         } label: {
             VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 21))
+                // "我的"Tab：右上角挂未读通知红点（App 全局消息小红点）
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: icon)
+                        .font(.system(size: 21))
+                    if index == 2 && NotificationBus.shared.unreadCount > 0 {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 9, height: 9)
+                            .offset(x: 3, y: -2)
+                    }
+                }
                 Text(label)
                     .font(.system(size: 11, weight: .medium))
             }

@@ -18,6 +18,7 @@ struct MinePager<T: Equatable> {
 struct MineView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var router: AppRouter
 
     // 听歌时长（秒）
     @State private var listenSeconds: Int = 0
@@ -85,9 +86,14 @@ struct MineView: View {
                 NotificationsView()
                     .environmentObject(player)
                     .environmentObject(auth)
+                    .environmentObject(router)
             }
             .navigationBarHidden(true)
             .task { await initialLoad() }
+            // WebSocket 实时推送驱动铃铛红点
+            .onReceive(NotificationBus.shared.$unreadCount) { n in
+                unreadNotifCount = n
+            }
         }
         .fileImporter(
             isPresented: $showImporter,
@@ -658,10 +664,12 @@ struct MineView: View {
     private func loadUnreadCount() async {
         guard auth.currentUser != nil else {
             unreadNotifCount = 0
+            NotificationBus.shared.setUnread(0)
             return
         }
         if let r = try? await API.notifications() {
             unreadNotifCount = r.unread
+            NotificationBus.shared.setUnread(r.unread)
         }
     }
 

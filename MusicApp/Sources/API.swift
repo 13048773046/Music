@@ -557,12 +557,25 @@ enum API {
         let title: String?
         let content: String?
         let fromUser: String?
+        let fromUserId: String?
+        let commentId: String?  // 评论类通知对应评论 id（点击定位到那条评论）
         let trackId: String?
         let trackTitle: String?
         let isRead: Int         // 0=未读 1=已读
         let created: Double
 
         var unread: Bool { isRead == 0 }
+    }
+
+    /// WebSocket 实时推送地址（wss://…/music/api/ws?token=xxx）
+    static func wsURL(token: String) -> URL? {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return nil }
+        comps.scheme = "wss"
+        var path = comps.path
+        if !path.hasSuffix("/") { path += "/" }
+        comps.path = path + "ws"
+        comps.queryItems = [URLQueryItem(name: "token", value: token)]
+        return comps.url
     }
 
     /// 获取官方通知列表（聊天记录，只读）

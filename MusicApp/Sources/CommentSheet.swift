@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// 评论页：展示歌曲评论列表，登录用户可发表评论。
+/// 传入 highlightCommentId 时，加载完成后自动滚动定位并高亮该评论（通知点击定位用）。
 struct CommentSheet: View {
     let track: Track
+    var highlightCommentId: String? = nil
     @EnvironmentObject private var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
 
@@ -43,34 +45,56 @@ struct CommentSheet: View {
                     }
                     .frame(maxHeight: .infinity)
                 } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 16) {
-                            ForEach(comments) { c in
-                                HStack(alignment: .top, spacing: 10) {
-                                    // 用户头像（无头像时显示默认占位）
-                                    CachedCoverImage(
-                                        url: API.avatarURL(c.userId),
-                                        title: c.userName,
-                                        placeholder: Circle().fill(Theme.accentSoft)
-                                            .overlay(Image(systemName: "person.fill")
-                                                .font(.system(size: 15))
-                                                .foregroundColor(Theme.accent))
-                                    )
-                                    .frame(width: 36, height: 36)
-                                    .clipShape(Circle())
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 16) {
+                                ForEach(comments) { c in
+                                    HStack(alignment: .top, spacing: 10) {
+                                        // 用户头像（无头像时显示默认占位）
+                                        CachedCoverImage(
+                                            url: API.avatarURL(c.userId),
+                                            title: c.userName,
+                                            placeholder: Circle().fill(Theme.accentSoft)
+                                                .overlay(Image(systemName: "person.fill")
+                                                    .font(.system(size: 15))
+                                                    .foregroundColor(Theme.accent))
+                                        )
+                                        .frame(width: 36, height: 36)
+                                        .clipShape(Circle())
 
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(c.userName.isEmpty ? "用户" : c.userName)
-                                            .font(.system(size: 13, weight: .medium))
-                                            .foregroundColor(Theme.accent)
-                                        Text(c.content)
-                                            .font(.system(size: 14))
-                                            .foregroundColor(Theme.textPrimary)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(c.userName.isEmpty ? "用户" : c.userName)
+                                                .font(.system(size: 13, weight: .medium))
+                                                .foregroundColor(Theme.accent)
+                                            Text(c.content)
+                                                .font(.system(size: 14))
+                                                .foregroundColor(Theme.textPrimary)
+                                        }
                                     }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    // 目标评论高亮（通知点击定位）
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .fill(highlightCommentId == c.id
+                                                  ? Theme.accent.opacity(0.14)
+                                                  : Color.clear)
+                                    )
+                                    .id(c.id)
+                                }
+                            }
+                            .padding(16)
+                        }
+                        // 评论加载完成后滚动到目标评论
+                        .onChange(of: comments) { list in
+                            guard let target = highlightCommentId,
+                                  list.contains(where: { $0.id == target }) else { return }
+                            DispatchQueue.main.async {
+                                withAnimation(.easeInOut(duration: 0.35)) {
+                                    proxy.scrollTo(target, anchor: .center)
                                 }
                             }
                         }
-                        .padding(16)
                     }
                 }
 
