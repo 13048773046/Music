@@ -51,6 +51,10 @@ final class PlayerManager: NSObject, ObservableObject {
     private(set) var usingEngine = false
 
     @Published var queue: [Track] = []
+    /// 队列内容级变化版本号：原位插入/替换时 +1，
+    /// VerticalPager 据此识别「队列内容变了但队首/长度未变」的场景并强制重建页面，
+    /// 避免复用旧索引的缓存页面（导致显示信息与播放音频不符）。
+    @Published private(set) var queueRevision = 0
     @Published var currentIndex: Int = -1
     @Published var isPlaying = false
     @Published var progress: Double = 0
@@ -458,8 +462,8 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     /// 通知点击播放：延续用户当前听歌模式与音乐流。
-    /// 通知歌曲成为当前播放；播完后自动接回原有队列（不替换整个流、不丢上下文），
-    /// 避免「只有一首歌」播完即停。
+    /// 通知歌曲插入到「当前歌曲之后」并播放——不丢原歌（上滑可回原曲）、
+    /// 下滑（next）自动接回原有队列下一首，不是只有一首、播完即停。
     func playNotificationTrack(_ track: Track) {
         guard !queue.isEmpty else {
             // 无当前流（冷启动直接点通知）：退化为单曲播放
@@ -470,16 +474,22 @@ final class PlayerManager: NSObject, ObservableObject {
         if queue[idx].id == track.id {
             // 已是当前位置的歌曲：直接续播
             currentIndex = idx
-        } else if let found = queue.firstIndex(where: { $0.id == track.id }) {
+            playCurrent()
+            return
+        }
+        if let found = queue.firstIndex(where: { $0.id == track.id }) {
             // 本就在当前流中：定位播放（不改变队列）
             currentIndex = found
-        } else {
-            // 不在当前流：替换当前位置（播完自然续接原流下一位，模式/队列保持）
-            var q = queue
-            q[idx] = track
-            queue = q
-            currentIndex = idx
+            playCurrent()
+            return
         }
+        // 不在当前流：插入到当前位置之后播放；队列长度+1，
+        // 提升 revision 让 VerticalPager 强制重建页面（索引缓存的旧页会显示错歌）
+        var q = queue
+        q.insert(track, at: idx + 1)
+        queue = q
+        currentIndex = idx + 1
+        queueRevision += 1
         playCurrent()
     }
 

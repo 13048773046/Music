@@ -49,6 +49,7 @@ struct HomeView: View {
                             set: { player.currentIndex = $0 }
                         ),
                         tracks: player.queue,
+                        revision: player.queueRevision,
                         onPageChanged: { index in
                             guard player.queue.indices.contains(index) else { return }
                             player.play(player.queue[index], in: player.queue)

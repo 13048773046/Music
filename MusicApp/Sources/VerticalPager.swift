@@ -11,6 +11,10 @@ import UIKit
 struct VerticalPager: UIViewControllerRepresentable {
     @Binding var currentIndex: Int
     let tracks: [Track]
+    /// 队列内容级版本号：变化时强制重建页面缓存。
+    /// 原位插入/替换（如通知点击插播）不改变队首且不变短，shouldRebuild 无法识别，
+    /// 若不强制重建会复用旧索引缓存页 → 显示信息与播放音频不符。
+    let revision: Int
     let onPageChanged: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -43,6 +47,22 @@ struct VerticalPager: UIViewControllerRepresentable {
 
     func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
         context.coordinator.parent = self
+        // 队列内容级变化（通知点击插播等）：队首/长度未变但内容变了，
+        // shouldRebuild 识别不到，必须按 revision 强制重建页面缓存，
+        // 否则旧索引缓存页会显示错歌信息（播放音频已是新歌）。
+        if context.coordinator.lastRevision != revision {
+            context.coordinator.rebuild(tracks: tracks)
+            context.coordinator.lastRevision = revision
+            if context.coordinator.hasController(at: currentIndex) {
+                pvc.setViewControllers(
+                    [context.coordinator.controller(for: currentIndex)],
+                    direction: .forward,
+                    animated: false,
+                    completion: nil
+                )
+            }
+            return
+        }
         // 同步控制器：追加场景无需补建（懒创建）；数据源整体替换（普通流↔相关流）时重建。
         let rebuilt = context.coordinator.syncControllers(for: tracks)
         // 整体替换后旧控制器已不在新列表中，必须立即定位到当前播放索引，
@@ -87,6 +107,8 @@ struct VerticalPager: UIViewControllerRepresentable {
         private var indexByController: [ObjectIdentifier: Int] = [:]
         /// 与队列一一对应的歌曲 id（用于识别队列来源是否整体替换）
         private var trackIDs: [String] = []
+        /// 上次处理的队列版本（revision 变化时强制重建页面缓存）
+        var lastRevision = -1
         /// 用户手势正在翻页（willTransitionTo 置位、didFinishAnimating 复位）。
         /// 期间 updateUIViewController 不得程序化回跳，否则会与手势索引打架。
         var isUserPaging = false
