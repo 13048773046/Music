@@ -613,7 +613,8 @@ def gen_short_code(n=8):
 
 # ---------------- 文件安全 ----------------
 
-ADMIN_PWD_FILE = "/www/wwwroot/music/admin_pwd"
+# 管理后台密码文件：默认随 ROOT（测试环境用临时 ROOT 时自动隔离），可用环境变量覆盖
+ADMIN_PWD_FILE = os.environ.get("MUSIC_ADMIN_PWD_FILE", os.path.join(ROOT, "admin_pwd"))
 
 def _admin_token():
     """管理后台密码：持久化文件优先，其次环境变量，最后默认值"""
@@ -639,6 +640,53 @@ def safe_file_path(fname):
     if not os.path.exists(p):
         return None
     return p
+
+
+# ---------------- 封面缩略图（移动端加载加速） ----------------
+
+COVER_SMALL_MAX_SIDE = 600            # 缩略图长边最大像素
+COVER_SMALL_QUALITY = 82              # JPEG 质量
+COVER_SMALL_MIN_SIZE = 150 * 1024     # 超过 150KB 才压缩（小图直接原样返回）
+_cover_small_lock = threading.Lock()  # 并发请求同一大图时只生成一次
+
+
+def cover_small(fp, tid):
+    """返回适合手机端加载的封面路径：大图压缩为 max_side JPEG 落盘缓存；失败/小图回退原图。
+
+    采集歌曲封面多为数 MB 原图（见过 12MB），手机端直接加载要数秒；
+    这里首次请求生成 600px/82 品质缩略图（约 20-60KB），之后命中缓存。
+    Pillow 不可用时自动降级为原图，不影响功能。
+    """
+    try:
+        from PIL import Image
+    except Exception:
+        return fp
+    try:
+        size = os.path.getsize(fp)
+        if size <= COVER_SMALL_MIN_SIZE:
+            return fp
+        small = os.path.join(FILES, tid + "_cover_small.jpg")
+        with _cover_small_lock:
+            if os.path.exists(small) and os.path.getsize(small) > 0:
+                if os.path.getmtime(small) + 2 >= os.path.getmtime(fp):
+                    return small
+            with Image.open(fp) as im:
+                im = im.convert("RGB")
+                w, h = im.size
+                longest = max(w, h)
+                if longest <= COVER_SMALL_MAX_SIDE:
+                    return fp
+                scale = COVER_SMALL_MAX_SIDE / float(longest)
+                nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+                resample = getattr(Image, "Resampling", Image).LANCZOS
+                im = im.resize((nw, nh), resample)
+                im.save(small, "JPEG", quality=COVER_SMALL_QUALITY,
+                        optimize=True, progressive=True)
+        if os.path.exists(small) and os.path.getsize(small) > 0:
+            return small
+    except Exception:
+        pass
+    return fp
 
 
 # ---------------- 上传魔数校验 ----------------
@@ -2773,7 +2821,7 @@ async function delNotify(id){
                     # 采集歌曲封面：优先服务本地下载的 files/{id}_cover.jpg（手机端可直接加载）
                     local = safe_file_path(tid + "_cover.jpg")
                     if local and os.path.exists(local):
-                        self._serve_file(local)
+                        self._serve_file(cover_small(local, tid))
                         return
                     # 本地封面缺失：保留第三方直链 302 兜底（仅当 cover 为 http 地址）
                     if crow and crow[0] and str(crow[0]).startswith("http"):
@@ -2785,7 +2833,7 @@ async function delNotify(id){
                         return
                     self._err(404, "no cover")
                     return
-                self._serve_file(fp)
+                self._serve_file(cover_small(fp, tid))
                 return
 
             if u.path.startswith("/api/lyric/"):

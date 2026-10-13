@@ -57,7 +57,10 @@ final class Library: ObservableObject {
                     self.isLoaded = true
                     // 首次拿到列表且播放器还没有队列时，自动播第一首
                     if PlayerManager.shared.queue.isEmpty, !list.isEmpty {
-                        PlayerManager.shared.play(list[0], in: list)
+                        // 冷启动：先把首曲签名 URL 预热入池，playCurrent 直接命中省一次往返
+                        let first = list[0]
+                        Task { await PlayerManager.shared.prewarm(first) }
+                        PlayerManager.shared.play(first, in: list)
                     }
                 }
             } catch {

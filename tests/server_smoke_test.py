@@ -12,6 +12,8 @@ import sys
 import json
 import time
 import struct
+import socket
+import base64
 import shutil
 import tempfile
 import argparse
@@ -363,7 +365,140 @@ def run_all(port, root, strict_port, strict_root):
     s, body, _ = req("GET", "/api/share/bad_token_123")
     check("share 无效 token 404", s == 404, f"s={s}")
 
-    print("== 17. 限流（登录连续 12 次）==")
+    print("== 17. 官方通知管理（发布→用户通知→删除级联清理）==")
+    ADMIN = {"X-Admin-Token": "liuying-admin-8f3a"}   # 测试环境 admin_pwd 文件不存在，走默认值
+    s, body, _ = req("GET", "/api/admin/official-messages", headers=ADMIN)
+    om0 = json.loads(body)
+    check("admin 官方通知列表 200", s == 200 and isinstance(om0.get("list"), list), body[:100])
+    s, body, _ = req("GET", "/api/admin/official-messages")
+    check("官方通知列表无 admin token 401", s == 401, f"s={s}")
+    s, body, _ = req("POST", "/api/admin/official-message",
+                     {"content": "冒烟测试官方通知"}, ADMIN)
+    om1 = json.loads(body)
+    omid = om1.get("id", "")
+    check("发布官方通知 200 返回 id", s == 200 and omid, body[:100])
+    s, body, _ = req("GET", "/api/official-messages")
+    oml = json.loads(body)
+    check("用户端官方通知列表含新消息", s == 200 and any(m["id"] == omid for m in oml.get("list", [])), body[:100])
+    s, body, _ = req("GET", "/api/notifications", headers=AUTH)
+    nl0 = json.loads(body)
+    check("用户通知含官方类型", any(n["type"] == "official" for n in nl0.get("list", [])), body[:100])
+    s, body, _ = req("DELETE", f"/api/admin/official-message/{omid}", headers=ADMIN)
+    check("删除官方通知 200", s == 200 and json.loads(body).get("ok") is True, body[:100])
+    s, body, _ = req("GET", "/api/official-messages")
+    oml = json.loads(body)
+    check("删除后用户端列表不再含该消息", all(m["id"] != omid for m in oml.get("list", [])), body[:100])
+    s, body, _ = req("GET", "/api/notifications", headers=AUTH)
+    nl0 = json.loads(body)
+    check("删除后用户通知级联清理", all(n.get("content") != "冒烟测试官方通知" for n in nl0.get("list", [])), body[:100])
+    s, body, _ = req("DELETE", f"/api/admin/official-message/{omid}", headers=ADMIN)
+    check("重复删除 404", s == 404, f"s={s}")
+    s, body, _ = req("DELETE", f"/api/admin/official-message/{omid}")
+    check("无 token 删除 401", s == 401, f"s={s}")
+
+    print("== 18. 互动通知（点赞/评论/分享 → 上传者收通知）==")
+    body, ct = multipart({"account": "user2", "password": "secret456", "name": "二号用户"}, {})
+    s, body, _ = req("POST", "/api/register", body, {"Content-Type": ct})
+    u2 = json.loads(body)
+    u2token = u2.get("token", "")
+    check("注册二号用户 200 返回 token", s == 200 and u2token, body[:100])
+    AUTH2 = {"Authorization": f"Bearer {u2token}"}
+    s, body, _ = req("POST", "/api/notifications/read", None)
+    check("未登录标记已读 401", s == 401, f"s={s}")
+    s, body, _ = req("POST", "/api/notifications/read", None, AUTH)
+    check("标记通知已读 200", s == 200, f"s={s}")
+    s, body, _ = req("POST", f"/api/like/{tid}", {"userId": u2.get("id")}, AUTH2)
+    check("二号用户点赞 200 liked=true", s == 200 and json.loads(body).get("liked") is True, body[:100])
+    s, body, _ = req("POST", f"/api/comment/{tid}", {"userId": u2.get("id"), "userName": "二号用户",
+                                                     "content": "好听"}, AUTH2)
+    check("二号用户评论 200", s == 200, body[:100])
+    s, body, _ = req("POST", f"/api/share/{tid}", None, AUTH2)
+    check("二号用户分享 200", s == 200, body[:100])
+    s, body, _ = req("GET", "/api/notifications", headers=AUTH)
+    nl1 = json.loads(body)
+    types1 = [n.get("type") for n in nl1.get("list", [])]
+    check("上传者收到点赞通知", "like" in types1, str(types1))
+    check("上传者收到评论通知", "comment" in types1, str(types1))
+    check("上传者收到分享通知", "share" in types1, str(types1))
+    check("未读数 ≥3", nl1.get("unread", 0) >= 3, body[:100])
+    s, body, _ = req("POST", "/api/notifications/read", None, AUTH)
+    check("再次标记已读 200", s == 200, f"s={s}")
+    s, body, _ = req("GET", "/api/notifications", headers=AUTH)
+    nl2 = json.loads(body)
+    check("已读后 unread=0", nl2.get("unread") == 0, body[:100])
+    check("已读后 isRead=1", all(n.get("isRead") == 1 for n in nl2.get("list", [])), body[:100])
+
+    print("== 19. 行为埋点上报 ==")
+    evs = [{"trackId": tid, "event": "listen", "value": 30,
+            "meta": {"fraction": 0.5, "plays": 1, "seconds": 30}},
+           {"trackId": tid, "event": "skip", "value": 0, "meta": {"fraction": 0.1}}]
+    s, body, _ = req("POST", "/api/behavior", {"events": evs}, AUTH)
+    beh = json.loads(body)
+    check("行为上报 200 count=2", s == 200 and beh.get("count") == 2, body[:100])
+    s, body, _ = req("POST", "/api/behavior", {"events": []}, AUTH)
+    check("空 events 400", s == 400, f"s={s}")
+    s, body, _ = req("POST", "/api/behavior", {"events": evs})
+    check("未登录行为上报 401", s == 401, f"s={s}")
+    conn0 = sqlite3.connect(db_path)
+    n_beh = conn0.execute("SELECT COUNT(*) FROM behavior_events WHERE event='listen'").fetchone()[0]
+    conn0.close()
+    check("behavior_events 落库 listen 记录", n_beh >= 1, f"n={n_beh}")
+
+    print("== 20. admin 管理接口鉴权 ==")
+    s, body, _ = req("GET", "/api/admin/stats")
+    check("admin stats 无 token 401", s == 401, f"s={s}")
+    s, body, _ = req("GET", "/api/admin/stats", headers=ADMIN)
+    st = json.loads(body)
+    check("admin stats 200 含计数", s == 200 and st.get("ok") is True and "users" in st, body[:100])
+    s, body, _ = req("GET", "/api/admin/users")
+    check("admin users 无 token 401", s == 401, f"s={s}")
+    s, body, _ = req("GET", "/api/admin/users", headers=ADMIN)
+    us = json.loads(body)
+    check("admin users 200 含 test_user", s == 200 and any(u.get("account") == "test_user"
+                                                          for u in us.get("list", [])), body[:100])
+
+    print("== 21. WebSocket 握手与鉴权 ==")
+    WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    def ws_handshake(path):
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                      f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        resp = sock.recv(4096).decode("utf-8", "ignore")
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        sock.close()
+        return resp, accept
+    resp, accept = ws_handshake(f"/api/ws?token={u2token}")
+    check("ws 有效 token 握手 101", resp.startswith("HTTP/1.1 101"), resp[:100])
+    check("ws Sec-WebSocket-Accept 校验正确", accept in resp, resp[:200])
+    resp, _ = ws_handshake("/api/ws")
+    check("ws 无 token 401", resp.startswith("HTTP/1.1 401"), resp[:100])
+    resp, _ = ws_handshake("/api/ws?token=bad_token_xyz")
+    check("ws 错误 token 401", resp.startswith("HTTP/1.1 401"), resp[:100])
+    resp, _ = ws_handshake("/api/ws?token=" + u2token)
+    check("ws 带 token 再次握手 101", resp.startswith("HTTP/1.1 101"), resp[:100])
+    def ws_pingpong(path):
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+                      f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                      f"Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        resp = sock.recv(4096)
+        if not resp.startswith(b"HTTP/1.1 101"):
+            sock.close()
+            return False
+        payload = b"hi"
+        mask = b"\x11\x22\x33\x44"
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        sock.sendall(bytes([0x89, 0x80 | len(payload)]) + mask + masked)
+        sock.settimeout(5)
+        data = sock.recv(1024)
+        sock.close()
+        return bool(data) and data[0] & 0x0F == 0xA
+    check("ws ping→pong 帧回包", ws_pingpong(f"/api/ws?token={u2token}"))
+
+    print("== 22. 限流（登录连续 12 次）==")
     codes = []
     for i in range(12):
         body, ct = multipart({"account": "test_user", "password": "wrongpass"}, {})

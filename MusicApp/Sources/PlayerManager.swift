@@ -117,14 +117,14 @@ final class PlayerManager: NSObject, ObservableObject {
     // MARK: - 下一首预加载（只预热签名 URL + 连接头部，不整首下载）
 
     /// 预加载窗口：当前歌之后预加载的歌曲数（下一首、下下一首、下下下一首…）
-    private let prefetchAheadCount = 3
+    private let prefetchAheadCount = 4
     /// 签名播放 URL 缓存：trackId → URL。
     /// 切歌时优先复用，省去再向后端签发的网络往返，显著缩短切歌等待（“秒开”）；用掉即移除。
     private var signedURLPool: [String: URL] = [:]
     /// 签名 URL 缓存的 FIFO 顺序（超限时淘汰最旧）
     private var urlPoolOrder: [String] = []
     /// 签名 URL 缓存上限（超出淘汰最旧，防止无限堆积）
-    private let urlPoolLimit = 12
+    private let urlPoolLimit = 16
     /// 进行中的预加载任务（切歌/队列变化时取消，防错加载）
     private var prefetchTask: Task<Void, Never>?
 
@@ -450,13 +450,16 @@ final class PlayerManager: NSObject, ObservableObject {
     private func prepareQueuePlayer(currentIndex idx: Int, currentURL: URL) {
         player.removeAllItems()
         let cur = AVPlayerItem(url: currentURL)
+        cur.preferredForwardBufferDuration = 30   // 向前多缓冲 30s，减少卡顿
         Self.setTrackId(queue[idx].id, on: cur)
         player.insert(cur, after: nil)
-        // 后续限 prefetchAheadCount 首，用已缓存的签名 URL（缓存未命中则先跳过，切到时兜底重建）
+        // 后续限 prefetchAheadCount 首，用已缓存的签名 URL（缓存未命中则先停，
+        // 保持顺序；切到时兜底重建，之后由 syncPrefetchedItems 按就绪顺序补插）
         let end = min(idx + 1 + prefetchAheadCount, queue.count)
         for i in (idx + 1)..<end {
-            guard let u = signedURLPool[queue[i].id] else { continue }
+            guard let u = signedURLPool[queue[i].id] else { break }
             let item = AVPlayerItem(url: u)
+            item.preferredForwardBufferDuration = 30
             Self.setTrackId(queue[i].id, on: item)
             player.insert(item, after: nil)
         }
@@ -464,7 +467,7 @@ final class PlayerManager: NSObject, ObservableObject {
 
     /// 顺序切歌（advanceToNextItem）后补充队列：把「队列末尾歌之后」的后续歌补 insert，
     /// 让 AVQueuePlayer 始终保有「当前歌之后 prefetchAheadCount 首」可预取，避免连续切歌几首后队列耗尽。
-    /// 已存在的项不重复插入；预取 URL 未命中的跳过（切到时兜底重建）。
+    /// 已存在的项不重复插入；预取 URL 未命中的先停（保持顺序），就绪后由 syncPrefetchedItems 补插。
     private func topUpQueue() {
         guard !queue.isEmpty, let lastItem = player.items().last,
               let lastId = Self.trackId(of: lastItem),
@@ -474,10 +477,11 @@ final class PlayerManager: NSObject, ObservableObject {
         let existingIDs = player.items().compactMap { Self.trackId(of: $0) }
         for i in (lastIdx + 1)..<end {
             let t = queue[i]
-            guard let u = signedURLPool[t.id] else { continue }
+            guard let u = signedURLPool[t.id] else { break }
             guard !inserted.contains(t.id), !existingIDs.contains(t.id) else { continue }
             inserted.append(t.id)
             let item = AVPlayerItem(url: u)
+            item.preferredForwardBufferDuration = 30
             Self.setTrackId(t.id, on: item)
             player.insert(item, after: nil)
         }
@@ -846,6 +850,10 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 2) 用 AVURLAsset 预热连接/资源头部（只拉前一小部分 metadata，不整首下载）。
     /// 播放位置或队列变化时重新计算窗口；同一位置只预加载一次。
     /// 幂等且防重：切歌会取消旧任务，队列再变也不会错取已不在队列的歌。
+    /// 两阶段执行：
+    ///   阶段1 并行签发「接下来 N 首」的签名 URL 并立即补进 AVQueuePlayer，
+    ///         让系统对下一首预缓冲真实音频数据（顺序切歌走 advanceToNextItem 秒开/无缝）；
+    ///   阶段2 顺序预热元数据连接 + 封面 + 歌词 + 主色（不阻塞阶段1的 URL 就绪与入队）。
     private func schedulePrefetch() {
         prefetchTask?.cancel()
         prefetchTask = nil
@@ -856,24 +864,32 @@ final class PlayerManager: NSObject, ObservableObject {
         // 快照目标，异步期间队列变化不影响本次预取目标
         let targets = Array(queue[start..<end])
         prefetchTask = Task { [weak self] in
+            guard let self else { return }
+            // 阶段1：并行签发 URL（各自一次轻量往返），谁先就绪谁先入队
+            await withTaskGroup(of: Void.self) { group in
+                for t in targets {
+                    group.addTask { [weak self] in
+                        await self?.warmURLOnly(t)
+                    }
+                }
+            }
+            // 阶段2：顺序预热元数据/封面/歌词/主色（URL 已全部在池中）
             for t in targets {
                 guard !Task.isCancelled else { return }
-                await self?.warmTrack(t)
+                await self.warmMetadata(for: t)
             }
         }
     }
 
-    /// 预热单首：取/缓存签名 URL，并用 AVURLAsset 预热连接与资源头部。
-    private func warmTrack(_ t: Track) async {
-        // 1) 取/缓存签名 URL（URL 池只允许主线程访问）
-        var url: URL?
+    /// 只签发并缓存签名 URL + 同步补进 AVQueuePlayer（音频预缓冲的关键路径）。
+    /// URL 池与 AVQueuePlayer 都只允许主线程访问，入队统一在主线程完成。
+    private func warmURLOnly(_ t: Track) async {
+        guard !Task.isCancelled else { return }
         let cached = await MainActor.run { [weak self] in self?.signedURLPool[t.id] }
-        if let cached {
-            url = cached
-        } else {
+        if cached == nil {
             let fetched = await API.signedStreamURL(for: t.id)   // 非 Optional，恒返回可用 URL
             guard !Task.isCancelled else { return }
-            let saved = await MainActor.run { [weak self] () -> Bool in
+            _ = await MainActor.run { [weak self] () -> Bool in
                 guard let self else { return false }
                 if self.signedURLPool.count >= self.urlPoolLimit {
                     if let oldest = self.urlPoolOrder.first {
@@ -883,21 +899,58 @@ final class PlayerManager: NSObject, ObservableObject {
                 }
                 self.signedURLPool[t.id] = fetched
                 self.urlPoolOrder.append(t.id)
+                self.syncPrefetchedItems()
                 return true
             }
-            guard saved else { return }
-            url = fetched
+        } else {
+            await MainActor.run { [weak self] in
+                self?.syncPrefetchedItems()
+            }
         }
+    }
+
+    /// 供外部（Library 冷启动等）提前预热单曲签名 URL：入池后 playCurrent 直接命中，
+    /// 首曲播放省一次网络往返。不触发封面/歌词预热（避免冷启动做太多无用功）。
+    func prewarm(_ t: Track) async {
+        await warmURLOnly(t)
+    }
+
+    /// 把「已缓存签名 URL 的后续歌曲」持续补进 AVQueuePlayer：
+    /// AVQueuePlayer 会自动预缓冲下一首的音频数据，顺序切歌时 advanceToNextItem 秒开。
+    /// 严格保持队列顺序——第一个 URL 未就绪就停止，避免插队导致播放顺序错乱；
+    /// 后续 URL 就绪时（warmURLOnly 回调）再继续补。引擎音效模式不操作 AVPlayer。
+    private func syncPrefetchedItems() {
+        guard !usingEngine, !queue.isEmpty, queue.indices.contains(currentIndex),
+              !player.items().isEmpty else { return }
+        guard let lastItem = player.items().last,
+              let lastId = Self.trackId(of: lastItem),
+              let lastIdx = queue.firstIndex(where: { $0.id == lastId }) else { return }
+        let existingIDs = player.items().compactMap { Self.trackId(of: $0) }
+        let end = min(lastIdx + 1 + prefetchAheadCount, queue.count)
+        var inserted = [String]()
+        for i in (lastIdx + 1)..<end {
+            let t = queue[i]
+            guard let url = signedURLPool[t.id] else { break }
+            guard !inserted.contains(t.id), !existingIDs.contains(t.id) else { continue }
+            let item = AVPlayerItem(url: url)
+            item.preferredForwardBufferDuration = 30
+            Self.setTrackId(t.id, on: item)
+            player.insert(item, after: nil)
+            inserted.append(t.id)
+        }
+    }
+
+    /// 预热单首：URL 已由阶段1入池，这里用 AVURLAsset 预热连接/资源头部（只拉前一小部分 metadata），
+    /// 再预取封面/歌词/主色到内存缓存，切到它时封面立即显示、歌词区直接命中。
+    private func warmMetadata(for t: Track) async {
+        guard !Task.isCancelled else { return }
+        let url: URL? = await MainActor.run { [weak self] in self?.signedURLPool[t.id] }
         guard let url, !Task.isCancelled else { return }
-        // 2) 预热连接/资源头部：AVURLAsset 异步加载关键属性会建立连接并读取头部/metadata
-        //    （mp3/flac 拉 header+metadata；m3u8 拉 playlist），只占“前一小部分”，不整首下载。
         let asset = AVURLAsset(url: url)
         _ = try? await asset.load(.duration, .isPlayable)
-        // 3) 像音乐预加载一样：同步预取该首的封面图 + 歌词到内存缓存，
-        //    切到它时封面立即显示、歌词区直接命中，无需再等网络。
+        guard !Task.isCancelled else { return }
         await prefetchCover(for: t)
         await prefetchLyric(for: t)
-        // 4) 预提取封面主色：切歌时播放页背景/侧边栏立即有主色，无需现算
         await prefetchPalette(for: t)
     }
 
