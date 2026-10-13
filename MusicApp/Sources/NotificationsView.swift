@@ -102,26 +102,21 @@ struct NotificationsView: View {
 
     private func notifRow(_ n: API.Notification) -> some View {
         Button {
-            // 点击通知：如果关联了歌曲，直接播放
             if let trackId = n.trackId, !trackId.isEmpty {
                 Task { await playTrack(trackId) }
             }
         } label: {
             HStack(spacing: 12) {
-                // 图标
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(iconBgColor(for: n.type))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: iconName(for: n.type))
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(iconFgColor(for: n.type))
-                }
+                // 点赞者头像
+                avatarView(for: n)
 
-                // 文字
+                // 歌曲封面
+                albumCover(for: n)
+
+                // 文字内容
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(n.title ?? "通知")
+                        Text(n.fromUser ?? "有人")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(Theme.textPrimary)
                         Spacer()
@@ -131,12 +126,10 @@ struct NotificationsView: View {
                                 .frame(width: 8, height: 8)
                         }
                     }
-                    if let content = n.content, !content.isEmpty {
-                        Text(content)
-                            .font(.system(size: 13))
-                            .foregroundColor(Theme.textSecondary)
-                            .lineLimit(2)
-                    }
+                    Text(notificationText(for: n))
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(2)
                     Text(timeString(n.created))
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textTertiary)
@@ -151,6 +144,56 @@ struct NotificationsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - 头像/封面/文字组件
+
+    /// 点赞者头像（圆形，带默认占位）
+    @ViewBuilder
+    private func avatarView(for n: API.Notification) -> some View {
+        ZStack {
+            Circle()
+                .fill(Theme.accentSoft)
+                .frame(width: 44, height: 44)
+            Image(systemName: "person.fill")
+                .font(.system(size: 18))
+                .foregroundColor(Theme.accent)
+        }
+        .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 0.5))
+    }
+
+    /// 歌曲封面（方形圆角）
+    @ViewBuilder
+    private func albumCover(for n: API.Notification) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Theme.card)
+                .frame(width: 48, height: 48)
+            Image(systemName: "music.note")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Theme.cardBorder, lineWidth: 0.5)
+        )
+    }
+
+    /// 根据通知类型生成描述文字
+    private func notificationText(for n: API.Notification) -> String {
+        let trackName = n.trackTitle ?? "未知歌曲"
+        switch n.type {
+        case "like":
+            return "赞了你的《\(trackName)》"
+        case "comment":
+            return "评论了你的《\(trackName)》"
+        case "share":
+            return "分享了你的《\(trackName)》"
+        case "official":
+            return n.content ?? ""
+        default:
+            return n.content ?? ""
+        }
     }
 
     // MARK: - 辅助
