@@ -20,13 +20,13 @@ struct NotificationsView: View {
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    // 官方通知（固定第一条）
-                    if let msg = officialMsg {
-                        officialRow(msg)
-                        Divider().background(Theme.cardBorder).padding(.leading, 76)
+                    // 官方通知（固定第一分区）
+                    if officialMsg != nil {
+                        sectionHeader("官方通知")
+                        officialRow(msg: officialMsg!)
                     }
 
-                    // 互动通知列表
+                    // 互动通知分区
                     if isLoading && notifications.isEmpty && officialMsg == nil {
                         ProgressView()
                             .tint(Theme.accent)
@@ -34,10 +34,11 @@ struct NotificationsView: View {
                     } else if loadFailed && notifications.isEmpty {
                         emptyHint("加载失败，下拉重试")
                     } else if notifications.isEmpty && officialMsg != nil {
-                        // 只有官方通知，没有互动通知
+                        sectionHeader("互动通知")
                     } else if notifications.isEmpty {
                         emptyHint("暂无互动通知\n有人赞你、评论你时会出现在这里")
                     } else {
+                        sectionHeader("互动通知")
                         ForEach(notifications) { n in
                             interactionRow(n)
                         }
@@ -62,39 +63,46 @@ struct NotificationsView: View {
         .task { await loadAll() }
     }
 
+    // MARK: - 分区小标题
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(Theme.textTertiary)
+            .padding(.top, 18)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // MARK: - 官方通知行（列表第一项）
 
-    private func officialRow(_ msg: API.OfficialMessage) -> some View {
+    private func officialRow(msg: API.OfficialMessage) -> some View {
         Button {
             showOfficialChat = true
         } label: {
             HStack(spacing: 12) {
-                // APP Logo（圆角方形头像）
+                // APP Logo（圆形头像，更克制）
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    Circle()
                         .fill(Theme.card)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 40, height: 40)
                     Image("AppLogo")
                         .resizable()
                         .scaledToFill()
-                        .frame(width: 48, height: 48)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .frame(width: 40, height: 40)
+                        .clipShape(Circle())
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Theme.cardBorder, lineWidth: 0.5)
-                )
 
                 // 名称 + 最新内容预览
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack {
+                    HStack(spacing: 6) {
                         Text("流萤音乐官方")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(Theme.textPrimary)
-                        Spacer()
                         Text(timeString(msg.created))
                             .font(.system(size: 11))
                             .foregroundColor(Theme.textTertiary)
+                        Spacer()
                     }
                     Text(msg.content)
                         .font(.system(size: 13))
@@ -102,10 +110,10 @@ struct NotificationsView: View {
                         .lineLimit(1)
                 }
 
-                // 右箭头
+                // 右箭头（轻量化）
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Theme.textTertiary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Theme.textTertiary.opacity(0.6))
             }
             .padding(.vertical, 12)
             .contentShape(Rectangle())
@@ -113,31 +121,33 @@ struct NotificationsView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 互动通知行（头像 + 封面 + 文字）
+    // MARK: - 互动通知行（头像 + 文字 + 封面）
 
     private func interactionRow(_ n: API.Notification) -> some View {
         Button {
             Task { await handleTap(n) }
         } label: {
             HStack(spacing: 12) {
-                // 点赞者头像
+                // 点赞者头像（右上角未读角标）
                 avatarView(for: n)
-
-                // 歌曲封面
-                albumCover(for: n)
+                    .overlay(alignment: .topTrailing) {
+                        if n.unread {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 7, height: 7)
+                                .overlay(
+                                    Circle().stroke(Theme.background, lineWidth: 1.5)
+                                )
+                        }
+                    }
 
                 // 文字内容
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
                         Text(n.fromUser ?? "有人")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(Theme.textPrimary)
                         Spacer()
-                        if n.unread {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 8, height: 8)
-                        }
                     }
                     Text(notificationText(for: n))
                         .font(.system(size: 13))
@@ -147,11 +157,16 @@ struct NotificationsView: View {
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textTertiary)
                 }
+
+                Spacer(minLength: 0)
+
+                // 歌曲封面（右侧，尺寸与头像一致更统一）
+                albumCover(for: n)
             }
             .padding(.vertical, 12)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(Theme.cardBorder)
+                    .fill(Theme.cardBorder.opacity(0.6))
                     .frame(height: 0.5)
             }
             .contentShape(Rectangle())
@@ -170,22 +185,20 @@ struct NotificationsView: View {
                 title: n.fromUser ?? "",
                 placeholder: Circle().fill(Theme.accentSoft)
                     .overlay(Image(systemName: "person.fill")
-                        .font(.system(size: 18))
+                        .font(.system(size: 16))
                         .foregroundColor(Theme.accent))
             )
-            .frame(width: 44, height: 44)
+            .frame(width: 40, height: 40)
             .clipShape(Circle())
-            .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 0.5))
         } else {
             ZStack {
                 Circle()
                     .fill(Theme.accentSoft)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                 Image(systemName: "person.fill")
-                    .font(.system(size: 18))
+                    .font(.system(size: 16))
                     .foregroundColor(Theme.accent)
             }
-            .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 0.5))
         }
     }
 
@@ -193,16 +206,12 @@ struct NotificationsView: View {
     private func albumCover(for n: API.Notification) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.card)
-                .frame(width: 48, height: 48)
+                .fill(Theme.card.opacity(0.7))
+                .frame(width: 40, height: 40)
             Image(systemName: "music.note")
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundColor(Theme.textTertiary)
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Theme.cardBorder, lineWidth: 0.5)
-        )
     }
 
     private func notificationText(for n: API.Notification) -> String {
