@@ -681,11 +681,36 @@ private struct LiveLyricView: View {
                     progress: (scrubFraction ?? player.progress) * player.duration,
                     tint: tint
                 )
+            } else {
+                // 无歌词：歌词区显示「作者·歌手名」+「该歌曲暂无歌词」
+                // （视口高度与 LyricPreview 一致 = 60，布局稳定不跳动）
+                NoLyricPlaceholder(author: player.current?.displayAuthor ?? "未知歌手",
+                                   tint: tint)
             }
         } else if !lines.isEmpty {
             // 非当前页：固定占位保持布局稳定（LyricPreview 视口高度 = 26*2 + 8）
             Color.clear.frame(height: 60)
         }
+    }
+}
+
+/// 无歌词占位：作者·歌手名 + 「该歌曲暂无歌词」，替代原本空白歌词区。
+/// 高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
+private struct NoLyricPlaceholder: View {
+    let author: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("作者·\(author)")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundColor(tint.opacity(0.92))
+            Text("该歌曲暂无歌词")
+                .font(.system(size: 15))
+                .foregroundColor(tint.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 60, alignment: .top)
     }
 }
 
