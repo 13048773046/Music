@@ -681,11 +681,11 @@ final class PlayerManager: NSObject, ObservableObject {
                     if let rs = resumeSeconds {
                         // 无缝续播：先定位到切换前进度，再按原播放状态决定是否播放
                         if autoResume {
-                            self.player.seek(to: CMTime(seconds: rs)) { _ in
+                            self.player.seek(to: CMTime(seconds: rs, preferredTimescale: 600)) { _ in
                                 DispatchQueue.main.async { self.player.play() }
                             }
                         } else {
-                            self.player.seek(to: CMTime(seconds: rs))
+                            self.player.seek(to: CMTime(seconds: rs, preferredTimescale: 600))
                         }
                     } else if autoResume {
                         self.player.play()
