@@ -1726,8 +1726,14 @@ qsBtn.onclick=async()=>{
         if(d2.ok&&d2.authed){
           clearInterval(iv);tip.textContent='登录成功！';
           refreshQs();setTimeout(()=>document.body.removeChild(box),900);
+        }else if(d2.status==='expired'){
+          clearInterval(iv);tip.textContent=d2.message||'二维码已过期，请关闭后重新点扫码登录';
+        }else if(d2.status==='failed'){
+          clearInterval(iv);tip.textContent=d2.message||'登录失败，请关闭后重新扫码';
+        }else if(d2.status==='scanned'){
+          tip.textContent=d2.message||'已扫码，请在手机上确认登录';
         }else{
-          tip.textContent=d2.err||'等待扫码…';
+          tip.textContent='等待扫码…';
         }
       }catch(e){}
     },2500);

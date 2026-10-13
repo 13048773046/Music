@@ -155,17 +155,18 @@ const server = http.createServer((req, res) => {
     const token = q.get('token') || (qsPending && qsPending.token);
     if (!token) return bad(res, 'token required');
     Promise.race([
-      Promise.resolve().then(() => qs.pollQrLogin(token)),
+      Promise.resolve().then(() => qs.pollQrLogin('qishui', token)),
       new Promise((_, rej) => setTimeout(() => rej(new Error('等待扫码')), 10000)),
-    ]).then(() => {
+    ]).then((r) => {
       const st = qs.getAuthState();
-      if (st.authenticated) {
+      const status = (r && r.status) || 'waiting';
+      if (st.authenticated || status === 'confirmed') {
         qsAuthed = true;
-        fs.writeFileSync(QS_SESSION_FILE, JSON.stringify(qs.exportSession()));
+        try { fs.writeFileSync(QS_SESSION_FILE, JSON.stringify(qs.exportSession())); } catch (_e) {}
         qsPending = null;
       }
-      return json(res, 200, { ok: true, authed: qsAuthed });
-    }).catch(e => json(res, 200, { ok: false, authed: qsAuthed, err: '等待扫码' }));
+      return json(res, 200, { ok: true, authed: qsAuthed, status, message: (r && r.message) || '' });
+    }).catch(e => json(res, 200, { ok: false, authed: qsAuthed, status: 'error', err: '等待扫码' }));
     return;
   }
 
