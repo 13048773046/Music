@@ -1202,6 +1202,42 @@ REC_HOT_TOP = 60               # 热度路先取全局热度前 N 名再进入�
 _rec_seq_lock = threading.Lock()
 _rec_seq_state = {}
 
+# 推送历史去重：3 小时内已推送过的歌曲不重复推（按用户滑动窗口，窗口自然过期即「3 小时重置一次」）
+REC_PUSH_WINDOW = 3 * 3600         # 同一首歌 3 小时内不再重复推送
+_rec_push_lock = threading.Lock()
+_rec_pushed = {}                   # uid -> {track_id: last_push_ts}
+
+
+def _rec_recent_pushed(viewer_id, now):
+    """返回该用户 3 小时内已推送过的歌曲 id 集合（顺带清理过期记录）。"""
+    key = viewer_id or "anon"
+    with _rec_push_lock:
+        rec = _rec_pushed.get(key)
+        if not rec:
+            return set()
+        cutoff = now - REC_PUSH_WINDOW
+        recent = {tid for tid, ts in rec.items() if ts > cutoff}
+        if len(recent) != len(rec):
+            rec = {tid: ts for tid, ts in rec.items() if ts > cutoff}
+            _rec_pushed[key] = rec
+        # 全局兜底：用户数过多时清掉整批已过期的用户，防内存膨胀
+        if len(_rec_pushed) > 5000:
+            for k, v in list(_rec_pushed.items()):
+                if not v or now - max(v.values()) > REC_PUSH_WINDOW:
+                    _rec_pushed.pop(k, None)
+        return recent
+
+
+def _rec_remember_pushed(viewer_id, track_ids, now):
+    """记录一批刚刚推送的歌曲（覆盖时间戳），供 3 小时内去重。"""
+    if not track_ids:
+        return
+    key = viewer_id or "anon"
+    with _rec_push_lock:
+        rec = _rec_pushed.setdefault(key, {})
+        for tid in track_ids:
+            rec[tid] = now
+
 
 def _rec_next_seq(viewer_id, bucket, now, fresh=False):
     """返回 (seq, rnd)：时间桶 + 会话内批次轮换。
@@ -1277,7 +1313,7 @@ def _rec_reason(sources):
     return "推荐"
 
 
-def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None):
+def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pushed=None):
     """多路召回 → 加权融合 → MMR 重排，返回推荐 (歌曲id, 推荐理由) 列表（≤20，去重、排除本人上传与 exclude）。
 
     exclude: 已推荐过的歌曲 id 集合（推荐流无限续推时防重复推荐同一批）。
@@ -1286,6 +1322,7 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None):
     rnd: 批次随机源（random.Random 实例，种子=用户|时间桶|批次序号）——
          同一时间桶内的主批稳定可复现，会话内连续获取轮换不同批；
          不传时回退全局 random（兼容直接调用场景）。
+    pushed: 3 小时内已推送过的歌曲 id 集合——本次推荐直接排除，不重复推送。
     viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底。
     """
     now = time.time()
@@ -1303,6 +1340,8 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None):
 
     def _add(tid, score, source, artist="", album="", title="", genre=""):
         if not tid or tid in exclude_self:
+            return
+        if pushed and tid in pushed:   # 3 小时内已推送过：跳过，不重复推
             return
         it = cand.setdefault(tid, {"score": 0.0, "sources": set(),
                                    "artist": artist or "", "album": album or "",
@@ -3677,13 +3716,17 @@ async function delNotify(id){
                     _excl = {x for x in _ex_s.split(",") if x}
                 # fresh：长时间重开 App 的新鲜会话——加大随机扰动/探索权重，重开不固定重复
                 _fresh = (qs.get("fresh", ["0"])[0] or "").strip() in ("1", "true")
+                _now = time.time()
+                # 3 小时推送去重：取该用户 3 小时内已推送过的歌，本次不再推送
+                _pushed = _rec_recent_pushed(viewer_id, _now)
                 # 批次轮换：时间桶（同桶主批稳定可复现）+ 会话内序号递增（每次获取不同批）
-                _bucket = int(time.time() // REC_BUCKET_SECONDS)
-                _seq, _rnd = _rec_next_seq(viewer_id, _bucket, time.time(), fresh=_fresh)
-                log.info("recommend uid=%s bucket=%d seq=%d fresh=%s",
-                         viewer_id or "-", _bucket, _seq, _fresh)
+                _bucket = int(_now // REC_BUCKET_SECONDS)
+                _seq, _rnd = _rec_next_seq(viewer_id, _bucket, _now, fresh=_fresh)
+                log.info("recommend uid=%s bucket=%d seq=%d fresh=%s pushed=%d",
+                         viewer_id or "-", _bucket, _seq, _fresh, len(_pushed))
                 # 多路召回 + 加权融合 + MMR 重排（算法见 build_recommendations）
-                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl, fresh=_fresh, rnd=_rnd)
+                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl, fresh=_fresh, rnd=_rnd,
+                                                  pushed=_pushed)
                 chosen = [tid for tid, _ in rec_pairs]
                 reason_map = dict(rec_pairs)
                 if not chosen:
@@ -3734,6 +3777,8 @@ async function delNotify(id){
                             "isLiked": bool(r[16])} for r in trows]
                 order = {tid: i for i, tid in enumerate(chosen)}
                 merged.sort(key=lambda x: order.get(x["id"], 999))
+                # 记录本次推送的歌曲：3 小时内不再重复推送（滑动窗口自然过期）
+                _rec_remember_pushed(viewer_id, chosen, _now)
                 self._json(200, merged)
                 return
 
