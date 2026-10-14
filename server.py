@@ -1108,9 +1108,12 @@ REC_FRESH_DAYS = 14            # 新歌窗口：最近 N 天入库视为新歌
 REC_MAX_PER_ARTIST = 3         # 重排后同一歌手最多保留几首
 REC_MAX_PER_GENRE = 5          # 重排后同一风格最多保留几首
 REC_MMR_LAMBDA = 0.7           # MMR 相关分权重（1−λ 为多样性权重）
-REC_NOISE = 0.12               # 融合分随机扰动幅度（探索，避免结果完全固定）
+REC_NOISE = 0.6                # 融合分随机扰动幅度（探索，避免结果完全固定；fresh 会话 ×3）
 REC_TITLE_SIM_THRESHOLD = 0.8  # 歌名相似度阈值：与已选推荐歌名相似 ≥ 此值（如 80%）则跳过，
                                # 保证同一批推荐里不出现歌名高度相似的歌（90% 相似更不会同批推送）
+REC_BUCKET_SECONDS = int(os.environ.get("MUSIC_REC_BUCKET", str(6 * 3600)))  # 时间桶：同桶主批稳定可复现，跨桶新主批
+REC_SESSION_IDLE = int(os.environ.get("MUSIC_REC_IDLE", str(30 * 60)))        # 距上次请求超此时长视为新会话 → 批次归零
+REC_EXPLORE_POOL = 120         # 探索路候选池大小（按批次种子洗牌截断，替代 SQL RANDOM()）
 REC_LIMITS = {                 # 每路候选上限
     "behavior": 40, "artist": 30, "genre": 30,
     "hot": 20, "fresh": 10, "explore": 30,
@@ -1120,6 +1123,34 @@ REC_WEIGHTS = {                # 各路权重
     "hot": 1.2, "fresh": 2.0, "explore": 0.6,
 }
 REC_HOT_TOP = 60               # 热度路先取全局热度前 N 名再进入候选
+
+# 推荐批次状态：key=f"{user_id}|{bucket}" → [last_ts, seq]
+# 会话内连续获取批次序号递增（每次不同批）；距上次请求超 REC_SESSION_IDLE / 跨桶 / fresh → 归零回到主批
+_rec_seq_lock = threading.Lock()
+_rec_seq_state = {}
+
+
+def _rec_next_seq(viewer_id, bucket, now, fresh=False):
+    """返回 (seq, rnd)：时间桶 + 会话内批次轮换。
+
+    同桶主批（seq=0）由 (user, bucket) 种子确定 → 可复现；
+    会话内连续请求 seq 递增 → 每批结果不同（不固定同一批）；
+    距上次请求超时 / 跨桶 / fresh 会话 → seq 归零（回到该桶稳定主批）。
+    """
+    key = "%s|%d" % (viewer_id or "anon", bucket)
+    with _rec_seq_lock:
+        if len(_rec_seq_state) > 5000:
+            for k, v in list(_rec_seq_state.items()):
+                if now - v[0] > max(REC_SESSION_IDLE * 4, 3600):
+                    _rec_seq_state.pop(k, None)
+        st = _rec_seq_state.get(key)
+        if fresh or st is None or now - st[0] > REC_SESSION_IDLE:
+            seq = 0
+        else:
+            seq = st[1] + 1
+        _rec_seq_state[key] = [now, seq]
+    rnd = random.Random("%s|%d|%d" % (viewer_id or "anon", bucket, seq))
+    return seq, rnd
 
 
 def _rec_pieces(s):
@@ -1172,15 +1203,19 @@ def _rec_reason(sources):
     return "推荐"
 
 
-def build_recommendations(c, viewer_id, exclude=None, fresh=False):
+def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None):
     """多路召回 → 加权融合 → MMR 重排，返回推荐 (歌曲id, 推荐理由) 列表（≤20，去重、排除本人上传与 exclude）。
 
     exclude: 已推荐过的歌曲 id 集合（推荐流无限续推时防重复推荐同一批）。
     fresh: 长时间重开 App 的「新鲜会话」标记——加大随机扰动并提高探索路权重，
            让重新开始的一批推荐明显不同于上次（不固定重复同一批）。
+    rnd: 批次随机源（random.Random 实例，种子=用户|时间桶|批次序号）——
+         同一时间桶内的主批稳定可复现，会话内连续获取轮换不同批；
+         不传时回退全局 random（兼容直接调用场景）。
     viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底。
     """
     now = time.time()
+    rnd = rnd or random
     # 新鲜重开：随机扰动 ×3、探索路权重 ×2，结果带随机性又不脱离行为画像
     noise = REC_NOISE * 3 if fresh else REC_NOISE
     w_explore = REC_WEIGHTS["explore"] * 2.0 if fresh else REC_WEIGHTS["explore"]
@@ -1368,14 +1403,17 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False):
         _add(rid, REC_WEIGHTS["fresh"], "fresh", rartist, ralbum, rtitle, rgenre)
 
     # ---------- 路 5：随机探索召回（保证新内容被看到，权重最低） ----------
+    # 候选池按批次种子洗牌截断（替代 SQL RANDOM()）：同批次可复现、不同批次轮换
     explore = c.execute(
         "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
         " SELECT id,title,artist,album,genre FROM tracks WHERE offline=0 AND user_id!=?"
         " UNION ALL"
         " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0"
-        ") ORDER BY RANDOM() LIMIT ?",
-        (viewer_id or "", REC_LIMITS["explore"])).fetchall()
-    for rid, rtitle, rartist, ralbum, rgenre in explore:
+        ") ORDER BY id LIMIT ?",
+        (viewer_id or "", REC_EXPLORE_POOL)).fetchall()
+    explore = list(explore)
+    rnd.shuffle(explore)
+    for rid, rtitle, rartist, ralbum, rgenre in explore[:REC_LIMITS["explore"]]:
         if rid in cand or rid in avoid:
             continue
         _add(rid, w_explore, "explore", rartist, ralbum, rtitle, rgenre)
@@ -1398,7 +1436,7 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False):
                 continue
             div = max((_rec_sim(it, r) for _, r in ranked), default=0.0) if ranked else 0.0
             s = REC_MMR_LAMBDA * it["score"] - (1.0 - REC_MMR_LAMBDA) * div \
-                + random.uniform(0, noise)
+                + rnd.uniform(0, noise)
             if s > best_score:
                 best_score, best_i = s, i
         if best_i < 0:
@@ -3485,8 +3523,13 @@ async function delNotify(id){
                     _excl = {x for x in _ex_s.split(",") if x}
                 # fresh：长时间重开 App 的新鲜会话——加大随机扰动/探索权重，重开不固定重复
                 _fresh = (qs.get("fresh", ["0"])[0] or "").strip() in ("1", "true")
+                # 批次轮换：时间桶（同桶主批稳定可复现）+ 会话内序号递增（每次获取不同批）
+                _bucket = int(time.time() // REC_BUCKET_SECONDS)
+                _seq, _rnd = _rec_next_seq(viewer_id, _bucket, time.time(), fresh=_fresh)
+                log.info("recommend uid=%s bucket=%d seq=%d fresh=%s",
+                         viewer_id or "-", _bucket, _seq, _fresh)
                 # 多路召回 + 加权融合 + MMR 重排（算法见 build_recommendations）
-                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl, fresh=_fresh)
+                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl, fresh=_fresh, rnd=_rnd)
                 chosen = [tid for tid, _ in rec_pairs]
                 reason_map = dict(rec_pairs)
                 if not chosen:
