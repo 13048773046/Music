@@ -730,6 +730,53 @@ def _admin_token():
     return os.environ.get("ADMIN_TOKEN", "liuying-admin-8f3a")
 
 
+# ---------- 官网展示配置（admin.html 可改，landing.html 动态读取） ----------
+SITE_CONFIG_FILE = os.path.join(ROOT, "site_config.json")
+_SITE_CONFIG_DEFAULTS = {
+    "site_name": "流萤音乐",
+    "ios_url": "",
+    "android_url": "",
+    "hero_subtitle": "为你精心挑选的音乐，流式播放不等待，逐字歌词跟着唱。",
+}
+
+def _read_site_config():
+    """读官网配置 + 实时歌曲总数；文件不存在时用默认值。"""
+    cfg = dict(_SITE_CONFIG_DEFAULTS)
+    try:
+        with open(SITE_CONFIG_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict):
+            cfg.update({k: v for k, v in saved.items() if k in _SITE_CONFIG_DEFAULTS})
+    except Exception:
+        pass
+    # 实时歌曲总数（用户上传 + 采集，排除 offline）
+    try:
+        c = db()
+        n1 = c.execute("SELECT COUNT(*) FROM tracks WHERE offline=0").fetchone()[0]
+        n2 = c.execute("SELECT COUNT(*) FROM collected_tracks WHERE offline=0").fetchone()[0]
+        c.close()
+        cfg["track_total"] = int(n1 or 0) + int(n2 or 0)
+    except Exception:
+        cfg["track_total"] = 0
+    return cfg
+
+def _write_site_config(patch):
+    cfg = dict(_SITE_CONFIG_DEFAULTS)
+    try:
+        with open(SITE_CONFIG_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict):
+            cfg.update(saved)
+    except Exception:
+        pass
+    for k, v in (patch or {}).items():
+        if k in _SITE_CONFIG_DEFAULTS and isinstance(v, str):
+            cfg[k] = v.strip()
+    with open(SITE_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    return cfg
+
+
 def safe_file_path(fname):
     """仅允许 FILES 目录内的文件，防路径穿越（纵深防御）。"""
     if not fname:
@@ -1855,6 +1902,11 @@ async function delNotify(id){
                                  "time": time.strftime("%Y-%m-%d %H:%M:%S")})
                 return
 
+            # 官网公开配置：网站名/下载链接 + 实时歌曲总数（无需登录）
+            if u.path == "/api/site-config":
+                self._json(200, _read_site_config())
+                return
+
             # 公告通知：App 启动时请求最新一条 active 公告（type=announcement）
             if u.path == "/api/announcement":
                 c = db()
@@ -2871,6 +2923,7 @@ td.act button.gray{background:#2a2a2e;color:#ddd}
 <button data-t="comments" onclick="tab('comments')">评论管理</button>
 <button data-t="ann" onclick="tab('ann')">公告管理</button>
 <button data-t="notify" onclick="tab('notify')">官方通知</button>
+<button data-t="site" onclick="tab('site')">官网设置</button>
 </div>
 <div class="main">
 <div class="topbar"><h1 id="title">仪表盘</h1><div><button style="margin-right:8px" onclick="changePwd()">修改密码</button><button onclick="logout()">退出</button></div></div>
@@ -2906,9 +2959,9 @@ function login(){
 function logout(){token='';localStorage.removeItem('admin_token');location.reload()}
 function tab(t){
   document.querySelectorAll('.side button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
-  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理',ann:'公告管理',notify:'官方通知'};
+  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理',ann:'公告管理',notify:'官方通知',site:'官网设置'};
   document.getElementById('title').textContent=titles[t];
-  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();if(t==='ann')loadAnn();if(t==='notify')loadNotify();
+  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();if(t==='ann')loadAnn();if(t==='notify')loadNotify();if(t==='site')loadSite();
 }
 let curPage={tracks:1,collected:1,comments:1};
 let curTracks=[],curCols=[];
@@ -2921,6 +2974,34 @@ async function loadDash(){
     '<div class="card"><div class="n">'+d.collected+'</div><div class="l">采集歌曲</div></div>'+
     '<div class="card"><div class="n">'+d.plays+'</div><div class="l">累计播放次数</div></div>'+
     '</div>';
+}
+// 官网设置：网站名/副标题/下载链接（landing.html 动态读取）
+async function loadSite(){
+  const c=await (await fetch('/music/api/site-config')).json();
+  const fld=(id,label,val,ph)=>(
+    '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">'+label+'</label>'+
+    '<input id="'+id+'" value="'+esc(val||'')+'" placeholder="'+ph+'" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>');
+  document.getElementById('content').innerHTML=
+  '<div style="max-width:640px">'+
+  '<div style="background:#1a1a1c;padding:24px;border-radius:12px">'+
+  '<h3 style="margin-bottom:6px;font-size:16px">官网展示配置</h3>'+
+  '<p style="font-size:12px;color:#888;margin-bottom:18px">修改后即时生效到官网首页（歌曲总数为数据库实时统计，无需填写）。</p>'+
+  fld('siteName','网站名称',c.site_name,'流萤音乐')+
+  fld('heroSub','首页副标题',c.hero_subtitle,'一句话 slogan')+
+  fld('iosUrl','iOS 下载链接',c.ios_url,'https://...ipa 或 TestFlight 地址')+
+  fld('androidUrl','Android 下载链接',c.android_url,'https://...apk')+
+  '<button class="mbtn m-save" onclick="saveSite()">保存</button>'+
+  '<span id="siteTip" style="margin-left:12px;font-size:13px"></span>'+
+  '</div></div>';
+}
+async function saveSite(){
+  const body={site_name:document.getElementById('siteName').value,
+              hero_subtitle:document.getElementById('heroSub').value,
+              ios_url:document.getElementById('iosUrl').value,
+              android_url:document.getElementById('androidUrl').value};
+  await api('/site-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('siteTip').textContent='已保存 ✓';
+  document.getElementById('siteTip').style.color='#4CD9A5';
 }
 async function loadUsers(){
   const d=await api('/users');
@@ -3994,6 +4075,20 @@ async function delNotify(id){
 
             # ---------- 后台管理：编辑 / 上下架 ----------
             ADMIN_TOKEN = _admin_token()
+
+            # 官网展示配置保存：网站名/下载链接/副标题
+            if u.path == "/api/admin/site-config":
+                if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 8 * 1024))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                cfg = _write_site_config(data)
+                self._json(200, {"ok": True, "config": cfg})
+                return
+
             if u.path == "/api/admin/announcement":
                 if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:
                     self._err(401, "unauthorized"); return
