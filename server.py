@@ -875,6 +875,292 @@ def _track_owner(c, tid):
         return None, None
 
 
+# ---------------- 个性化推荐（多路召回 + 加权融合 + MMR 重排） ----------------
+# 相比旧版「单路行为关键词/genre 匹配 + 随机补齐」的升级：
+#   1) 多路召回：行为相似 / 常听歌手 / 风格 / 全局热度 / 新歌新鲜度 / 随机探索
+#   2) 加权融合：各路打分乘权重后叠加，再叠小随机扰动（保证探索）
+#   3) MMR 重排：按「相关分 − 与已选歌的相似度」逐步选歌，并限制同歌手/同风格数量，
+#      让最终 20 首既贴合口味又多样（主流音乐 App 推送形态）
+
+REC_BUDGET = 20                # 最终推荐数量
+REC_FRESH_DAYS = 14            # 新歌窗口：最近 N 天入库视为新歌
+REC_MAX_PER_ARTIST = 3         # 重排后同一歌手最多保留几首
+REC_MAX_PER_GENRE = 5          # 重排后同一风格最多保留几首
+REC_MMR_LAMBDA = 0.7           # MMR 相关分权重（1−λ 为多样性权重）
+REC_NOISE = 0.12               # 融合分随机扰动幅度（探索，避免结果完全固定）
+REC_LIMITS = {                 # 每路候选上限
+    "behavior": 40, "artist": 30, "genre": 30,
+    "hot": 20, "fresh": 10, "explore": 30,
+}
+REC_WEIGHTS = {                # 各路权重
+    "behavior": 5.0, "artist": 4.0, "genre": 3.0,
+    "hot": 1.2, "fresh": 2.0, "explore": 0.6,
+}
+REC_HOT_TOP = 60               # 热度路先取全局热度前 N 名再进入候选
+
+
+def _rec_pieces(s):
+    """歌名/专辑关键词片段（去括号、按常见分隔符切分）"""
+    s = re.sub(r"[（(【\[].*?[)）】\]]", "", s or "")
+    return [p.strip() for p in re.split(r"[·\-–/、，,]", s) if len(p.strip()) >= 2]
+
+
+def _rec_sim(a, b):
+    """两首歌的相似度 0..1（MMR 多样性用）：
+    歌手一致 0.7，专辑一致 0.3，歌名关键词有重合 0.2"""
+    sim = 0.0
+    if a["artist"] and a["artist"] == b["artist"]:
+        sim += 0.7
+    if a["album"] and a["album"] == b["album"]:
+        sim += 0.3
+    ka, kb = set(_rec_pieces(a["title"])), set(_rec_pieces(b["title"]))
+    if ka and kb and (ka & kb):
+        sim += 0.2
+    return min(sim, 1.0)
+
+
+def _rec_reason(sources):
+    """从召回来源集合推导推荐理由标签：按「可解释性」优先级取一路——
+    常听歌手 > 同风格 > 相似歌曲 > 新歌 > 热门 > 为你探索
+    （不用权重：行为相似路常因歌手关键词命中而覆盖歌手路，权重优先会让"常听歌手"几乎不出现）"""
+    _labels = {"artist": "常听歌手", "genre": "同风格", "behavior": "相似歌曲",
+               "fresh": "新歌", "hot": "热门", "explore": "为你探索"}
+    for s in ("artist", "genre", "behavior", "fresh", "hot", "explore"):
+        if s in sources:
+            return _labels[s]
+    return "推荐"
+
+
+def build_recommendations(c, viewer_id):
+    """多路召回 → 加权融合 → MMR 重排，返回推荐歌曲 id 列表（≤20，已去重、已排除本人上传）。
+
+    viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底，
+    保证冷启动也有内容可推。
+    """
+    now = time.time()
+    exclude_self = {r[0] for r in c.execute(
+        "SELECT id FROM tracks WHERE user_id=?", (viewer_id or "",)).fetchall()}
+
+    # 候选池：tid -> {score, sources, artist, album, title, genre}
+    cand = {}
+
+    def _add(tid, score, source, artist="", album="", title="", genre=""):
+        if not tid or tid in exclude_self:
+            return
+        it = cand.setdefault(tid, {"score": 0.0, "sources": set(),
+                                   "artist": artist or "", "album": album or "",
+                                   "title": title or "", "genre": genre or ""})
+        it["score"] += score
+        it["sources"].add(source)
+
+    # ---------- 0) 行为画像：事件打分 + 高分歌 → 关键词 / 风格 / 常听歌手 ----------
+    base = {}
+    kw_list = []
+    genre_set = {}
+    artist_hist = {}
+    avoid = set()
+    if viewer_id:
+        evs = c.execute(
+            "SELECT track_id,event,value,meta,created FROM behavior_events"
+            " WHERE user_id=? ORDER BY created DESC LIMIT 800", (viewer_id,)).fetchall()
+        lst = {}
+        for tid, event, value, meta, created in evs:
+            age_days = max(now - float(created or now), 0) / 86400.0
+            decay = 1.0 if age_days <= 30 else 0.5
+            if event == "listen":
+                try:
+                    m = json.loads(meta or "{}")
+                except Exception:
+                    m = {}
+                frac = float(m.get("fraction") or 0)
+                plays = int(m.get("plays") or 0)
+                a = lst.setdefault(tid, {"sec": 0.0, "frac": 0.0, "plays": 0, "decay": decay})
+                a["sec"] += max(float(value or 0), 0.0)
+                a["frac"] = max(a["frac"], frac)
+                a["plays"] = max(a["plays"], plays)
+                a["decay"] = max(a["decay"], decay)
+            else:
+                w = {"like": 3.0 if float(value or 0) > 0 else -1.0,
+                     "comment_open": 0.4, "comment": 2.0, "share": 2.0,
+                     "search": 1.0, "skip": -0.5}.get(event)
+                if w is None:
+                    continue
+                base[tid] = base.get(tid, 0.0) + w * decay
+        for tid, a in lst.items():
+            if a["frac"] >= 0.5 or a["plays"] >= 1:
+                w = 2.0 + min(a["sec"], 300.0) / 300.0
+                if a["plays"] >= 2:
+                    w += 0.5
+                if a["frac"] >= 0.9:
+                    w += 0.5
+                base[tid] = base.get(tid, 0.0) + w * a["decay"]
+        # 已强互动的歌曲不重复推荐（只用它提取特征）
+        avoid = {tid for tid, sc in base.items() if sc >= 2.0}
+        top = sorted(base.items(), key=lambda kv: -kv[1])[:6]
+        for tid, sc in top:
+            title = artist = album = genre = ""
+            # 优先用行为事件里的歌曲信息快照（歌被下架/删除也能提取特征）
+            _ti = c.execute(
+                "SELECT track_info FROM behavior_events WHERE user_id=? AND track_id=?"
+                " AND track_info!='' ORDER BY created DESC LIMIT 1", (viewer_id, tid)).fetchone()
+            if _ti and _ti[0]:
+                try:
+                    _info = json.loads(_ti[0])
+                    title = _info.get("title") or ""
+                    artist = _info.get("artist") or ""
+                    album = _info.get("album") or ""
+                except Exception:
+                    pass
+            if not title and not artist and not album:
+                row = c.execute("SELECT title,artist,album,genre FROM tracks WHERE id=?", (tid,)).fetchone()
+                if not row:
+                    row = c.execute("SELECT title,artist,album,genre FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                if not row:
+                    continue
+                title, artist, album, genre = row
+            for kw in (_rec_pieces(title)
+                       + ([artist] if artist and len(artist) >= 2 else [])
+                       + ([album] if album and len(album) >= 2 else [])):
+                if kw and kw not in ("未知歌手", "未命名"):
+                    kw_list.append((kw, sc))
+            if artist and len(artist) >= 2:
+                artist_hist[artist] = artist_hist.get(artist, 0.0) + sc
+            if genre:
+                for g in genre.split(","):
+                    g = g.strip()
+                    if g and g != "流行":
+                        genre_set[g] = genre_set.get(g, 0.0) + sc
+        # 用户主动搜索过的关键词也进入相似召回池
+        skws = c.execute(
+            "SELECT meta FROM behavior_events WHERE user_id=? AND event='search'"
+            " ORDER BY created DESC LIMIT 50", (viewer_id,)).fetchall()
+        for (meta_s,) in skws:
+            try:
+                _kw = str(json.loads(meta_s or "{}").get("kw") or "").strip()
+            except Exception:
+                _kw = ""
+            if len(_kw) >= 2:
+                kw_list.append((_kw, 1.0))
+
+    seen_kw, dedup = set(), []
+    for kw, sc in kw_list:
+        k = kw.lower()
+        if k in seen_kw:
+            continue
+        seen_kw.add(k)
+        dedup.append((kw, sc))
+
+    def _rows(where_sql, args, limit):
+        """上传 + 采集两张表统一查候选（offline=0，排除本人上传）"""
+        return c.execute(
+            "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
+            " SELECT id,title,artist,album,genre FROM tracks WHERE offline=0 AND user_id!=?"
+            " UNION ALL"
+            " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0"
+            ") WHERE " + where_sql + " LIMIT ?",
+            ([viewer_id or ""] + list(args) + [limit])).fetchall()
+
+    # ---------- 路 1：行为相似召回（关键词 + 风格精确匹配，排除已强互动） ----------
+    for kw, sc in dedup[:8]:
+        like = "%" + kw + "%"
+        for rid, rtitle, rartist, ralbum, rgenre in _rows(
+                "(title LIKE ? OR artist LIKE ? OR album LIKE ?)", [like, like, like],
+                REC_LIMITS["behavior"]):
+            if rid in avoid:
+                continue
+            _add(rid, sc * REC_WEIGHTS["behavior"], "behavior",
+                 rartist, ralbum, rtitle, rgenre)
+    for g, sc in sorted(genre_set.items(), key=lambda x: -x[1])[:5]:
+        like = "%" + g + "%"
+        for rid, rtitle, rartist, ralbum, rgenre in _rows(
+                "genre LIKE ?", [like], REC_LIMITS["genre"]):
+            if rid in avoid:
+                continue
+            _add(rid, sc * REC_WEIGHTS["genre"], "genre",
+                 rartist, ralbum, rtitle, rgenre)
+
+    # ---------- 路 2：常听歌手召回（行为里听得最多的歌手，整池召回） ----------
+    for artist, sc in sorted(artist_hist.items(), key=lambda x: -x[1])[:5]:
+        for rid, rtitle, rartist, ralbum, rgenre in _rows(
+                "artist = ?", [artist], REC_LIMITS["artist"]):
+            if rid in avoid:
+                continue
+            _add(rid, sc * REC_WEIGHTS["artist"], "artist",
+                 rartist, ralbum, rtitle, rgenre)
+
+    # ---------- 路 3：全局热度召回（大众口味兜底，权重较低） ----------
+    hot = c.execute(
+        "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
+        " SELECT id,title,artist,album,genre,play_count,like_count,share_count FROM tracks"
+        " WHERE offline=0 AND user_id!=?"
+        " UNION ALL"
+        " SELECT id,title,artist,album,genre,play_count,like_count,share_count FROM collected_tracks"
+        " WHERE offline=0"
+        ") ORDER BY (play_count + like_count*3 + share_count*5) DESC LIMIT ?",
+        (viewer_id or "", REC_HOT_TOP)).fetchall()
+    for rank, (rid, rtitle, rartist, ralbum, rgenre) in enumerate(hot):
+        if rank >= REC_LIMITS["hot"]:
+            break
+        if rid in avoid:
+            continue
+        _add(rid, max(0.0, 1.0 - rank / float(REC_HOT_TOP)) * REC_WEIGHTS["hot"],
+             "hot", rartist, ralbum, rtitle, rgenre)
+
+    # ---------- 路 4：新歌新鲜度召回（最近 REC_FRESH_DAYS 天入库，权重中等） ----------
+    fresh = c.execute(
+        "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
+        " SELECT id,title,artist,album,genre,created FROM tracks WHERE offline=0 AND user_id!=?"
+        " UNION ALL"
+        " SELECT id,title,artist,album,genre,created FROM collected_tracks WHERE offline=0"
+        ") WHERE created >= ? ORDER BY created DESC LIMIT ?",
+        (viewer_id or "", now - REC_FRESH_DAYS * 86400.0, REC_LIMITS["fresh"])).fetchall()
+    for rid, rtitle, rartist, ralbum, rgenre in fresh:
+        if rid in avoid:
+            continue
+        _add(rid, REC_WEIGHTS["fresh"], "fresh", rartist, ralbum, rtitle, rgenre)
+
+    # ---------- 路 5：随机探索召回（保证新内容被看到，权重最低） ----------
+    explore = c.execute(
+        "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
+        " SELECT id,title,artist,album,genre FROM tracks WHERE offline=0 AND user_id!=?"
+        " UNION ALL"
+        " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0"
+        ") ORDER BY RANDOM() LIMIT ?",
+        (viewer_id or "", REC_LIMITS["explore"])).fetchall()
+    for rid, rtitle, rartist, ralbum, rgenre in explore:
+        if rid in cand or rid in avoid:
+            continue
+        _add(rid, REC_WEIGHTS["explore"], "explore", rartist, ralbum, rtitle, rgenre)
+
+    # ---------- MMR 重排（相关分 − 与已选歌的相似度；同歌手/同风格设上限） ----------
+    pool = [(tid, it) for tid, it in cand.items()]
+    ranked = []
+    used_artist = {}
+    used_genre = {}
+    while len(ranked) < REC_BUDGET and pool:
+        best_i, best_score = -1, -1e18
+        for i, (tid, it) in enumerate(pool):
+            if it["artist"] and used_artist.get(it["artist"], 0) >= REC_MAX_PER_ARTIST:
+                continue
+            if it["genre"] and used_genre.get(it["genre"], 0) >= REC_MAX_PER_GENRE:
+                continue
+            div = max((_rec_sim(it, r) for _, r in ranked), default=0.0) if ranked else 0.0
+            s = REC_MMR_LAMBDA * it["score"] - (1.0 - REC_MMR_LAMBDA) * div \
+                + random.uniform(0, REC_NOISE)
+            if s > best_score:
+                best_score, best_i = s, i
+        if best_i < 0:
+            break
+        tid, it = pool.pop(best_i)
+        ranked.append((tid, it))
+        if it["artist"]:
+            used_artist[it["artist"]] = used_artist.get(it["artist"], 0) + 1
+        if it["genre"]:
+            used_genre[it["genre"]] = used_genre.get(it["genre"], 0) + 1
+    # 返回 (歌曲id, 推荐理由标签) 对；前端据此展示「为什么推荐这首歌」
+    return [(tid, _rec_reason(it["sources"])) for tid, it in ranked]
+
+
 # ---------------- HTTP ----------------
 
 class H(BaseHTTPRequestHandler):
@@ -2730,7 +3016,6 @@ async function delNotify(id){
                 self._json(200, out[:50])
                 return
 
-            # 个性化推荐：基于用户行为（点赞/评论/打开评论/分享/收听时长/搜索/跳过）推荐相关歌曲
             # 官方通知列表（用户端）
             if u.path == "/api/official-messages":
                 c = db()
@@ -2774,208 +3059,10 @@ async function delNotify(id){
                 tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if tok_uid:
                     viewer_id = tok_uid
-                now = time.time()
-                # —— 新歌刷新配置（个性化推送混入新歌）——
-                # 窗口：仅混入最近 N 天内上架/采集的歌曲，窗口随日期滚动，自然形成"时不时刷新"
-                # 数量：每次推荐最多混入的新歌数（推荐总量 20 首，默认约占 20%）
-                # 概率：每次请求按该概率触发混入，避免新歌池较小时每次都重复同一批
-                NEW_SONG_WINDOW_DAYS = 14
-                NEW_SONG_MIX_COUNT = 4
-                NEW_SONG_MIX_PROB = 0.75
-                # 1) 行为打分：事件权重 + 收听阈值/时长/重复 + 时间衰减
-                #    收听规则：进度 < 0.5 不记录；>= 0.5 有效收听（满分约 +2.5）
-                #    同一首歌完整听过多遍（plays>=2）额外加成
-                base, lst = {}, {}
-                if viewer_id:
-                    evs = c.execute(
-                        "SELECT track_id,event,value,meta,created FROM behavior_events"
-                        " WHERE user_id=? ORDER BY created DESC LIMIT 800", (viewer_id,)).fetchall()
-                    for tid, event, value, meta, created in evs:
-                        age_days = max(now - float(created or now), 0) / 86400.0
-                        decay = 1.0 if age_days <= 30 else 0.5
-                        if event == "listen":
-                            try:
-                                m = json.loads(meta or "{}")
-                            except Exception:
-                                m = {}
-                            frac = float(m.get("fraction") or 0)
-                            plays = int(m.get("plays") or 0)
-                            a = lst.setdefault(tid, {"sec": 0.0, "frac": 0.0, "plays": 0, "decay": decay})
-                            a["sec"] += max(float(value or 0), 0.0)
-                            a["frac"] = max(a["frac"], frac)
-                            a["plays"] = max(a["plays"], plays)
-                            a["decay"] = max(a["decay"], decay)
-                        else:
-                            if event == "like":
-                                w = 3.0 if float(value or 0) > 0 else -1.0
-                            elif event == "comment_open":
-                                w = 0.4
-                            elif event == "comment":
-                                w = 2.0
-                            elif event == "share":
-                                w = 2.0
-                            elif event == "search":
-                                w = 1.0
-                            elif event == "skip":
-                                w = -0.5
-                            else:
-                                continue
-                            base[tid] = base.get(tid, 0.0) + w * decay
-                    for tid, a in lst.items():
-                        if a["frac"] >= 0.5 or a["plays"] >= 1:
-                            w = 2.0 + min(a["sec"], 300.0) / 300.0
-                            if a["plays"] >= 2:
-                                w += 0.5
-                            if a["frac"] >= 0.9:
-                                w += 0.5
-                            base[tid] = base.get(tid, 0.0) + w * a["decay"]
-                scores = base
-                # 已强互动的歌曲不再重复推荐（只用它提取关键词），阈值分以上视为已知偏好
-                avoid = {tid for tid, sc in scores.items() if sc >= 2.0}
-                top = sorted(scores.items(), key=lambda kv: -kv[1])[:6] if scores else []
-                # 2) 由高分歌曲提取关键词（歌手/专辑/标题有效片段）
-                def _kw_pieces(s):
-                    s = re.sub(r"[（(【\[].*?[)）】\]]", "", s or "")
-                    pieces = [p.strip() for p in re.split(r"[·\-–/、，,]", s) if p.strip()]
-                    return [p for p in pieces if len(p) >= 2]
-                kw_list = []
-                for tid, sc in top:
-                    # 优先用行为事件里记录的歌曲信息快照提取相似度关键词：
-                    # 记录的是「这首歌的信息」，推荐的是「信息相似的其它歌」
-                    title = artist = album = ""
-                    if viewer_id:
-                        _ti = c.execute(
-                            "SELECT track_info FROM behavior_events WHERE user_id=? AND track_id=?"
-                            " AND track_info!='' ORDER BY created DESC LIMIT 1", (viewer_id, tid)).fetchone()
-                        if _ti and _ti[0]:
-                            try:
-                                _info = json.loads(_ti[0])
-                                title = _info.get("title") or ""
-                                artist = _info.get("artist") or ""
-                                album = _info.get("album") or ""
-                            except Exception:
-                                pass
-                    if not title and not artist and not album:
-                        row = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
-                        if not row:
-                            row = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
-                        if not row:
-                            continue
-                        title, artist, album = row
-                    for kw in (_kw_pieces(title)
-                               + ([artist] if artist and len(artist) >= 2 else [])
-                               + ([album] if album and len(album) >= 2 else [])):
-                        if kw and kw not in ("未知歌手", "未命名"):
-                            kw_list.append((kw, sc))
-                # 用户主动搜索过的关键词也进入推荐池（权重 1.0）
-                if viewer_id:
-                    skws = c.execute(
-                        "SELECT meta FROM behavior_events WHERE user_id=? AND event='search'"
-                        " ORDER BY created DESC LIMIT 50", (viewer_id,)).fetchall()
-                    for (meta_s,) in skws:
-                        try:
-                            _m = json.loads(meta_s or "{}")
-                            _kw = str(_m.get("kw") or "").strip()
-                        except Exception:
-                            _kw = ""
-                        if len(_kw) >= 2:
-                            kw_list.append((_kw, 1.0))
-                seen_kw, dedup = set(), []
-                for kw, sc in kw_list:
-                    k = kw.lower()
-                    if k in seen_kw:
-                        continue
-                    seen_kw.add(k)
-                    dedup.append((kw, sc))
-                # 2.5) genre 风格匹配：从高分歌曲提取风格标签，优先推荐同风格的歌
-                genre_set = {}
-                for tid, sc in top:
-                    row = c.execute("SELECT genre FROM tracks WHERE id=?", (tid,)).fetchone()
-                    if not row:
-                        row = c.execute("SELECT genre FROM collected_tracks WHERE id=?", (tid,)).fetchone()
-                    if not row or not row[0]:
-                        continue
-                    for g in row[0].split(","):
-                        g = g.strip()
-                        if g and g != "流行":
-                            genre_set[g] = genre_set.get(g, 0.0) + sc
-                genre_cand = {}
-                for g, sc in sorted(genre_set.items(), key=lambda x: -x[1])[:5]:
-                    like_g = "%" + g + "%"
-                    tr = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=? AND genre LIKE ?",
-                                   (viewer_id, like_g)).fetchall()
-                    cr = c.execute("SELECT id FROM collected_tracks WHERE offline=0 AND genre LIKE ?",
-                                   (like_g,)).fetchall()
-                    for (tid,) in tr + cr:
-                        if tid in avoid:
-                            continue
-                        genre_cand[tid] = genre_cand.get(tid, 0.0) + sc
-                # 3) 关键词匹配候选（排除用户自己上传的歌曲与已强互动的歌曲）
-                cand = dict(genre_cand)  # genre 匹配的先放进来
-                for kw, sc in dedup[:8]:
-                    like_kw = "%" + kw + "%"
-                    tr = c.execute("SELECT id FROM tracks WHERE offline=0 AND user_id!=?"
-                                   " AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)",
-                                   (viewer_id, like_kw, like_kw, like_kw)).fetchall()
-                    cr = c.execute("SELECT id FROM collected_tracks WHERE offline=0"
-                                   " AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)",
-                                   (like_kw, like_kw, like_kw)).fetchall()
-                    for (tid,) in tr + cr:
-                        if tid in avoid:
-                            continue
-                        cand[tid] = cand.get(tid, 0.0) + sc
-                ranked = sorted(cand.items(), key=lambda kv: (-kv[1], kv[0]))
-                chosen = [tid for tid, _ in ranked[:20]]
-                # 4) 候选不足 20 首时随机补齐（上传 + 采集按曲库实际比例统一随机混合，
-                #    同样排除已强互动；避免先填上传导致采集歌几乎不出现）
-                if len(chosen) < 20:
-                    used = set(chosen)
-                    pool = c.execute(
-                        "SELECT id FROM ("
-                        "  SELECT id, 1 AS src FROM tracks WHERE offline=0 AND user_id!=?"
-                        "  UNION ALL"
-                        "  SELECT id, 2 FROM collected_tracks WHERE offline=0"
-                        ") ORDER BY RANDOM() LIMIT 120", (viewer_id,)).fetchall()
-                    for (tid,) in pool:
-                        if len(chosen) >= 20:
-                            break
-                        if tid not in used and tid not in avoid:
-                            chosen.append(tid)
-                            used.add(tid)
-                # 4.5) 新歌刷新：从近期新上架/采集的歌曲池随机混入少量新歌，
-                #      让个性化推送时不时带新歌（配合 WebSocket recommend 事件触发客户端刷新），
-                #      避免推荐池长期停留在同一批旧歌。
-                #      排除：用户本人上传、已强互动（avoid）、与已选候选重复。
-                if random.random() < NEW_SONG_MIX_PROB:
-                    used = set(chosen)
-                    _win = now - NEW_SONG_WINDOW_DAYS * 86400.0
-                    _mix = c.execute(
-                        "SELECT id FROM ("
-                        "  SELECT id, created FROM tracks WHERE offline=0 AND user_id!=?"
-                        "  UNION ALL"
-                        "  SELECT id, created FROM collected_tracks WHERE offline=0"
-                        ") WHERE created >= ? ORDER BY RANDOM() LIMIT ?",
-                        (viewer_id, _win, NEW_SONG_MIX_COUNT * 4)).fetchall()
-                    _new = []
-                    for (tid,) in _mix:
-                        if len(_new) >= NEW_SONG_MIX_COUNT:
-                            break
-                        if tid in used or tid in avoid:
-                            continue
-                        _new.append(tid)
-                        used.add(tid)
-                    if _new:
-                        # 候选未满直接追加补位；已满 20 则替换尾部低分候选
-                        if len(chosen) < 20:
-                            chosen += _new[:20 - len(chosen)]
-                        else:
-                            chosen = chosen[:20 - len(_new)] + _new
-                        # 新歌随机穿插进列表，避免总是沉底
-                        _newset = set(_new)
-                        _rest = [t for t in chosen if t not in _newset]
-                        for t in _new:
-                            _rest.insert(random.randint(0, len(_rest)), t)
-                        chosen = _rest
+                # 多路召回 + 加权融合 + MMR 重排（算法见 build_recommendations）
+                rec_pairs = build_recommendations(c, viewer_id)
+                chosen = [tid for tid, _ in rec_pairs]
+                reason_map = dict(rec_pairs)
                 if not chosen:
                     c.close()
                     self._json(200, [])
@@ -3010,6 +3097,7 @@ async function delNotify(id){
                            "shareCount": r[10] or 0,
                            "userId": r[11] or "", "userName": uname,
                            "hasLyric": bool(r[12]),
+                           "reason": reason_map.get(r[0], "推荐"),
                            "commentCount": 0, "isLiked": False} for r in crows]
                 merged += [{"id": r[0], "title": r[1], "artist": r[2], "album": r[3],
                             "cover": r[4], "fname": r[5], "size": r[6], "dur": r[7],
@@ -3018,6 +3106,7 @@ async function delNotify(id){
                             "shareCount": r[11] or 0,
                             "userId": r[12] or "", "userName": r[14] or "",
                             "hasLyric": bool(r[13]),
+                            "reason": reason_map.get(r[0], "推荐"),
                             "commentCount": r[15] or 0,
                             "isLiked": bool(r[16])} for r in trows]
                 order = {tid: i for i, tid in enumerate(chosen)}

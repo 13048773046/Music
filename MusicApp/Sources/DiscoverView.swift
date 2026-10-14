@@ -79,7 +79,21 @@ struct DiscoverView: View {
 
                 if !recommended.isEmpty {
                     // 默认推荐位 = 猜你喜欢：基于听歌行为的个性化推荐（未登录/无行为时后端随机兜底）
-                    sectionTitle("猜你喜欢", subtitle: "根据你的听歌行为推荐")
+                    HStack(alignment: .bottom, spacing: 12) {
+                        sectionTitle("猜你喜欢", subtitle: recommendSubtitle)
+                        Spacer()
+                        // 换一批：后端多路召回每次含随机探索噪声，重拉即得到不同推荐
+                        Button {
+                            Task { await loadRecommended() }
+                        } label: {
+                            Label("换一批", systemImage: "arrow.clockwise")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 20)
+                        .padding(.bottom, 2)
+                    }
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 14) {
                             ForEach(recommended) { track in
@@ -121,9 +135,10 @@ struct DiscoverView: View {
             .padding(.bottom, 120)
         }
         .refreshable {
-            // 下拉刷新：强制重拉曲库（新上传的歌立即可见），再重建区块
+            // 下拉刷新：重拉曲库（新上传的歌立即可见）+ 同步刷新个性化推荐（多路召回含随机探索，结果会变化）
             await library.load(force: true)
             applySections()
+            await loadRecommended()
         }
     }
 
@@ -191,6 +206,16 @@ struct DiscoverView: View {
         }
     }
 
+    /// 推荐理由动态副标题：展示当前推荐里的理由标签集合（个性化推送的直观体现）
+    private var recommendSubtitle: String {
+        var seen = Set<String>()
+        let unique = recommended.compactMap { $0.reason }.filter { reason in
+            !reason.isEmpty && seen.insert(reason).inserted
+        }
+        if unique.isEmpty { return "根据你的听歌行为推荐" }
+        return unique.prefix(3).joined(separator: " · ")
+    }
+
     /// 拉取个性化推荐填充「猜你喜欢」区块（失败静默，区块自动隐藏）
     private func loadRecommended() async {
         do {
@@ -227,7 +252,8 @@ private struct RecommendCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 ZStack(alignment: .topTrailing) {
                     AlbumArt(size: 190, title: track.title, coverURL: track.coverURL, radius: 18)
-                    Text("推荐")
+                    // 推荐理由角标：后端多路召回返回的来源标签（相似歌曲/常听歌手/同风格/热门/新歌/为你探索）
+                    Text(track.reason ?? "推荐")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 8)

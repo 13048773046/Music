@@ -237,15 +237,43 @@ def run_all(port, root, strict_port, strict_root):
     check("无相关歌曲时补全随机返回", s == 200 and isinstance(tracks_none, list)
           and len(tracks_none) > 0, f"s={s} {body[:100]}")
 
-    print("== 10.6 个性化推荐（新歌混入刷新兼容）==")
+    print("== 10.6 个性化推荐（多路召回 + MMR 重排）==")
+    # 预置 5 首不同歌手的采集歌种子数据（归属非当前测试用户，验证排除本人上传）
+    conn = sqlite3.connect(os.path.join(root, "tracks.db"))
+    _now = time.time()
+    for r in [
+        ("rec_1", "晴天", "周杰伦", "叶惠美", "", 240, "gd", "gd_1", "", 0, _now, "rec_owner", 50, 20, 5, "", 0, "流行"),
+        ("rec_2", "七里香", "周杰伦", "七里香", "", 250, "gd", "gd_2", "", 0, _now, "rec_owner", 30, 15, 3, "", 0, "流行"),
+        ("rec_3", "海阔天空", "Beyond", "乐与怒", "", 300, "gd", "gd_3", "", 0, _now - 100, "rec_owner", 40, 10, 2, "", 0, "摇滚"),
+        ("rec_4", "后来", "刘若英", "我等你", "", 280, "gd", "gd_4", "", 0, _now - 200, "rec_owner", 20, 8, 1, "", 0, "流行"),
+        ("rec_5", "平凡之路", "朴树", "猎户星座", "", 260, "gd", "gd_5", "", 0, _now - 300, "rec_owner", 10, 5, 1, "", 0, "民谣"),
+    ]:
+        conn.execute(
+            "INSERT OR IGNORE INTO collected_tracks"
+            "(id,title,artist,album,cover,duration,source,source_id,play_url,size,created,"
+            "user_id,play_count,like_count,share_count,lrc,offline,genre)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", r)
+    conn.commit()
+    conn.close()
     s, body, _ = req("GET", "/api/recommend", headers=AUTH)
     rec = json.loads(body)
     check("recommend 200", s == 200, f"s={s} {body[:100]}")
+    check("recommend 非空（多路召回兜底）", isinstance(rec, list) and len(rec) >= 1, body[:100])
     check("recommend 返回列表且<=20", isinstance(rec, list) and len(rec) <= 20, body[:100])
     check("recommend 无重复歌曲", len({t["id"] for t in rec}) == len(rec), body[:100])
     check("recommend 不含本人上传", all(t["userId"] != uid for t in rec), body[:100])
     check("recommend 字段完整", all(all(k in t for k in ("id", "title", "artist", "album",
           "created", "durText", "playCount", "likeCount")) for t in rec), body[:100])
+    check("recommend 带推荐理由标签", all("reason" in t and t["reason"] for t in rec), body[:100])
+    check("recommend 多歌手多样性（MMR 重排）",
+          len({t.get("artist") for t in rec if t.get("artist")}) >= 2,
+          f"artists={sorted({t.get('artist') for t in rec if t.get('artist')})}")
+    # 未登录：热度 + 新歌 + 随机三路兜底，同样返回非空且无重复
+    s, body, _ = req("GET", "/api/recommend")
+    rec2 = json.loads(body)
+    check("未登录 recommend 非空", s == 200 and isinstance(rec2, list) and len(rec2) >= 1,
+          f"s={s} {body[:100]}")
+    check("未登录 recommend 无重复", len({t["id"] for t in rec2}) == len(rec2), body[:100])
 
     print("== 11. 流式 Range ==")
     s, body, hdrs = req("GET", f"/api/stream/{tid}", headers={"Range": "bytes=0-99"})

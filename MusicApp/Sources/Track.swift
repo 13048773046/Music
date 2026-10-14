@@ -18,6 +18,8 @@ struct Track: Codable, Identifiable, Hashable {
     let userName: String?
     let hasLyric: Bool?
     var isLiked: Bool?
+    /// 个性化推荐理由标签（后端多路召回返回：相似歌曲/常听歌手/同风格/热门/新歌/为你探索）
+    let reason: String?
 
     var coverURL: URL? {
         guard let cover, !cover.isEmpty else { return nil }
