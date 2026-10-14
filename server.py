@@ -3611,7 +3611,11 @@ async function delNotify(id){
                 if new_tgt is not None:
                     # 重设目标：上次目标未达成则延续起点（已完成数带入新目标）；已达成/无目标则从当前重新累计
                     prev_done = (tgt is not None) and (cur - start_total >= tgt)
-                    base = start_total if (not prev_done and tgt is not None) else cur
+                    # 清理/删歌后总数可能低于旧基线，此时基线失效，从当前重新累计
+                    if cur < start_total:
+                        base = cur
+                    else:
+                        base = start_total if (not prev_done and tgt is not None) else cur
                     tgt, start_total = new_tgt, base
                     try:
                         with open(tgt_file, "w", encoding="utf-8") as _tf:
@@ -3620,9 +3624,9 @@ async function delNotify(id){
                     except Exception:
                         pass
                 else:
-                    # 未设置目标：沿用上次目标；无目标或已达成则开启新一轮（默认 500）
+                    # 未设置目标：沿用上次目标；无目标/已达成/基线失效则开启新一轮
                     done = (tgt is not None) and (cur - start_total >= tgt)
-                    if tgt is None or done:
+                    if tgt is None or done or cur < start_total:
                         tgt, start_total = 500, cur
                     # 把当前平台/模式/关键词刷进配置（无论是否重设目标）
                     try:
