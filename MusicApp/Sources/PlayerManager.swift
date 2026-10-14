@@ -26,15 +26,17 @@ enum PlayMode: CaseIterable {
     }
 }
 
-/// 侧边栏「听歌模式」：默认模式（默认随机流）/ 我的喜欢（点赞列表循环）/ 新鲜模式（完全随机）
+/// 侧边栏「听歌模式」：默认模式（推荐流）/ 我的作品（作品列表循环）/ 我的喜欢（点赞列表循环）/ 新鲜模式（完全随机）
 enum ListenMode: String, CaseIterable {
     case normal = "默认模式"
+    case works = "我的作品"
     case liked = "我的喜欢"
     case fresh = "新鲜模式"
 
     var icon: String {
         switch self {
         case .normal: return "list.bullet"
+        case .works: return "music.note.list"
         case .liked: return "heart"
         case .fresh: return "sparkles"
         }
@@ -753,12 +755,13 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 切换侧边栏听歌模式。
     /// 切走前保存当前模式会话；目标模式有缓存则恢复缓存，无缓存才全新加载；
     /// 目标模式加载失败/无内容时回退上一模式，保证「听到的歌 = 看到的模式」。
-    /// - 默认模式：恢复默认全随机流 + 用户自选循环模式
+    /// - 默认模式：恢复个性化推荐流 + 用户自选循环模式
+    /// - 我的作品：只播用户上传的作品，列表循环播完回第一首（无限循环）
     /// - 我的喜欢：只播用户点赞过的歌曲，播完回到第一首循环
     /// - 新鲜模式：完全随机（队列打乱 + 随机播放）
     func applyListenMode(_ mode: ListenMode) {
-        guard mode != listenMode || mode == .liked else {
-            // 同模式重复点击默认/新鲜：不重复切换；我的喜欢每次尝试恢复/刷新缓存
+        guard mode != listenMode || mode == .liked || mode == .works else {
+            // 同模式重复点击默认/新鲜：不重复切换；我的喜欢/作品每次尝试恢复/刷新缓存
             return
         }
         let previous = listenMode
@@ -767,6 +770,8 @@ final class PlayerManager: NSObject, ObservableObject {
         switch mode {
         case .normal:
             restoreNormalStream()
+        case .works:
+            switchToWorks(fallback: previous)
         case .liked:
             switchToLiked(fallback: previous)
         case .fresh:
@@ -808,6 +813,7 @@ final class PlayerManager: NSObject, ObservableObject {
         let hasSession: Bool
         switch fallback {
         case .normal: hasSession = sessions[.normal] != nil
+        case .works: hasSession = sessions[.works] != nil
         case .liked: hasSession = sessions[.liked] != nil
         case .fresh: hasSession = sessions[.fresh] != nil
         }
@@ -819,6 +825,7 @@ final class PlayerManager: NSObject, ObservableObject {
         listenMode = fallback
         switch fallback {
         case .normal: restoreNormalStream()
+        case .works: switchToWorks(fallback: nil)
         case .liked: switchToLiked(fallback: nil)
         case .fresh: switchToFresh(fallback: nil)
         }
@@ -887,10 +894,21 @@ final class PlayerManager: NSObject, ObservableObject {
 
     /// 我的喜欢：有缓存恢复缓存；无缓存拉取点赞列表（列表循环，播完回第一首）。
     /// 拉取失败或列表为空时回退上一模式，不出现「模式已切、歌曲没换」。
-    private func switchToLiked(fallback: ListenMode?) {
+    /// - Parameter startAt: 从「我的」页点击进入时传入目标歌曲——在会话/新列表里定位到它播放；
+    ///   不在会话缓存（如新点赞）时强制重新拉取全量点赞列表。
+    /// - Parameter known: 点击来源页已加载的列表（全量拉取失败时的兜底队列）。
+    private func switchToLiked(fallback: ListenMode?, startAt: Track? = nil, known: [Track] = []) {
         if let s = sessions[.liked], !s.queue.isEmpty {
-            restoreSession(s)
-            return
+            if let startAt, !s.queue.contains(where: { $0.id == startAt.id }) {
+                // 目标歌不在缓存会话（新点赞）：重新拉全量列表
+            } else {
+                if let startAt, let idx = s.queue.firstIndex(where: { $0.id == startAt.id }) {
+                    play(startAt, in: s.queue)   // 定位到点击的歌播放
+                    return
+                }
+                restoreSession(s)
+                return
+            }
         }
         savedNormalMode = playMode
         playMode = .listLoop
@@ -902,16 +920,104 @@ final class PlayerManager: NSObject, ObservableObject {
             let list = (try? await API.likedTracks(userId: uid)) ?? []
             await MainActor.run {
                 guard listenMode == .liked else { return }   // 期间用户又切走了：丢弃
-                guard !list.isEmpty else {
+                var base = list
+                if base.isEmpty, !known.isEmpty {
+                    base = known   // 全量拉取失败：用点击来源页已加载的列表兜底
+                }
+                guard !base.isEmpty else {
                     if let fb = fallback { handleFailedSwitch(fallback: fb) }
                     return
                 }
-                let s = ModeSession(queue: list, currentIndex: 0,
-                                    wasPlaying: true, mode: .liked)
+                var s = ModeSession(queue: base, currentIndex: 0,
+                                   wasPlaying: true, mode: .liked)
+                if let startAt, let idx = base.firstIndex(where: { $0.id == startAt.id }) {
+                    s.currentIndex = idx
+                    play(startAt, in: base)   // 从点击的歌曲开始，后续列表循环
+                    return
+                }
                 sessions[.liked] = s
                 restoreSession(s)
             }
         }
+    }
+
+    /// 我的作品：有缓存恢复缓存；无缓存循环拉取用户全部上传作品（列表循环，播完回第一首，无限循环）。
+    /// 拉取失败或列表为空时回退上一模式，不出现「模式已切、歌曲没换」。
+    /// - Parameter startAt: 从「我的」页点击进入时传入目标歌曲——在会话/新列表里定位到它播放；
+    ///   不在会话缓存（如新上传）时强制重新拉取全量作品列表。
+    /// - Parameter known: 点击来源页已加载的列表（全量拉取失败时的兜底队列）。
+    private func switchToWorks(fallback: ListenMode?, startAt: Track? = nil, known: [Track] = []) {
+        if let s = sessions[.works], !s.queue.isEmpty {
+            if let startAt, !s.queue.contains(where: { $0.id == startAt.id }) {
+                // 目标歌不在缓存会话（新上传）：重新拉全量列表
+            } else {
+                if let startAt, let idx = s.queue.firstIndex(where: { $0.id == startAt.id }) {
+                    play(startAt, in: s.queue)   // 定位到点击的歌播放
+                    return
+                }
+                restoreSession(s)
+                return
+            }
+        }
+        savedNormalMode = playMode
+        playMode = .listLoop
+        guard let uid = AuthManager.shared.currentUser?.id else {
+            if let fb = fallback { handleFailedSwitch(fallback: fb) }
+            return
+        }
+        Task {
+            // 循环拉取全部作品（分页直到 hasMore=false；上限保护防止异常无限循环）
+            var list: [Track] = []
+            var page = 1
+            while page <= 20 {
+                guard let r = try? await API.myTracks(page: page, pageSize: 50) else { break }
+                list += r.list
+                if !r.hasMore { break }
+                page += 1
+            }
+            await MainActor.run {
+                guard listenMode == .works else { return }   // 期间用户又切走了：丢弃
+                var base = list
+                if base.isEmpty, !known.isEmpty {
+                    base = known   // 全量拉取失败：用点击来源页已加载的列表兜底
+                }
+                guard !base.isEmpty else {
+                    if let fb = fallback { handleFailedSwitch(fallback: fb) }
+                    return
+                }
+                var s = ModeSession(queue: base, currentIndex: 0,
+                                   wasPlaying: true, mode: .works)
+                if let startAt, let idx = base.firstIndex(where: { $0.id == startAt.id }) {
+                    s.currentIndex = idx
+                    play(startAt, in: base)   // 从点击的作品开始，后续列表循环
+                    return
+                }
+                sessions[.works] = s
+                restoreSession(s)
+            }
+        }
+    }
+
+    /// 从「我的」页点击我的喜欢歌曲进入：切换侧边栏到「我的喜欢」模式，
+    /// 队列 = 点赞列表（列表循环），从点击的歌曲开始播放；
+    /// 后续切走再切回、加载失败回退，均走与侧边栏切换一致的会话/回退机制。
+    func playLikedTrack(_ t: Track, known: [Track]) {
+        if listenMode != .liked {
+            saveSession(for: listenMode)
+        }
+        listenMode = .liked
+        switchToLiked(fallback: nil, startAt: t, known: known)
+    }
+
+    /// 从「我的」页点击我的作品歌曲进入：切换侧边栏到「我的作品」模式，
+    /// 队列 = 我的全部作品（列表循环，播到最后一个回到第一个无限循环），从点击的作品开始播放；
+    /// 后续切走再切回、加载失败回退，均走与侧边栏切换一致的会话/回退机制。
+    func playWorksTrack(_ t: Track, known: [Track]) {
+        if listenMode != .works {
+            saveSession(for: listenMode)
+        }
+        listenMode = .works
+        switchToWorks(fallback: nil, startAt: t, known: known)
     }
 
     /// 新鲜模式：有缓存恢复缓存；无缓存基于曲库打乱（当前歌保持在首位继续播，避免切模式瞬间换歌）

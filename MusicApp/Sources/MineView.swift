@@ -399,7 +399,7 @@ struct MineView: View {
                 emptyHint("还没有上传歌曲")
             } else {
                 ForEach(works.items, id: \.id) { t in
-                    trackRow(t, queue: works.items)
+                    trackRow(t, queue: works.items, kind: .works)
                 }
                 loadMoreFooter(pager: works) { await loadWorks(reset: false) }
             }
@@ -419,7 +419,7 @@ struct MineView: View {
                 emptyHint("还没有点赞过歌曲")
             } else {
                 ForEach(likes.items, id: \.id) { t in
-                    trackRow(t, queue: likes.items)
+                    trackRow(t, queue: likes.items, kind: .liked)
                 }
                 loadMoreFooter(pager: likes) { await loadLikes(reset: false) }
             }
@@ -486,9 +486,19 @@ struct MineView: View {
 
     // MARK: - 列表行（作品 / 点赞共用）
 
-    private func trackRow(_ t: Track, queue: [Track]) -> some View {
+    /// 列表行点击来源：作品 / 喜欢（决定点击后进入哪个听歌模式）
+    private enum MineRowKind { case works, liked }
+
+    private func trackRow(_ t: Track, queue: [Track], kind: MineRowKind) -> some View {
         Button {
-            player.play(t, in: queue)
+            switch kind {
+            case .works:
+                // 点击我的作品：播放页切换「我的作品」模式，作品列表循环（到最后一个回第一个），从该歌开始
+                player.playWorksTrack(t, known: queue)
+            case .liked:
+                // 点击我的喜欢：播放页切换「我的喜欢」模式，点赞列表循环，从该歌开始
+                player.playLikedTrack(t, known: queue)
+            }
         } label: {
             HStack(spacing: 12) {
                 AlbumArt(size: 44, title: t.title, coverURL: t.coverURL, radius: 9)
