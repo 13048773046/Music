@@ -1336,9 +1336,12 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None):
             if artist and len(artist) >= 2:
                 artist_hist[artist] = artist_hist.get(artist, 0.0) + sc
             if genre:
+                # 泛标签黑名单：这类标签信息量为零，不进风格召回池
+                _GENDER_BL = {"流行", "DJ", "dj", "国语", "华语", "普通话", "国语流行",
+                              "其他", "未知", "未分类", "Pop", "pop"}
                 for g in genre.split(","):
                     g = g.strip()
-                    if g and g != "流行":
+                    if g and g not in _GENDER_BL:
                         genre_set[g] = genre_set.get(g, 0.0) + sc
         # 用户主动搜索过的关键词也进入相似召回池
         skws = c.execute(
@@ -1371,14 +1374,22 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None):
             ([viewer_id or ""] + list(args) + [limit])).fetchall()
 
     # ---------- 路 1：行为相似召回（关键词 + 风格精确匹配，排除已强互动） ----------
+    # 停用词/短词误伤率高：2字打4折、3字打7折，4字以上满分；纯停用词直接跳过
+    _STOP_KWS = {"你", "我", "他", "她", "的", "了", "在", "是", "和", "就", "不", "人",
+                 "这", "那", "一", "上", "下", "中", "里", "着", "也", "都", "要", "会",
+                 "对", "与", "及", "或", "而", "从", "到", "为", "什么", "怎么", "我们",
+                 "你们", "他们", "可以", "就是", "一个", "没有", "知道", "时候", "自己"}
     for kw, sc in dedup[:8]:
+        if kw in _STOP_KWS or len(kw) < 2:
+            continue
+        kw_bonus = 0.4 if len(kw) <= 2 else (0.7 if len(kw) == 3 else 1.0)
         like = "%" + kw + "%"
         for rid, rtitle, rartist, ralbum, rgenre in _rows(
                 "(title LIKE ? OR artist LIKE ? OR album LIKE ?)", [like, like, like],
                 REC_LIMITS["behavior"]):
             if rid in avoid:
                 continue
-            _add(rid, sc * REC_WEIGHTS["behavior"], "behavior",
+            _add(rid, sc * REC_WEIGHTS["behavior"] * kw_bonus, "behavior",
                  rartist, ralbum, rtitle, rgenre)
     for g, sc in sorted(genre_set.items(), key=lambda x: -x[1])[:5]:
         like = "%" + g + "%"
