@@ -786,24 +786,50 @@ def _qishui_cover_original(cover_url):
 
 
 def _qishui_sentences_lrc(sentences):
-    """汽水逐字歌词 sentences → 标准 LRC 文本（[mm:ss.xx] 文本），与库内格式一致。"""
+    """汽水歌词 sentences → 文本：逐字时间戳齐全时输出 KRC（卡拉OK逐字高亮），否则输出标准 LRC。
+
+    - KRC 行：[mm:ss.xx]<开始ms,持续ms>字<开始ms,持续ms>字...（App 端 parseLyrics 自动识别逐字）
+    - LRC 行：[mm:ss.xx]整行文本（词曲信息行 / 无逐字时间戳的歌）
+    两种格式混在同一文件里 App 都能正确解析（逐字行走逐字高亮，行级行走整句高亮）。
+    """
     if not isinstance(sentences, list):
         return ""
     lines = []
     for s in sentences:
         if not isinstance(s, dict):
             continue
-        ms = int(s.get("startMs") or 0)
-        mm = ms // 60000
-        ss = (ms // 1000) % 60
-        xx = (ms % 1000) // 10
-        words = s.get("words") or []
-        if isinstance(words, list) and words:
-            text = "".join(str(w.get("text", "")) for w in words if isinstance(w, dict))
+        text = str(s.get("text") or "").strip()
+        if not text:
+            continue
+        # 水印/贡献者行直接丢弃（App 端也有过滤，服务端先滤一道）
+        if "滚动歌词" in text or "翻译贡献者" in text or "贡献者" in text:
+            continue
+        start_ms = int(s.get("startMs") or 0)
+        head = "[%02d:%02d.%02d]" % (start_ms // 60000, (start_ms // 1000) % 60, (start_ms % 1000) // 10)
+        # 逐字提取：每字独立 startMs/endMs → KRC <开始ms,持续ms>字
+        words_out = []
+        words = s.get("words")
+        if isinstance(words, list):
+            for w in words:
+                if not isinstance(w, dict):
+                    continue
+                wt = str(w.get("text") or "").replace("<", "").strip()
+                if not wt:
+                    continue
+                w_start = int(w.get("startMs") or 0)
+                w_end = int(w.get("endMs") or 0)
+                words_out.append((w_start, w_end, wt))
+        # 至少 2 个字且每个字都有有效开始时间戳，才按 KRC 逐字输出；否则退化为整行 LRC
+        if len(words_out) > 1 and all(wt0 > 0 for wt0, _, _ in words_out):
+            parts = []
+            for w_start, w_end, wt in words_out:
+                dur = w_end - w_start
+                if dur <= 0:
+                    dur = 200            # 缺结束时间/数据异常：默认 200ms
+                parts.append("<%d,%d>%s" % (w_start, dur, wt))
+            lines.append(head + "".join(parts))
         else:
-            text = str(s.get("text", ""))
-        if text:
-            lines.append("[%02d:%02d.%02d] %s" % (mm, ss, xx, text))
+            lines.append(head + text)
     return "\n".join(lines)
 
 
@@ -1145,7 +1171,8 @@ def _rec_next_seq(viewer_id, bucket, now, fresh=False):
                     _rec_seq_state.pop(k, None)
         st = _rec_seq_state.get(key)
         if fresh or st is None or now - st[0] > REC_SESSION_IDLE:
-            seq = 0
+            # 冷启动/下拉刷新：按当前分钟轮换批次起点，避免每次打开 App 第一首都是同一首
+            seq = int(now // 60) % 6
         else:
             seq = st[1] + 1
         _rec_seq_state[key] = [now, seq]
@@ -2568,7 +2595,7 @@ async function delNotify(id){
             if u.path == "/share.html":
                 share_html = """<!doctype html>
 <html lang="zh-CN"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>流萤音乐 · 汽水链接入库</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -2608,7 +2635,7 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
 
 <div class="box">
   <div class="inprow">
-    <input id="url" type="url" placeholder="粘贴汽水音乐分享链接，如 https://qishui.douyin.com/s/xxxx/" />
+    <input id="url" type="text" placeholder="粘贴汽水分享链接（可整段粘贴，自动识别链接），如 https://qishui.douyin.com/s/xxxx/" />
     <button id="parseBtn" class="btn pri" style="width:auto;padding:0 22px;flex-shrink:0">解析</button>
   </div>
   <div class="loading hidden" id="loading">解析中，请稍候…</div>
@@ -2632,9 +2659,6 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
     </div>
   </div>
 
-  <div class="sec">歌词预览（<span id="lrcCnt">0</span> 行）</div>
-  <div class="box"><div class="lrc" id="lrc"></div></div>
-
   <div class="sec">入库归属</div>
   <div class="owner" id="ownerRow"><span>归属账号：</span><b id="ownerAcc">3065751692</b><span id="ownerName"></span></div>
   <div class="note" id="dupNote"></div>
@@ -2642,19 +2666,55 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <button id="saveBtn" class="btn green" style="margin-top:14px">确认入库（封面原图 + 歌词 + 音乐标签）</button>
   <div class="ok hidden" id="ok"></div>
   <div class="err hidden" id="saveErr"></div>
+
+  <div class="sec">歌词预览（<span id="lrcCnt">0</span> 行）</div>
+  <div class="box"><div class="lrc" id="lrc"></div></div>
 </div>
 
 <div class="note">说明：<br>· 封面将保存原图（约 3000×3000），不保存缩略图；<br>· 歌词为标准 LRC 逐字歌词；<br>· 音乐标签（如「流行」）有则入库，无则留空；<br>· 入库后歌曲归属账号 3065751692，可在 App 内播放。</div>
 
 <script>
+// 禁止双指捏合/双击放大（iOS Safari 对 user-scalable=no 不完全尊重，手势拦截兜底）
+document.addEventListener('gesturestart',function(e){e.preventDefault()});
+document.addEventListener('gesturechange',function(e){e.preventDefault()});
+document.addEventListener('dblclick',function(e){e.preventDefault()});
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let cur=null;
+let lastUrl='';
+// 自动识别汽水/抖音分享链接：粘贴内容可混有文字、口令、标点等，自动提取出链接
+function extractUrl(text){
+  if(!text)return '';
+  text=String(text).trim();
+  if(/^https?:\\/\\/[^\\s"'<>，。；：！？、（）【】《》“”‘’]+$/i.test(text))return text;
+  const urls=[];
+  const re=/https?:\\/\\/[^\\s"'<>，。；：！？、（）【】《》“”‘’]+/gi;
+  let m;
+  while((m=re.exec(text))!==null)urls.push(m[0].replace(/[，。；;、,]+$/,''));
+  if(urls.length){
+    const q=urls.find(u=>/qishui\\.douyin\\.com|douyin\\.com/i.test(u));
+    return q||urls[0];
+  }
+  const m2=text.match(/(?:qishui\\.douyin\\.com|v\\.douyin\\.com|www\\.douyin\\.com)\\/[^\\s"'<>，。；：！？、（）【】《》“”‘’]+/i);
+  if(m2)return 'https://'+m2[0].replace(/[，。；;、,]+$/,'');
+  return '';
+}
 function fmtDur(s){if(!s)return '--:--';s=Number(s)||0;return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function fmtSize(n){if(!n)return '';n=Number(n)||0;return n>1048576?(n/1048576).toFixed(1)+'MB':Math.round(n/1024)+'KB'}
 $('parseBtn').onclick=async()=>{
-  const url=$('url').value.trim();
-  if(!url){$('err').textContent='请输入汽水分享链接';$('err').classList.remove('hidden');return}
+  let raw=$('url').value.trim();
+  // 输入框为空时自动读剪贴板：在汽水 App 复制分享后，切到本页直接点「解析」即可
+  if(!raw && navigator.clipboard && navigator.clipboard.readText){
+    $('err').classList.add('hidden');
+    $('loading').textContent='正在读取剪贴板…';$('loading').classList.remove('hidden');
+    try{
+      const text=(await navigator.clipboard.readText()||'').trim();
+      if(text){raw=text;$('url').value=text;}
+    }catch(e){/* 权限拒绝/不支持：走下方手动粘贴提示 */}
+    $('loading').classList.add('hidden');
+  }
+  const url=extractUrl(raw);
+  if(!url){$('err').textContent='未识别到汽水分享链接：请先复制汽水分享后再点解析，或手动粘贴链接';$('err').classList.remove('hidden');return}
   $('err').classList.add('hidden');$('loading').classList.remove('hidden');$('result').classList.add('hidden');
   $('parseBtn').disabled=true;
   try{
@@ -2662,6 +2722,8 @@ $('parseBtn').onclick=async()=>{
     const d=await r.json();
     if(!d.ok){$('err').textContent=d.err||'解析失败';$('err').classList.remove('hidden');return}
     cur=d.track;
+    lastUrl=url;                // 记录本次解析的链接，入库时使用（输入框即将被清空）
+    $('url').value='';          // 解析成功清空输入框，便于直接粘贴下一条
     $('cov').src=cur.cover_original||cur.cover;
     $('title').textContent=cur.title;
     $('artist').textContent=cur.artist||'未知歌手';
@@ -2687,7 +2749,7 @@ $('saveBtn').onclick=async()=>{
   $('saveErr').classList.add('hidden');$('ok').classList.add('hidden');
   try{
     const r=await fetch('/music/api/collect/from-share',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url:cur._share_url||$('url').value.trim()})});
+      body:JSON.stringify({url:cur._share_url||lastUrl||$('url').value.trim()})});
     const d=await r.json();
     if(d.ok){
       $('ok').textContent='✅ 入库成功：'+d.title+'（归属 '+d.owner_account+'）'+(d.inserted?'':'（已存在，跳过）')+' ｜ 封面原图'+(d.cover?'✓':'✗')+' 音频'+(d.audio?'✓':'✗')+' 歌词'+(d.lyric_len>0?('✓ '+d.lyric_len+'行'):'✗')+' 标签'+(d.genre?'✓ '+d.genre:'—');

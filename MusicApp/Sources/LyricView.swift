@@ -300,6 +300,9 @@ private struct LyricRowView: View, Equatable {
         .scaleEffect(CGFloat(scale), anchor: .leading)
         .opacity(opacity)
         .onAppear { measure() }
+        // 行内容切换（切歌/下一句替换本行）时字宽缓存过期，必须重测；
+        // 否则新行字数 > 缓存字数时后半部分字宽=0，mask 停在前半句——歌词只走到一半就卡住
+        .onChange(of: line) { _ in measure() }
     }
 
     private var baseOpacity: Double {
