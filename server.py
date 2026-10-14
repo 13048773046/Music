@@ -744,6 +744,127 @@ def safe_file_path(fname):
     return p
 
 
+# ---------------- 汽水音乐分享链接解析（H5 采集：封面原图/歌词/音乐标签） ----------------
+
+QISHUI_SHARE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                   "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1")
+
+
+def _qishui_fetch_share(url):
+    """抓取汽水音乐分享短链（跟随重定向），返回最终落地页 HTML 文本。"""
+    if not url or "://" not in url:
+        raise ValueError("无效链接")
+    req = urllib.request.Request(url, headers={
+        "User-Agent": QISHUI_SHARE_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    })
+    opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
+    with opener.open(req, timeout=25) as r:
+        raw = r.read()
+    # 优先按响应头编码，缺省 utf-8
+    charset = "utf-8"
+    ctype = r.headers.get("Content-Type", "")
+    m = re.search(r"charset=([\w-]+)", ctype, re.I)
+    if m:
+        charset = m.group(1)
+    return raw.decode(charset, "replace")
+
+
+def _qishui_router_data(html):
+    """从分享页 HTML 中提取 _ROUTER_DATA JSON。"""
+    m = re.search(r"_ROUTER_DATA\s*=\s*(\{[\s\S]*?\});", html)
+    if not m:
+        raise ValueError("页面数据解析失败（_ROUTER_DATA 未找到）")
+    return json.loads(m.group(1))
+
+
+def _qishui_cover_original(cover_url):
+    """封面转原图：抖音 pic 地址形如 xxx~c5_375x375.jpg（缩略图），去掉尺寸段即 3000x3000 原图。"""
+    if not cover_url:
+        return ""
+    return re.sub(r"~c5_\d+x\d+\.(\w+)$", r"~c5.\1", str(cover_url).strip())
+
+
+def _qishui_sentences_lrc(sentences):
+    """汽水逐字歌词 sentences → 标准 LRC 文本（[mm:ss.xx] 文本），与库内格式一致。"""
+    if not isinstance(sentences, list):
+        return ""
+    lines = []
+    for s in sentences:
+        if not isinstance(s, dict):
+            continue
+        ms = int(s.get("startMs") or 0)
+        mm = ms // 60000
+        ss = (ms // 1000) % 60
+        xx = (ms % 1000) // 10
+        words = s.get("words") or []
+        if isinstance(words, list) and words:
+            text = "".join(str(w.get("text", "")) for w in words if isinstance(w, dict))
+        else:
+            text = str(s.get("text", ""))
+        if text:
+            lines.append("[%02d:%02d.%02d] %s" % (mm, ss, xx, text))
+    return "\n".join(lines)
+
+
+def _qishui_parse_share(url):
+    """解析汽水音乐分享链接 → 歌曲元数据 dict（含封面原图 / LRC 歌词 / 音乐标签 / 音频直链）。
+
+    返回字段：track_id,title,artist,album,album_id,cover,cover_original,genre_tag,
+              duration,lyric_lrc,audio_url,audio_size
+    """
+    html = _qishui_fetch_share(url)
+    data = _qishui_router_data(html)
+    tp = (data.get("loaderData") or {}).get("track_page") or {}
+    awl = tp.get("audioWithLyricsOption") or {}
+    track_id = str(awl.get("track_id") or tp.get("track_id") or "").strip()
+    if not track_id:
+        raise ValueError("未能从链接中解析出歌曲 ID")
+    title = str(awl.get("trackName") or "").strip()
+    artist = str(awl.get("artistName") or "").strip()
+    album = ""
+    album_id = ""
+    ti = awl.get("trackInfo") or {}
+    if isinstance(ti, dict) and isinstance(ti.get("album"), dict):
+        album = str(ti["album"].get("name") or "").strip()
+        album_id = str(ti["album"].get("id") or "").strip()
+    if not album:
+        album = title
+    cover = str(awl.get("coverURL") or "").strip()
+    cover_original = _qishui_cover_original(cover)
+    genre_tag = str(awl.get("genre_tag") or "").strip()
+    # 音乐标签可能多个：中文主标签 genre_tag + trackInfo.tags 的一/二级标签，去重保序后逗号拼接
+    tag_list = [genre_tag] if genre_tag else []
+    if isinstance(ti, dict) and isinstance(ti.get("tags"), list):
+        for t in ti["tags"]:
+            if not isinstance(t, dict):
+                continue
+            for _k in ("first_level_tag", "second_level_tag"):
+                _v = t.get(_k)
+                if isinstance(_v, dict) and str(_v.get("tag_name") or "").strip():
+                    tag_list.append(str(_v["tag_name"]).strip())
+    seen_tags = set()
+    genre = ",".join([x for x in tag_list if not (x in seen_tags or seen_tags.add(x))])
+    duration = 0
+    try:
+        duration = int(round(float(awl.get("duration") or 0)))
+    except Exception:
+        duration = 0
+    lyric_lrc = _qishui_sentences_lrc((awl.get("lyrics") or {}).get("sentences"))
+    audio_url = str(awl.get("url") or "").strip()
+    audio_size = 0
+    if isinstance(ti, dict) and isinstance(ti.get("bit_rates"), list) and ti["bit_rates"]:
+        # 取最高音质档位的 size（未实际下载，仅预估展示）
+        audio_size = max([int(b.get("size") or 0) for b in ti["bit_rates"] if isinstance(b, dict)] or [0])
+    return {
+        "track_id": track_id, "title": title, "artist": artist,
+        "album": album, "album_id": album_id, "cover": cover,
+        "cover_original": cover_original, "genre_tag": genre_tag, "genre": genre,
+        "duration": duration, "lyric_lrc": lyric_lrc, "audio_url": audio_url,
+        "audio_size": audio_size,
+    }
+
+
 # ---------------- 封面缩略图（移动端加载加速） ----------------
 
 COVER_SMALL_MAX_SIDE = 600            # 缩略图长边最大像素
@@ -1321,6 +1442,16 @@ class H(BaseHTTPRequestHandler):
 
     def _err(self, code, msg):
         self._json(code, {"err": msg})
+
+    def _send_html(self, html):
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _internal_error(self, e):
         log.error("internal error: %s %s", self.path, e, exc_info=DEBUG)
@@ -2376,6 +2507,163 @@ async function delNotify(id){
                     self._json(200, _data); return
                 except Exception as e:
                     self._json(200, {"ok": False, "err": str(e)}); return
+
+            # ---------- 汽水音乐分享链接：解析预览（H5 专用，不下载不入库） ----------
+            if u.path == "/api/collect/parse-share":
+                q = urllib.parse.parse_qs(u.query)
+                share_url = (q.get("url") or [""])[0].strip()
+                if not share_url:
+                    self._json(200, {"ok": False, "err": "url required"}); return
+                if not rate_limit(self, "collect", extra="parse_share"):
+                    self._err(429, "请求过于频繁，请稍后再试"); return
+                try:
+                    m = _qishui_parse_share(share_url)
+                    c = db()
+                    dup = c.execute("SELECT title FROM collected_tracks WHERE source='qs' AND source_id=?", (m["track_id"],)).fetchone()
+                    c.close()
+                    self._json(200, {"ok": True, "track": m, "exists": bool(dup), "exists_title": (dup[0] if dup else "")})
+                    return
+                except Exception as e:
+                    self._json(200, {"ok": False, "err": "解析失败：" + str(e)}); return
+
+            # ---------- 汽水音乐分享链接采集页（H5） ----------
+            if u.path == "/share.html":
+                share_html = """<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>流萤音乐 · 汽水链接入库</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0f0f10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:640px;margin:0 auto;padding:24px 18px}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+.sub{color:#888;font-size:13px;margin-bottom:20px}
+.box{background:#1a1a1c;border-radius:14px;padding:16px;margin-bottom:14px}
+.inprow{display:flex;gap:8px}
+.inprow input{flex:1;min-width:0;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:12px;font-size:14px;outline:none}
+.btn{display:block;width:100%;padding:14px;border-radius:12px;border:0;font-size:15px;font-weight:600;cursor:pointer}
+.btn:active{opacity:.8}
+.btn.pri{background:#2a6df4;color:#fff}
+.btn.sec{background:#2a2a2e;color:#fff}
+.btn.green{background:#1e3a2a;color:#5cd68a}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.card{display:flex;gap:14px}
+.card img{width:112px;height:112px;border-radius:12px;object-fit:cover;background:#222;flex-shrink:0}
+.card .meta{flex:1;min-width:0}
+.card .t{font-size:17px;font-weight:600;line-height:1.35;margin-bottom:4px}
+.card .a{color:#aaa;font-size:13px;margin-bottom:6px}
+.kv{display:flex;flex-wrap:wrap;gap:6px 14px;color:#888;font-size:12px;margin-top:8px}
+.kv b{color:#ddd;font-weight:500}
+.tag{display:inline-block;background:#1e3a5f;color:#6fb1ff;font-size:11px;padding:2px 9px;border-radius:12px;margin-top:6px}
+.lrc{background:#111;border:1px solid #2a2a2e;border-radius:10px;padding:12px;max-height:260px;overflow:auto;font-size:13px;line-height:1.8;color:#bbb;white-space:pre-wrap;font-family:inherit}
+.sec{font-size:13px;color:#888;margin:14px 0 8px}
+.owner{display:flex;align-items:center;gap:8px;background:#111;border:1px solid #2a2a2e;border-radius:10px;padding:10px 12px;font-size:13px;color:#aaa}
+.owner b{color:#5cd68a}
+.note{color:#777;font-size:12px;margin-top:10px;line-height:1.6}
+.ok{color:#5cd68a;font-size:13px;margin-top:10px}
+.err{color:#e06c5c;font-size:13px;margin-top:10px}
+.hidden{display:none}
+.loading{color:#888;font-size:13px;margin-top:10px}
+</style></head><body><div class="wrap">
+<h1>流萤音乐 · 汽水链接入库</h1>
+<div class="sub">粘贴汽水音乐分享链接，解析歌曲并入库（封面原图 / 歌词 / 音乐标签）</div>
+
+<div class="box">
+  <div class="inprow">
+    <input id="url" type="url" placeholder="粘贴汽水音乐分享链接，如 https://qishui.douyin.com/s/xxxx/" />
+    <button id="parseBtn" class="btn pri" style="width:auto;padding:0 22px;flex-shrink:0">解析</button>
+  </div>
+  <div class="loading hidden" id="loading">解析中，请稍候…</div>
+  <div class="err hidden" id="err"></div>
+</div>
+
+<div id="result" class="hidden">
+  <div class="box">
+    <div class="card">
+      <img id="cov" alt="封面" />
+      <div class="meta">
+        <div class="t" id="title"></div>
+        <div class="a" id="artist"></div>
+        <span class="tag" id="genre"></span>
+        <div class="kv">
+          <span>专辑：<b id="album"></b></span>
+          <span>时长：<b id="dur"></b></span>
+          <span>音质：<b id="size"></b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">歌词预览（<span id="lrcCnt">0</span> 行）</div>
+  <div class="box"><div class="lrc" id="lrc"></div></div>
+
+  <div class="sec">入库归属</div>
+  <div class="owner" id="ownerRow"><span>归属账号：</span><b id="ownerAcc">3065751692</b><span id="ownerName"></span></div>
+  <div class="note" id="dupNote"></div>
+
+  <button id="saveBtn" class="btn green" style="margin-top:14px">确认入库（封面原图 + 歌词 + 音乐标签）</button>
+  <div class="ok hidden" id="ok"></div>
+  <div class="err hidden" id="saveErr"></div>
+</div>
+
+<div class="note">说明：<br>· 封面将保存原图（约 3000×3000），不保存缩略图；<br>· 歌词为标准 LRC 逐字歌词；<br>· 音乐标签（如「流行」）有则入库，无则留空；<br>· 入库后歌曲归属账号 3065751692，可在 App 内播放。</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let cur=null;
+function fmtDur(s){if(!s)return '--:--';s=Number(s)||0;return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function fmtSize(n){if(!n)return '';n=Number(n)||0;return n>1048576?(n/1048576).toFixed(1)+'MB':Math.round(n/1024)+'KB'}
+$('parseBtn').onclick=async()=>{
+  const url=$('url').value.trim();
+  if(!url){$('err').textContent='请输入汽水分享链接';$('err').classList.remove('hidden');return}
+  $('err').classList.add('hidden');$('loading').classList.remove('hidden');$('result').classList.add('hidden');
+  $('parseBtn').disabled=true;
+  try{
+    const r=await fetch('/music/api/collect/parse-share?url='+encodeURIComponent(url));
+    const d=await r.json();
+    if(!d.ok){$('err').textContent=d.err||'解析失败';$('err').classList.remove('hidden');return}
+    cur=d.track;
+    $('cov').src=cur.cover_original||cur.cover;
+    $('title').textContent=cur.title;
+    $('artist').textContent=cur.artist||'未知歌手';
+    $('genre').textContent=cur.genre||'无标签';
+    $('genre').style.display=cur.genre?'':'none';
+    $('album').textContent=cur.album||'—';
+    $('dur').textContent=fmtDur(cur.duration);
+    $('size').textContent=fmtSize(cur.audio_size)||'—';
+    $('lrc').textContent=cur.lyric_lrc||'（无歌词）';
+    $('lrcCnt').textContent=(cur.lyric_lrc||'').split('\\n').filter(x=>x.trim()).length;
+    $('ownerAcc').textContent='3065751692';
+    $('ownerName').textContent='（夏梓璇）';
+    $('dupNote').textContent=d.exists?('⚠ 库内已存在同名歌曲：'+d.exists_title+'，入库将自动跳过'):'';
+    $('ok').classList.add('hidden');$('saveErr').classList.add('hidden');
+    $('result').classList.remove('hidden');
+  }catch(e){$('err').textContent='请求失败：'+e;$('err').classList.remove('hidden')}
+  $('parseBtn').disabled=false;$('loading').classList.add('hidden');
+};
+$('url').addEventListener('keydown',e=>{if(e.key==='Enter')$('parseBtn').click()});
+$('saveBtn').onclick=async()=>{
+  if(!cur)return;
+  $('saveBtn').disabled=true;$('saveBtn').textContent='入库中…';
+  $('saveErr').classList.add('hidden');$('ok').classList.add('hidden');
+  try{
+    const r=await fetch('/music/api/collect/from-share',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:cur._share_url||$('url').value.trim()})});
+    const d=await r.json();
+    if(d.ok){
+      $('ok').textContent='✅ 入库成功：'+d.title+'（归属 '+d.owner_account+'）'+(d.inserted?'':'（已存在，跳过）')+' ｜ 封面原图'+(d.cover?'✓':'✗')+' 音频'+(d.audio?'✓':'✗')+' 歌词'+(d.lyric_len>0?('✓ '+d.lyric_len+'行'):'✗')+' 标签'+(d.genre?'✓ '+d.genre:'—');
+      $('ok').classList.remove('hidden');
+    }else{
+      $('saveErr').textContent=d.err||'入库失败';$('saveErr').classList.remove('hidden');
+    }
+  }catch(e){$('saveErr').textContent='请求失败：'+e;$('saveErr').classList.remove('hidden')}
+  $('saveBtn').disabled=false;$('saveBtn').textContent='确认入库（封面原图 + 歌词 + 音乐标签）';
+};
+</script>
+</div></body></html>"""
+                self._send_html(share_html)
+                return
 
             # ---------- 后台管理 API ----------
             ADMIN_TOKEN = _admin_token()
@@ -4148,6 +4436,89 @@ async function delNotify(id){
                     ws_broadcast({"kind": "event", "event": "track_list", "reason": "collect"})
                 c.close()
                 self._json(200, {"ok": True, "inserted": ins, "skipped": skip, "owner": owner})
+                return
+
+            # ---------- 汽水音乐分享链接入库（H5 专用：封面原图/歌词/音乐标签） ----------
+            if u.path == "/api/collect/from-share":
+                if not rate_limit(self, "collect_add", extra="from_share"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                try:
+                    raw = self.rfile.read(min(length, 65536)) if length > 0 else b""
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                share_url = (data.get("url") or "").strip()
+                if not share_url:
+                    self._err(400, "url required"); return
+                # 归属账号：默认账号 3065751692（夏梓璇）；可传 user_id 覆盖（须为有效用户）
+                owner_id = (data.get("user_id") or "").strip() or "a334105a8a2f4401a19001ee4ce66929"
+                try:
+                    m = _qishui_parse_share(share_url)
+                except Exception as e:
+                    self._json(200, {"ok": False, "err": "解析失败：" + str(e)}); return
+                if not m.get("track_id"):
+                    self._json(200, {"ok": False, "err": "未解析到歌曲 ID"}); return
+                c = db()
+                if not c.execute("SELECT 1 FROM users WHERE id=?", (owner_id,)).fetchone():
+                    c.close()
+                    self._json(200, {"ok": False, "err": "归属账号不存在"}); return
+                tid = hashlib.md5(("qs:" + m["track_id"]).encode()).hexdigest()
+                dup = c.execute("SELECT title FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+                if dup:
+                    acc = c.execute("SELECT account,name FROM users WHERE id=?", (owner_id,)).fetchone()
+                    c.close()
+                    self._json(200, {"ok": True, "inserted": 0, "title": m["title"], "artist": m["artist"],
+                                     "owner_account": acc[0] if acc else owner_id, "cover": False,
+                                     "audio": False, "lyric_len": 0, "genre": m.get("genre") or ""})
+                    return
+                # 下载封面：优先原图（~c5.jpg，3000x3000），失败回退缩略图
+                local_cover = ""
+                for cov in (m.get("cover_original"), m.get("cover")):
+                    if cov and str(cov).startswith("http"):
+                        try:
+                            req = urllib.request.Request(cov, headers={"User-Agent": QISHUI_SHARE_UA})
+                            with urllib.request.urlopen(req, timeout=20, context=_ssl_ctx()) as r:
+                                img = r.read()
+                            if img and len(img) >= 500 and image_magic_ok(img, ".jpg"):
+                                with open(os.path.join(FILES, tid + "_cover.jpg"), "wb") as f:
+                                    f.write(img)
+                                local_cover = tid + "_cover.jpg"
+                                break
+                        except Exception:
+                            continue
+                # 下载音频：M4A 直链 → 存 {tid}.m4a（stream 按扩展名返回 audio/x-m4a）
+                local_audio, audio_size = "", 0
+                if m.get("audio_url") and str(m["audio_url"]).startswith("http"):
+                    try:
+                        req = urllib.request.Request(m["audio_url"], headers={"User-Agent": QISHUI_SHARE_UA})
+                        with urllib.request.urlopen(req, timeout=120, context=_ssl_ctx()) as r:
+                            adata = r.read()
+                        if len(adata) >= 300 * 1024:
+                            with open(os.path.join(FILES, tid + ".m4a"), "wb") as f:
+                                f.write(adata)
+                            local_audio = tid + ".m4a"
+                            audio_size = len(adata)
+                    except Exception:
+                        pass
+                genre = m.get("genre") or ""
+                c.execute(
+                    """INSERT OR IGNORE INTO collected_tracks
+                       (id,title,artist,album,cover,duration,source,source_id,play_url,size,created,user_id,lrc,genre)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (tid, m["title"], m["artist"], m["album"], local_cover, m["duration"],
+                     "qs", m["track_id"], local_audio, audio_size, time.time(), owner_id,
+                     m["lyric_lrc"], genre))
+                c.commit()
+                acc = c.execute("SELECT account,name FROM users WHERE id=?", (owner_id,)).fetchone()
+                c.close()
+                if local_audio:
+                    ws_broadcast({"kind": "event", "event": "track_list", "reason": "collect"})
+                self._json(200, {"ok": True, "inserted": 1, "title": m["title"], "artist": m["artist"],
+                                 "owner_account": acc[0] if acc else owner_id, "cover": bool(local_cover),
+                                 "audio": bool(local_audio),
+                                 "lyric_len": len(m["lyric_lrc"].splitlines()) if m["lyric_lrc"] else 0,
+                                 "genre": genre})
                 return
 
             # ---------- 用户注册 ----------
