@@ -537,6 +537,33 @@ def run_all(port, root, strict_port, strict_root):
         sock.close()
         return bool(data) and data[0] & 0x0F == 0xA
     check("ws ping→pong 帧回包", ws_pingpong(f"/api/ws?token={u2token}"))
+    # WS 实时行为上报（即时通讯通道）：{"type":"behavior","events":[...]} → 实时落库
+    def ws_send_text(path, payload_json):
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+                      f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                      f"Sec-WebSocket-Version: 13\r\n\r\n").encode())
+        resp = sock.recv(4096)
+        if not resp.startswith(b"HTTP/1.1 101"):
+            sock.close()
+            return False
+        mask = b"\x11\x22\x33\x44"
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload_json))
+        sock.sendall(bytes([0x81, 0x80 | len(payload_json)]) + mask + masked)
+        sock.close()
+        return True
+    ok = ws_send_text(f"/api/ws?token={u2token}", json.dumps({
+        "type": "behavior",
+        "events": [{"trackId": "ws_t1", "event": "listen", "value": 5}]}).encode())
+    check("ws behavior 消息发送成功", ok)
+    time.sleep(0.6)
+    _cu = sqlite3.connect(os.path.join(root, "tracks.db"))
+    _u2 = _cu.execute("SELECT user_id FROM tokens WHERE token=?", (u2token,)).fetchone()
+    _n = _cu.execute("SELECT COUNT(*) FROM behavior_events WHERE user_id=?"
+                     " AND track_id='ws_t1' AND event='listen'", (_u2[0] if _u2 else "",)).fetchone()[0]
+    _cu.close()
+    check("ws 行为上报实时落库", _n >= 1, f"n={_n}")
 
     print("== 22. 限流（登录连续 12 次）==")
     codes = []

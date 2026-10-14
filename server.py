@@ -424,6 +424,80 @@ def ws_broadcast(payload):
                             WS_CLIENTS.pop(uid2, None)
 
 
+def _rec_age_weight(age_days):
+    """行为事件时间窗口权重：越近越重要（短期兴趣驱动实时推荐）
+    1 小时内 ×1.5 / 1 天内 ×1.25 / 7 天内 ×1.0 / 30 天内 ×0.7 / 更早 ×0.4"""
+    if age_days <= 1.0 / 24:
+        return 1.5
+    if age_days <= 1.0:
+        return 1.25
+    if age_days <= 7.0:
+        return 1.0
+    if age_days <= 30.0:
+        return 0.7
+    return 0.4
+
+
+def _ingest_behavior(c, uid, evs, now):
+    """批量落库行为事件（校验 + 歌曲信息快照），返回 (写入条数, 是否含收听)。
+    供 HTTP /api/behavior 与 WebSocket behavior 消息共用。"""
+    ALLOW = ("like", "comment_open", "comment", "share", "listen", "search", "skip")
+    ins, has_listen = 0, False
+    for it in evs:
+        tid = str(it.get("trackId") or "").strip()
+        ev = str(it.get("event") or "").strip()
+        if not tid and ev != "search":
+            continue
+        if ev not in ALLOW:
+            continue
+        if ev == "listen":
+            has_listen = True
+        try:
+            val = float(it.get("value") or 0)
+        except Exception:
+            val = 0.0
+        meta = it.get("meta")
+        if isinstance(meta, dict):
+            meta_s = json.dumps(meta, ensure_ascii=False)[:500]
+        elif isinstance(meta, str):
+            meta_s = meta[:500]
+        else:
+            meta_s = ""
+        # 歌曲信息快照：推荐时直接用它找「类似的歌」，即使歌曲日后下架/删除也不影响推荐
+        tinfo = ""
+        if tid:
+            _tr = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
+            if not _tr:
+                _tr = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
+            if _tr:
+                tinfo = json.dumps({"title": _tr[0] or "", "artist": _tr[1] or "",
+                                    "album": _tr[2] or ""}, ensure_ascii=False)[:500]
+        c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
+                     VALUES(?,?,?,?,?,?,?,?)""",
+                  (uuid.uuid4().hex, uid, tid, ev, val, meta_s, tinfo, now))
+        ins += 1
+    return ins, has_listen
+
+
+def _ws_refresh_recommend(c, uid, has_listen):
+    """行为变化后节流推送：15s 内合并多次上报，避免高频推送；
+    推送 recommend 事件驱动前端刷新「猜你喜欢」，收听时附带听歌时长统计。"""
+    _now = time.time()
+    _last = WS_STATS_THROTTLE.get(uid, 0)
+    if _now - _last < 15:
+        return
+    WS_STATS_THROTTLE[uid] = _now
+    if has_listen:
+        _r1 = c.execute("SELECT COALESCE(SUM(value),0) FROM behavior_events"
+                        " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
+        _r2 = c.execute("SELECT COUNT(DISTINCT track_id) FROM behavior_events"
+                        " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
+        ws_push(uid, {"kind": "event", "event": "stats",
+                      "totalSeconds": int(_r1[0]) if _r1 else 0,
+                      "trackCount": int(_r2[0]) if _r2 else 0})
+    ws_push(uid, {"kind": "event", "event": "recommend"})
+
+
 def _ws_recv_exact(sock, n):
     buf = b""
     while len(buf) < n:
@@ -459,6 +533,12 @@ def _ws_serve(handler, uid):
                 length = struct.unpack(">Q", ext)[0]
             if length > 16 * 1024 * 1024:
                 break
+            # WebSocket 协议：mask key（4 字节）位于 payload 之前；
+            # 若先读 payload 再读 mask，会把 mask key 误读进 payload 导致解密乱码
+            if masked:
+                mask = _ws_recv_exact(sock, 4)
+                if mask is None:
+                    break
             payload = b""
             while len(payload) < length:
                 chunk = sock.recv(min(length - len(payload), 65536))
@@ -469,9 +549,6 @@ def _ws_serve(handler, uid):
             if payload is None:
                 break
             if masked:
-                mask = _ws_recv_exact(sock, 4)
-                if mask is None:
-                    break
                 payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
             if opcode == 0x8:      # close → 回 close 帧后断开
                 try:
@@ -486,7 +563,29 @@ def _ws_serve(handler, uid):
                     break
             elif opcode == 0xA:    # pong
                 continue
-            # text(1)/binary(2)：客户端业务消息当前不处理（预留扩展）
+            elif opcode in (0x1, 0x2):  # text/binary：客户端业务消息
+                # 实时行为上报（即时通讯通道）：{"type":"behavior","events":[...]}
+                # 与 HTTP /api/behavior 共用落库逻辑；落库后节流推送 recommend 事件，
+                # 前端收到即刷新「猜你喜欢」，实现行为一变、推荐实时更新
+                try:
+                    _msg = json.loads(payload.decode("utf-8") or "{}")
+                except Exception as _e:
+                    log.info("ws behavior json err %s", _e)
+                    _msg = None
+                if isinstance(_msg, dict) and _msg.get("type") == "behavior":
+                    _evs = _msg.get("events")
+                    if isinstance(_evs, list) and _evs and len(_evs) <= 30:
+                        try:
+                            _c = db()
+                            _ins, _hl = _ingest_behavior(_c, uid, _evs, time.time())
+                            if _ins:
+                                _c.commit()
+                                _ws_refresh_recommend(_c, uid, _hl)
+                            log.info("ws behavior uid=%s ins=%d", uid, _ins)
+                            _c.close()
+                        except Exception as _e:
+                            log.info("ws behavior ingest err %s", _e)
+                continue
     except Exception:
         pass
     finally:
@@ -966,7 +1065,7 @@ def build_recommendations(c, viewer_id):
         lst = {}
         for tid, event, value, meta, created in evs:
             age_days = max(now - float(created or now), 0) / 86400.0
-            decay = 1.0 if age_days <= 30 else 0.5
+            decay = _rec_age_weight(age_days)
             if event == "listen":
                 try:
                     m = json.loads(meta or "{}")
@@ -4489,56 +4588,13 @@ async function delNotify(id){
                     c.close()
                     self._err(400, "events must be 1..30")
                     return
-                ALLOW = ("like", "comment_open", "comment", "share", "listen", "search", "skip")
                 now = time.time()
-                ins = 0
-                for it in evs:
-                    tid = str(it.get("trackId") or "").strip()
-                    ev = str(it.get("event") or "").strip()
-                    if not tid and ev != "search":
-                        continue
-                    if ev not in ALLOW:
-                        continue
-                    try:
-                        val = float(it.get("value") or 0)
-                    except Exception:
-                        val = 0.0
-                    meta = it.get("meta")
-                    if isinstance(meta, dict):
-                        meta_s = json.dumps(meta, ensure_ascii=False)[:500]
-                    elif isinstance(meta, str):
-                        meta_s = meta[:500]
-                    else:
-                        meta_s = ""
-                    # 歌曲信息快照：记录这首歌的完整信息（歌名/歌手/专辑），
-                    # 推荐时直接用它找「类似的歌」，即使歌曲日后下架/删除也不影响推荐
-                    tinfo = ""
-                    if tid:
-                        _tr = c.execute("SELECT title,artist,album FROM tracks WHERE id=?", (tid,)).fetchone()
-                        if not _tr:
-                            _tr = c.execute("SELECT title,artist,album FROM collected_tracks WHERE id=?", (tid,)).fetchone()
-                        if _tr:
-                            tinfo = json.dumps({"title": _tr[0] or "", "artist": _tr[1] or "",
-                                                "album": _tr[2] or ""}, ensure_ascii=False)[:500]
-                    c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
-                                 VALUES(?,?,?,?,?,?,?,?)""",
-                              (uuid.uuid4().hex, uid, tid, ev, val, meta_s, tinfo, now))
-                    ins += 1
+                ins, has_listen = _ingest_behavior(c, uid, evs, now)
                 c.commit()
-                # 实时数据事件：行为上报后推送听歌时长统计 & 个性化推荐刷新（节流 15s，避免高频推送）
-                if ins and any(str(it.get("event") or "") == "listen" for it in evs):
-                    _now = time.time()
-                    _last = WS_STATS_THROTTLE.get(uid, 0)
-                    if _now - _last >= 15:
-                        WS_STATS_THROTTLE[uid] = _now
-                        _r1 = c.execute("SELECT COALESCE(SUM(value),0) FROM behavior_events"
-                                        " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
-                        _r2 = c.execute("SELECT COUNT(DISTINCT track_id) FROM behavior_events"
-                                        " WHERE user_id=? AND event='listen'", (uid,)).fetchone()
-                        ws_push(uid, {"kind": "event", "event": "stats",
-                                      "totalSeconds": int(_r1[0]) if _r1 else 0,
-                                      "trackCount": int(_r2[0]) if _r2 else 0})
-                        ws_push(uid, {"kind": "event", "event": "recommend"})
+                # 实时数据事件：任意行为变化后节流推送个性化推荐刷新（15s），
+                # 收听事件额外附带听歌时长统计；前端收到 recommend 事件自动刷新「猜你喜欢」
+                if ins:
+                    _ws_refresh_recommend(c, uid, has_listen)
                 c.close()
                 self._json(200, {"ok": True, "count": ins})
                 return

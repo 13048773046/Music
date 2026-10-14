@@ -117,6 +117,22 @@ final class NotificationBus: ObservableObject {
         unreadCount = n
     }
 
+    /// 通过 WebSocket 实时上报行为事件（即时通讯通道）：行为数据实时入库并触发
+    /// 后端 recommend 事件推送，前端「猜你喜欢」随之实时刷新。
+    /// 返回是否成功发送（WS 未连接/未登录时返回 false，由调用方回退 HTTP 上报）。
+    func sendBehavior(_ events: [API.BehaviorEvent]) -> Bool {
+        guard let t = task else { return false }
+        let arr = events.map { ev -> [String: Any] in
+            var d: [String: Any] = ["trackId": ev.trackId, "event": ev.event, "value": ev.value]
+            if let m = ev.meta, !m.isEmpty { d["meta"] = m }
+            return d
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: ["type": "behavior", "events": arr]),
+              let str = String(data: data, encoding: .utf8) else { return false }
+        t.send(.string(str)) { _ in }
+        return true
+    }
+
     /// 登录后启动长连接（已连接则忽略）
     func startIfNeeded() {
         guard task == nil, !manualStop else { return }

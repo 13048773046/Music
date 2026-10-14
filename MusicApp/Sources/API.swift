@@ -166,9 +166,12 @@ enum API {
         }
     }
 
-    /// 批量上报行为事件到 /api/behavior（401 静默清理登录态，不抛错）
+    /// 批量上报行为事件（失败静默，不打断播放流程）。
+    /// 优先走 WebSocket 实时上报（即时通讯通道）：行为数据实时入库并触发 recommend 事件推送；
+    /// WS 未连接（未登录/断线重连中）时回退 HTTP /api/behavior，保证行为不丢。
     static func reportBehavior(_ events: [BehaviorEvent]) async {
         guard !events.isEmpty else { return }
+        if NotificationBus.shared.sendBehavior(events) { return }
         var req = URLRequest(url: base.appendingPathComponent("behavior"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
