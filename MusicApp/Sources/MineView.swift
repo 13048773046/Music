@@ -167,31 +167,29 @@ struct MineView: View {
                 .frame(maxWidth: .infinity, alignment: .top)
                 .clipShape(BottomRoundedShape(radius: 24))
 
-                // 右上角：上传 + 消息 + 设置按钮（背景图右上角）
+                // 右上角：上传 + 消息 + 设置按钮（圆形半透明白底，和渐变背景融合）
                 HStack(spacing: 10) {
                     Button {
                         showImporter = true
                     } label: {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(Color.black.opacity(0.35))
+                            Circle().fill(.white.opacity(0.18))
                             Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(.white)
                         }
-                        .frame(width: 40, height: 40)
+                        .frame(width: 38, height: 38)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
 
                     // 消息通知入口
                     Button {
                         showNotifications = true
                     } label: {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(Color.black.opacity(0.35))
+                            Circle().fill(.white.opacity(0.18))
                             Image(systemName: "bell.fill")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.white)
                             // 未读红点
                             if unreadNotifCount > 0 {
@@ -203,74 +201,74 @@ struct MineView: View {
                                             .font(.system(size: 9, weight: .bold))
                                             .foregroundColor(.white)
                                     )
-                                    .offset(x: 12, y: -12)
+                                    .offset(x: 11, y: -11)
                             }
                         }
-                        .frame(width: 40, height: 40)
+                        .frame(width: 38, height: 38)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
 
                     // 设置入口：跳转设置页（修改信息/修改密码/缓存/更新/退出登录）
                     Button {
                         showSettings = true
                     } label: {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(Color.black.opacity(0.35))
+                            Circle().fill(.white.opacity(0.18))
                             Image(systemName: "gearshape")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.white)
                         }
-                        .frame(width: 40, height: 40)
+                        .frame(width: 38, height: 38)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                 }
                 .padding(.top, topInset + 8)
                 .padding(.trailing, 20)
                 .frame(maxWidth: .infinity, alignment: .topTrailing)
 
-                // 头像 + 昵称（背景图下部左侧，头像压背景图下沿）
-                HStack(alignment: .center, spacing: 14) {
-                    ZStack {
-                        CachedCoverImage(
-                            url: u?.avatarURL ?? URL(string: "about:blank")!,
-                            title: u?.name ?? "",
-                            placeholder:
-                                Circle().fill(Theme.accentSoft)
-                                    .overlay(Image(systemName: "person.fill")
-                                        .font(.system(size: 26))
-                                        .foregroundColor(Theme.accent))
-                        )
-                    }
-                    .frame(width: 72, height: 72)
+                // 头像 + 昵称 + 账号（背景图下部左侧，头像压背景图下沿）
+                HStack(spacing: 16) {
+                    CachedCoverImage(
+                        url: u?.avatarURL ?? URL(string: "about:blank")!,
+                        title: u?.name ?? "",
+                        placeholder:
+                            Circle().fill(Theme.accentSoft)
+                                .overlay(Image(systemName: "person.fill")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(Theme.accent))
+                    )
+                    .frame(width: 76, height: 76)
                     .clipShape(Circle())
-                    .overlay(Circle().stroke(Theme.background, lineWidth: 2.5))
+                    .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 3))
 
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: 7) {
                         Text(u?.name ?? "未登录")
-                            .font(.system(size: 20, weight: .bold))
+                            .font(.system(size: 22, weight: .bold))
                             .foregroundColor(.white)
-                        if let acc = u?.account, !acc.isEmpty {
-                            Text("账号：\(acc)")
-                                .font(.system(size: 13))
-                                .foregroundColor(.white.opacity(0.75))
-                        }
-                        HStack(spacing: 8) {
+                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            if let acc = u?.account, !acc.isEmpty {
+                                Text("ID \(acc)")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.9))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(.white.opacity(0.18)))
+                            }
                             if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
                                 tag(gender)
                             }
                             if let age = u?.age, age > 0 {
-                                tag("\(age) 岁")
+                                tag("\(age)")
                             }
                         }
                     }
-                    .padding(.bottom, 2)
 
                     Spacer()
                 }
                 .padding(.leading, 20)
                 .padding(.trailing, 20)
-                .padding(.top, topInset + 160 - 36)   // 头像中心压在背景图下沿
+                .padding(.top, topInset + 160 - 38)   // 头像中心压在背景图下沿
             }
             .frame(height: topInset + 160 + 36)       // 背景 + 头像露出下半部
 
@@ -589,10 +587,12 @@ struct MineView: View {
     private func tag(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .medium))
-            .foregroundColor(.white)
+            .foregroundColor(.white.opacity(0.9))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Color.black.opacity(0.45), in: Capsule())
+            .background(
+                Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 1)
+            )
     }
 
     private func emptyHint(_ text: String) -> some View {
