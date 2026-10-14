@@ -396,46 +396,67 @@ struct MarqueeText: View {
     /// 是否允许滚动：非当前播放页传 false，离屏页不再跑 repeatForever 动画，减少卡顿
     var active: Bool = true
 
-    @State private var textWidth: CGFloat = 0    // 原字号单份文字宽
+    @State private var textWidth: CGFloat = 0      // 原字号单份文字宽（溢出→缩小判定）
+    @State private var displayWidth: CGFloat = 0   // 显示字号单份文字宽（滚动距离判定）
     @State private var containerWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
+    /// 本轮滚动动画是否已启动：测量回调可能多次触发，避免重复开动画
+    @State private var started = false
 
-    /// 原字号文字是否超出容器（即会被右侧音效按钮挡住）：只据此触发缩小 + 滚动
+    /// 原字号是否溢出容器（会被右侧音效按钮挡住）→ 据此缩小字号
     private var overflow: Bool { textWidth > containerWidth + 4 && containerWidth > 0 }
-    /// 显示字号：溢出（被按钮挡住）时用紧凑字号缩小
+    /// 显示字号：溢出时用紧凑字号缩小
     private var displayFont: Font { overflow ? (compactFont ?? font) : font }
+    /// 是否真正滚动：原字号溢出（进入缩小态）**且**缩小后单份文字仍放不下 → 才滚动；
+    /// 缩小后已完全可见则静止（此前按原字号误判导致「缩小后还在滚 / 该滚不滚」）
+    private var shouldScroll: Bool {
+        overflow && displayWidth > containerWidth + 4 && containerWidth > 0
+    }
 
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 50) {
                 Text(text).font(displayFont).foregroundColor(color).fixedSize()
-                if overflow {
+                if shouldScroll {
                     Text(text).font(displayFont).foregroundColor(color).fixedSize()
                 }
             }
-            .background(
-                GeometryReader { tgeo in
-                    Color.clear.onAppear {
-                        containerWidth = geo.size.width
-                    }
-                }
-            )
             .overlay(alignment: .leading) {
-                // 隐藏的原字号文本：精确测量「是否会被右侧按钮挡住」，与显示字号解耦。
-                // 避免缩小字号后溢出判断跟着变、导致不滚动的误判。
+                // 原字号测量：决定是否需要缩小（与显示字号解耦，避免缩小后溢出判断跟着变）
                 Text(text).font(font).fixedSize().hidden()
                     .background(
                         GeometryReader { orig in
-                            Color.clear.onAppear { textWidth = orig.size.width }
+                            Color.clear.onAppear {
+                                textWidth = orig.size.width
+                                tryStart()
+                            }
+                        }
+                    )
+                // 显示字号测量：决定是否滚动 + 精确滚动距离（滚动距离必须按显示字号算，
+                // 否则缩小后距离过大、回跳露白/卡顿）
+                Text(text).font(displayFont).fixedSize().hidden()
+                    .background(
+                        GeometryReader { disp in
+                            Color.clear.onAppear {
+                                displayWidth = disp.size.width
+                                tryStart()
+                            }
                         }
                     )
             }
             .offset(x: offset)
-            .onAppear { start(container: geo.size.width) }
-            .onChange(of: text) { _ in restart(container: geo.size.width) }
+            .onAppear {
+                containerWidth = geo.size.width
+                tryStart()
+            }
+            .onChange(of: geo.size.width) { newW in
+                containerWidth = newW
+                restart()
+            }
+            .onChange(of: text) { _ in restart() }
             .onChange(of: active) { newValue in
                 if newValue {
-                    restart(container: containerWidth)
+                    restart()
                 } else {
                     // 非当前页：停止滚动并归位，避免离屏动画持续消耗
                     withAnimation(nil) { offset = 0 }
@@ -446,25 +467,26 @@ struct MarqueeText: View {
         .clipped()
     }
 
-    private func start(container: CGFloat) {
-        containerWidth = container
-        guard active else { return }
-        // 等一帧拿到 textWidth（background onAppear 可能晚于主 onAppear）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            guard active, overflow else { return }
-            let distance = textWidth + 50
-            withAnimation(
-                .linear(duration: Double(distance / speed))
+    /// 测量齐备且满足滚动条件时启动动画（幂等：已启动不重复触发）。
+    /// 由各处测量回调驱动而非一次性 onAppear + 固定延迟——
+    /// 修复测量晚于定时导致「overflow 误判为 false、从此不滚」的卡住问题。
+    private func tryStart() {
+        guard active, shouldScroll, !started else { return }
+        started = true
+        let distance = displayWidth + 50
+        withAnimation(
+            .linear(duration: Double(distance / speed))
                 .delay(pause)
                 .repeatForever(autoreverses: false)
-            ) {
-                offset = -distance
-            }
+        ) {
+            offset = -distance
         }
     }
 
-    private func restart(container: CGFloat) {
-        offset = 0
-        start(container: container)
+    /// 内容 / 容器宽度 / 激活状态变化：归位并重新评估是否滚动
+    private func restart() {
+        withAnimation(nil) { offset = 0 }
+        started = false
+        tryStart()
     }
 }

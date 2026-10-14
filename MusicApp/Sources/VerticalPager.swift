@@ -688,10 +688,13 @@ private struct LiveLyricView: View {
                     tint: tint
                 )
             } else {
-                // 无歌词：歌词区显示「作者·歌手名」+「该歌曲暂无歌词」
-                // （视口高度与 LyricPreview 一致 = 60，布局稳定不跳动）
+                // 无歌词：歌词区显示「作者·歌手名」停留 5 秒 → 平滑过渡到「该歌曲暂无歌词」
+                // → 持续显示直到歌曲结束（不循环）。
+                // 视口高度与 LyricPreview 一致 = 60，布局稳定不跳动。
+                // .id 按歌曲绑定：切歌重建组件、重新计时，每首歌都从「作者行停留」开始。
                 NoLyricPlaceholder(author: player.current?.displayAuthor ?? "未知歌手",
                                    tint: tint)
+                    .id(player.current?.id ?? "no-lyric")
             }
         } else if !lines.isEmpty {
             // 非当前页：固定占位保持布局稳定（LyricPreview 视口高度 = 26*2 + 8）
@@ -702,17 +705,22 @@ private struct LiveLyricView: View {
 
 /// 无歌词占位：作者·歌手名 + 「该歌曲暂无歌词」，替代原本空白歌词区。
 /// 用 TimelineView(.animation) 时间轴驱动，与正常歌词 LyricPreview 同款单调滚动 + 缩放/淡出过渡：
-/// 「作者·歌手名」停留 hold 秒 → 平滑滚动到「该歌曲暂无歌词」→ **停住，不循环**。
-/// 高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
+/// 「作者·歌手名」停留 hold 秒（默认 5s）→ 平滑滚动到「该歌曲暂无歌词」→ **停住，不循环**，
+/// 持续显示直到歌曲结束。高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
 private struct NoLyricPlaceholder: View {
     let author: String
     let tint: Color
 
-    private static let hold: Double = 3.0       // 第一行「作者·歌手名」停留时长（秒）
+    private static let hold: Double = 5.0       // 第一行「作者·歌手名」停留时长（秒）
     private static let scroll: Double = 0.28    // 滚到第二行的过渡时长（秒，与正常歌词一致）
     private static let rowGap: CGFloat = 8
     private static let step: CGFloat = 32       // 第一行行高24 + 间距8，滚动位移
     private static let viewHeight: CGFloat = 60
+
+    /// 组件创建时刻（相对计时基准）：TimelineView 的 date 是 2001 年起算的绝对时间，
+    /// 直接 `t < hold` 判断恒为假（2026 年约 8.1e8 秒），会导致第一行从不显示——
+    /// 必须减去创建时刻得到「本首歌」的经过秒数。
+    @State private var startRef: TimeInterval = Date().timeIntervalSinceReferenceDate
 
     /// 滚动单调化追踪器：class 引用属性不触发 SwiftUI 重绘，过渡阶段只增不减不回弹
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
@@ -720,7 +728,8 @@ private struct NoLyricPlaceholder: View {
 
     var body: some View {
         TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+            // 相对创建时刻的经过秒数：0 → hold 为作者行停留期，之后过渡到暂无歌词
+            let t = ctx.date.timeIntervalSinceReferenceDate - startRef
             // 目标行：第一行停留 hold 秒后滚到第二行，单向到达后停住（不循环）
             let c = t < Self.hold ? 0 : 1
             // 滚动进度：进入第二行后 0→1；第一行停留期为 0
