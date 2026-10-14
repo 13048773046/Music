@@ -184,13 +184,21 @@ enum API {
         noticeAuthFailure(resp)
     }
 
-    /// 个性化推荐：基于用户行为返回 20 首相关歌曲（未登录/无行为时后端返回随机兜底）
-    static func recommend(userId: String? = nil) async throws -> [Track] {
+    /// 个性化推荐：基于用户行为返回 20 首相关歌曲（未登录/无行为时后端返回随机兜底）。
+    /// - Parameter excluding: 已推荐过的歌曲 id（推荐流无限续推防重复，后端逐条排除）
+    static func recommend(userId: String? = nil, excluding: [String] = []) async throws -> [Track] {
         var components = URLComponents(url: base.appendingPathComponent("recommend"),
                                        resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = []
         let uid = userId ?? AuthManager.shared.currentUser?.id
         if let uid, !uid.isEmpty {
-            components.queryItems = [URLQueryItem(name: "userId", value: uid)]
+            items.append(URLQueryItem(name: "userId", value: uid))
+        }
+        if !excluding.isEmpty {
+            items.append(URLQueryItem(name: "exclude", value: excluding.joined(separator: ",")))
+        }
+        if !items.isEmpty {
+            components.queryItems = items
         }
         var req = URLRequest(url: components.url!)
         req.timeoutInterval = 15

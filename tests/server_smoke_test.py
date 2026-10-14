@@ -19,6 +19,7 @@ import tempfile
 import argparse
 import urllib.request
 import urllib.error
+import urllib.parse
 import subprocess
 import hashlib
 import sqlite3
@@ -274,6 +275,13 @@ def run_all(port, root, strict_port, strict_root):
     check("未登录 recommend 非空", s == 200 and isinstance(rec2, list) and len(rec2) >= 1,
           f"s={s} {body[:100]}")
     check("未登录 recommend 无重复", len({t["id"] for t in rec2}) == len(rec2), body[:100])
+    # exclude：推荐流无限续推防重复——已推荐过的歌曲不再出现在下一批
+    _rec_ids = [t["id"] for t in rec]
+    _excl_q = urllib.parse.quote(",".join(_rec_ids))
+    s, body, _ = req("GET", f"/api/recommend?exclude={_excl_q}", headers=AUTH)
+    rec3 = json.loads(body)
+    check("recommend exclude 排除已推荐", s == 200 and isinstance(rec3, list)
+          and all(t["id"] not in set(_rec_ids) for t in rec3), f"s={s} {body[:100]}")
 
     print("== 11. 流式 Range ==")
     s, body, hdrs = req("GET", f"/api/stream/{tid}", headers={"Range": "bytes=0-99"})

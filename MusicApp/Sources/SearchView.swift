@@ -131,12 +131,13 @@ struct SearchView: View {
     private func play(track: Track) {
         let kw = keyword.trimmingCharacters(in: .whitespaces)
         if kw.isEmpty {
-            // 无关键词（例如点击默认结果）：切回普通流，并入全局曲库播放
+            // 无关键词（例如点击默认结果）：进入个性化推荐流（汽水式），以该歌为当前曲；
+            // 推荐不可用时回退全库流，保证点歌必有声音
             library.searchContext = nil
             if !library.tracks.contains(where: { $0.id == track.id }) {
                 library.tracks.append(track)
             }
-            player.playInNormalMode(track, in: library.tracks)
+            player.startRecommendedStream(startingAt: track, fallback: library.tracks)
         } else {
             // 建立搜索相关流：以当前歌曲立即播放，后台拉取第一批相关歌曲
             // （每次 10 首随机，歌名/歌手/专辑/上传者相关优先，不足补全随机），

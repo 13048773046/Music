@@ -1030,15 +1030,17 @@ def _rec_reason(sources):
     return "推荐"
 
 
-def build_recommendations(c, viewer_id):
-    """多路召回 → 加权融合 → MMR 重排，返回推荐歌曲 id 列表（≤20，已去重、已排除本人上传）。
+def build_recommendations(c, viewer_id, exclude=None):
+    """多路召回 → 加权融合 → MMR 重排，返回推荐 (歌曲id, 推荐理由) 列表（≤20，去重、排除本人上传与 exclude）。
 
-    viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底，
-    保证冷启动也有内容可推。
+    exclude: 已推荐过的歌曲 id 集合（推荐流无限续推时防重复推荐同一批）。
+    viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底。
     """
     now = time.time()
     exclude_self = {r[0] for r in c.execute(
         "SELECT id FROM tracks WHERE user_id=?", (viewer_id or "",)).fetchall()}
+    if exclude:
+        exclude_self |= set(exclude)
 
     # 候选池：tid -> {score, sources, artist, album, title, genre}
     cand = {}
@@ -3158,8 +3160,13 @@ async function delNotify(id){
                 tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if tok_uid:
                     viewer_id = tok_uid
+                # exclude：已推荐过的歌曲 id（逗号分隔）——推荐流无限续推防重复
+                _excl = set()
+                _ex_s = (qs.get("exclude", [""])[0] or "").strip()
+                if _ex_s:
+                    _excl = {x for x in _ex_s.split(",") if x}
                 # 多路召回 + 加权融合 + MMR 重排（算法见 build_recommendations）
-                rec_pairs = build_recommendations(c, viewer_id)
+                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl)
                 chosen = [tid for tid, _ in rec_pairs]
                 reason_map = dict(rec_pairs)
                 if not chosen:

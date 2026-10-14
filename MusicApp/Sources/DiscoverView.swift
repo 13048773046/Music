@@ -227,10 +227,12 @@ struct DiscoverView: View {
         }
     }
 
-    /// 播放「猜你喜欢」推荐歌曲：以推荐列表为队列（后续续拉切回普通全随机流）。
+    /// 播放「猜你喜欢」推荐歌曲：以推荐列表为队列（后续滑到队尾自动续拉下一批推荐）。
     /// 不把推荐曲 append 进 library.tracks——那会污染发现页「全部歌曲」数据源。
+    /// 播放前把本批推荐 id 记入播放器去重集合，保证无限续推不重复本批。
     private func playRecommended(_ track: Track) {
         library.searchContext = nil
+        player.noteRecommended(recommended.map { $0.id })
         player.playInNormalMode(track, in: recommended)
     }
 

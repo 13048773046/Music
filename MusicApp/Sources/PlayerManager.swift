@@ -128,6 +128,13 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 进行中的预加载任务（切歌/队列变化时取消，防错加载）
     private var prefetchTask: Task<Void, Never>?
 
+    // MARK: - 个性化推荐流（汽水式无限听歌流）
+
+    /// 已推荐过的歌曲 id（推荐流无限续推时传给后端 exclude，防止重复推荐同一批）
+    private var recommendedIds: Set<String> = []
+    /// 推荐流每次续拉最大排除量（防止 exclude 参数无限膨胀）
+    private let recommendedExcludeCap = 500
+
 
     // MARK: - 收听行为追踪（个性化推荐数据源）
 
@@ -663,14 +670,34 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
-    /// 默认模式队尾续播：异步拉取下一组随机歌，追加成功则从「新歌第一首」接续播放；
-    /// 无新歌（曲库不足/拉取失败）才回绕第一首（列表循环兜底，避免卡在队尾）。
+    /// 默认模式队尾续播（汽水式无限流）：
+    /// - 推荐流（无搜索上下文）：异步拉取下一批「个性化推荐」（排除已推荐歌曲，防重复），
+    ///   追加成功则从「新歌第一首」接续播放——每一首都是多路召回按口味推荐的歌；
+    /// - 搜索相关流（有搜索上下文）：维持原有「关键词相关歌曲」续拉；
+    /// 两种都无新歌（曲库不足/拉取失败）才回绕第一首（列表循环兜底，避免卡在队尾）。
     /// 追加期间若用户已手动切走（不再停在队尾），不覆盖用户当前位置。
     private func loadNextBatchOrLoop() {
         let lastIndex = currentIndex   // 队尾索引
         let baseCount = queue.count    // 追加前长度
+        let isSearchStream = Library.shared.searchContext != nil
         Task { @MainActor in
-            await Library.shared.loadMore()
+            if isSearchStream {
+                // 搜索相关流：关键词相关歌曲续拉（原有逻辑）
+                await Library.shared.loadMore()
+            } else {
+                // 推荐流：拉下一批个性化推荐，排除已推荐 id，实现汽水式无限续推
+                let excluding = Array(recommendedIds.suffix(recommendedExcludeCap))
+                let next = (try? await API.recommend(excluding: excluding)) ?? []
+                if !next.isEmpty {
+                    recommendedIds.formUnion(next.map { $0.id })
+                    let existing = Set(queue.map { $0.id })
+                    let fresh = next.filter { !existing.contains($0.id) }
+                    if !fresh.isEmpty {
+                        queue.append(contentsOf: fresh)
+                        trimQueueIfNeeded()
+                    }
+                }
+            }
             let grew = queue.count > baseCount
             let stillAtEnd = currentIndex == lastIndex
             if grew, stillAtEnd, listenMode == .normal {
@@ -760,12 +787,12 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     /// 恢复模式会话：换回该模式的队列，播放「切走时那首的下一首」（从头开始）。
-    /// normal 会话恢复时同步发现页数据源，保证首页列表与播放流一致。
+    /// normal 会话恢复时同步搜索上下文；发现页「全部歌曲」保持独立全库数据，
+    /// 不再被播放队列覆盖（默认流已是推荐流，队列 ≠ 发现页数据源）。
     private func restoreSession(_ s: ModeSession) {
         guard !s.queue.isEmpty, s.queue.indices.contains(s.currentIndex) else { return }
         if s.mode == .normal {
             let lib = Library.shared
-            lib.tracks = s.queue
             lib.searchContext = s.searchContext
         }
         // 切走时在最后一首：下一首回绕到第一首（列表循环语义）
@@ -797,34 +824,63 @@ final class PlayerManager: NSObject, ObservableObject {
         }
     }
 
-    /// 默认模式：优先恢复缓存会话；无缓存才切回 Library 默认全随机流，恢复保存的循环模式
+    /// 默认模式：优先恢复缓存会话；无缓存才进入个性化推荐流（汽水式无限听歌流），恢复保存的循环模式。
+    /// 推荐流拉取失败时回退 Library 全库流保底，避免空队列挂起。
     private func restoreNormalStream() {
         playMode = savedNormalMode
         if let s = sessions[.normal], !s.queue.isEmpty {
             restoreSession(s)
             return
         }
-        let lib = Library.shared
-        // 队列不在默认流中（如喜欢/新鲜/搜索流）时切回；未加载则先加载，加载完自动切回
-        if queue != lib.tracks {
-            if !lib.isLoaded {
-                Task {
-                    await lib.load()
-                    await MainActor.run {
-                        guard listenMode == .normal else { return }
-                        if let cur = current, lib.tracks.contains(where: { $0.id == cur.id }) {
-                            play(cur, in: lib.tracks)
-                        } else if let first = lib.tracks.first {
-                            play(first, in: lib.tracks)
-                        }
+        startRecommendedStream(fallback: Library.shared.tracks)
+    }
+
+    /// 记录已推荐歌曲 id（外部以推荐列表为队列播放时调用），
+    /// 供推荐流无限续推去重（exclude 已推荐批次）。
+    func noteRecommended(_ ids: [String]) {
+        recommendedIds.formUnion(ids)
+    }
+
+    /// 进入个性化推荐流（对齐汽水音乐「推荐即队列」的无限听歌体验）：
+    /// 队列 = 后端多路召回 + MMR 重排的个性化推荐，滑到队尾自动续拉下一批推荐（不重复）。
+    /// - Parameter track: 期望从这首歌开始（发现页点击歌曲时传入；不在推荐列表则置为队首，后续接推荐）
+    /// - Parameter fallback: 推荐拉取失败时的保底队列（全库流），保证点歌必有声音
+    func startRecommendedStream(startingAt track: Track? = nil, fallback: [Track] = []) {
+        if listenMode != .normal {
+            saveSession(for: listenMode)
+            listenMode = .normal
+        }
+        let excluding = Array(recommendedIds.suffix(recommendedExcludeCap))
+        Task { @MainActor in
+            let list = (try? await API.recommend(excluding: excluding)) ?? []
+            if list.isEmpty {
+                // 推荐不可用（未登录/曲库太小/网络失败）：回退保底队列
+                if !fallback.isEmpty {
+                    let base = fallback
+                    if let track, base.contains(where: { $0.id == track.id }) {
+                        play(track, in: base)
+                    } else if let track {
+                        play(track, in: [track] + base.filter { $0.id != track.id })
+                    } else if let first = base.first {
+                        play(first, in: base)
                     }
+                } else if let track {
+                    play(track, in: [track])
                 }
                 return
             }
-            if let cur = current, lib.tracks.contains(where: { $0.id == cur.id }) {
-                play(cur, in: lib.tracks)
-            } else if let first = lib.tracks.first {
-                play(first, in: lib.tracks)
+            recommendedIds.formUnion(list.map { $0.id })
+            if let track, let idx = list.firstIndex(where: { $0.id == track.id }) {
+                // 目标歌就在推荐里：以它为当前曲，后续接推荐
+                play(track, in: list)
+            } else if let track {
+                // 目标歌不在推荐列表：置为队首（当前曲），后续接推荐
+                var q = list
+                q.insert(track, at: 0)
+                recommendedIds.insert(track.id)
+                play(track, in: q)
+            } else if let first = list.first {
+                play(first, in: list)
             }
         }
     }

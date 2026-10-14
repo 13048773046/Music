@@ -55,12 +55,10 @@ final class Library: ObservableObject {
                 await MainActor.run {
                     self.tracks = list
                     self.isLoaded = true
-                    // 首次拿到列表且播放器还没有队列时，自动播第一首
-                    if PlayerManager.shared.queue.isEmpty, !list.isEmpty {
-                        // 冷启动：先把首曲签名 URL 预热入池，playCurrent 直接命中省一次往返
-                        let first = list[0]
-                        Task { await PlayerManager.shared.prewarm(first) }
-                        PlayerManager.shared.play(first, in: list)
+                    // 首次拿到列表且播放器还没有队列时，自动进入个性化推荐流（汽水式无限听歌流）
+                    if PlayerManager.shared.queue.isEmpty {
+                        // 冷启动：以推荐流为队列（多路召回 + MMR 重排），推荐不可用时回退全库流
+                        PlayerManager.shared.startRecommendedStream(fallback: list)
                     }
                 }
             } catch {
@@ -79,11 +77,12 @@ final class Library: ObservableObject {
         loadLock.unlock()
     }
 
-    /// 从发现页点击歌曲播放：切回普通全随机流（不再继续相关流）
+    /// 从发现页点击歌曲播放：切回默认模式并进入个性化推荐流（对齐汽水音乐）——
+    /// 以点击的歌曲为当前曲，队列 = 多路召回个性化推荐（后续接推荐流）；
+    /// 推荐拉取失败时回退「全部歌曲」全库流，保证点歌必有声音。
     func playFromDiscover(_ track: Track) {
         searchContext = nil
-        // 发现页数据源就是 tracks，歌曲必然在队列中
-        PlayerManager.shared.playInNormalMode(track, in: tracks)
+        PlayerManager.shared.startRecommendedStream(startingAt: track, fallback: tracks)
     }
 
     /// 建立搜索相关流：以当前点击的歌曲为首播（立即播放），
