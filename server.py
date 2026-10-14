@@ -1051,13 +1051,18 @@ def _rec_reason(sources):
     return "推荐"
 
 
-def build_recommendations(c, viewer_id, exclude=None):
+def build_recommendations(c, viewer_id, exclude=None, fresh=False):
     """多路召回 → 加权融合 → MMR 重排，返回推荐 (歌曲id, 推荐理由) 列表（≤20，去重、排除本人上传与 exclude）。
 
     exclude: 已推荐过的歌曲 id 集合（推荐流无限续推时防重复推荐同一批）。
+    fresh: 长时间重开 App 的「新鲜会话」标记——加大随机扰动并提高探索路权重，
+           让重新开始的一批推荐明显不同于上次（不固定重复同一批）。
     viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底。
     """
     now = time.time()
+    # 新鲜重开：随机扰动 ×3、探索路权重 ×2，结果带随机性又不脱离行为画像
+    noise = REC_NOISE * 3 if fresh else REC_NOISE
+    w_explore = REC_WEIGHTS["explore"] * 2.0 if fresh else REC_WEIGHTS["explore"]
     exclude_self = {r[0] for r in c.execute(
         "SELECT id FROM tracks WHERE user_id=?", (viewer_id or "",)).fetchall()}
     if exclude:
@@ -1252,7 +1257,7 @@ def build_recommendations(c, viewer_id, exclude=None):
     for rid, rtitle, rartist, ralbum, rgenre in explore:
         if rid in cand or rid in avoid:
             continue
-        _add(rid, REC_WEIGHTS["explore"], "explore", rartist, ralbum, rtitle, rgenre)
+        _add(rid, w_explore, "explore", rartist, ralbum, rtitle, rgenre)
 
     # ---------- MMR 重排（相关分 − 与已选歌的相似度；同歌手/同风格设上限） ----------
     pool = [(tid, it) for tid, it in cand.items()]
@@ -1272,7 +1277,7 @@ def build_recommendations(c, viewer_id, exclude=None):
                 continue
             div = max((_rec_sim(it, r) for _, r in ranked), default=0.0) if ranked else 0.0
             s = REC_MMR_LAMBDA * it["score"] - (1.0 - REC_MMR_LAMBDA) * div \
-                + random.uniform(0, REC_NOISE)
+                + random.uniform(0, noise)
             if s > best_score:
                 best_score, best_i = s, i
         if best_i < 0:
@@ -3190,8 +3195,10 @@ async function delNotify(id){
                 _ex_s = (qs.get("exclude", [""])[0] or "").strip()
                 if _ex_s:
                     _excl = {x for x in _ex_s.split(",") if x}
+                # fresh：长时间重开 App 的新鲜会话——加大随机扰动/探索权重，重开不固定重复
+                _fresh = (qs.get("fresh", ["0"])[0] or "").strip() in ("1", "true")
                 # 多路召回 + 加权融合 + MMR 重排（算法见 build_recommendations）
-                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl)
+                rec_pairs = build_recommendations(c, viewer_id, exclude=_excl, fresh=_fresh)
                 chosen = [tid for tid, _ in rec_pairs]
                 reason_map = dict(rec_pairs)
                 if not chosen:

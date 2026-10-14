@@ -186,7 +186,10 @@ enum API {
 
     /// 个性化推荐：基于用户行为返回 20 首相关歌曲（未登录/无行为时后端返回随机兜底）。
     /// - Parameter excluding: 已推荐过的歌曲 id（推荐流无限续推防重复，后端逐条排除）
-    static func recommend(userId: String? = nil, excluding: [String] = []) async throws -> [Track] {
+    /// - Parameter fresh: 长时间重开 App 的新鲜会话——后端加大随机扰动/探索权重，
+    ///   让重新开始的一批推荐带随机性、不固定重复上次
+    static func recommend(userId: String? = nil, excluding: [String] = [],
+                           fresh: Bool = false) async throws -> [Track] {
         var components = URLComponents(url: base.appendingPathComponent("recommend"),
                                        resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = []
@@ -196,6 +199,9 @@ enum API {
         }
         if !excluding.isEmpty {
             items.append(URLQueryItem(name: "exclude", value: excluding.joined(separator: ",")))
+        }
+        if fresh {
+            items.append(URLQueryItem(name: "fresh", value: "1"))
         }
         if !items.isEmpty {
             components.queryItems = items

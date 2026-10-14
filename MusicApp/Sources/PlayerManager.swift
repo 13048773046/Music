@@ -290,9 +290,98 @@ final class PlayerManager: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             self?.flushListen(.background)
+            // 保存播放会话：杀 App 重开后，短时间间隔接着「上次那首的下一首」继续播
+            self?.saveSessionToDisk()
             // 保持音频会话激活：防止后台期间会话被降权/停用导致音量被压低或无声
             try? AVAudioSession.sharedInstance().setActive(true)
         }
+    }
+
+    // MARK: - 播放会话持久化（杀 App 重开：短时间接着上次的下一首，长时间重新来）
+
+    /// 短时间窗口：距上次保存 < 此值（默认 5 分钟）恢复会话、接着上次那首的下一首；
+    /// 超过（如隔 10 分钟）则丢弃旧会话，重新进入带随机性的新鲜推荐流
+    private static let sessionResumeWindow: TimeInterval = 300
+    private static let sessionKey = "PlayerManager.savedSession.v1"
+    /// 保存窗口：当前歌之前保留 N 首、之后保留 M 首（限制 UserDefaults 体积）
+    private static let sessionKeepBefore = 30
+    private static let sessionKeepAfter = 90
+
+    private struct SavedSession: Codable {
+        var queue: [Track]
+        var currentIndex: Int
+        var listenMode: String
+        var playModeIndex: Int
+        var savedNormalModeIndex: Int
+        var searchContext: String?
+        var wasPlaying: Bool
+        var savedAt: TimeInterval
+    }
+
+    /// 把当前播放会话（队列 + 位置 + 模式 + 进度态）写入本地。
+    /// 只在进入后台时保存一次：切歌后杀 App 必经后台回调，状态即最新，避免频繁写盘。
+    private func saveSessionToDisk() {
+        guard !queue.isEmpty, queue.indices.contains(currentIndex) else { return }
+        // 截取当前歌附近的窗口（可上滑回退/下滑续听），控制 UserDefaults 体积
+        let start = max(0, currentIndex - Self.sessionKeepBefore)
+        let end = min(queue.count, currentIndex + Self.sessionKeepAfter + 1)
+        let saved = Array(queue[start..<end])
+        let idx = currentIndex - start
+        let playIdx = PlayMode.allCases.firstIndex(of: playMode) ?? 0
+        let normalIdx = PlayMode.allCases.firstIndex(of: savedNormalMode) ?? 0
+        let s = SavedSession(queue: saved, currentIndex: idx,
+                             listenMode: listenMode.rawValue,
+                             playModeIndex: playIdx,
+                             savedNormalModeIndex: normalIdx,
+                             searchContext: Library.shared.searchContext,
+                             wasPlaying: isPlaying,
+                             savedAt: Date().timeIntervalSince1970)
+        if let data = try? JSONEncoder().encode(s) {
+            UserDefaults.standard.set(data, forKey: Self.sessionKey)
+        }
+    }
+
+    /// 冷启动恢复上次播放会话：
+    /// - 距上次保存 < sessionResumeWindow（短时间重开）：恢复队列并播「上次那首的下一首」
+    ///   （上次在队尾则回绕第一首，与列表循环语义一致），保持原听歌模式/循环模式；
+    /// - 超过窗口（长时间重开）：丢弃旧会话返回 false，由调用方重新进入新鲜推荐流；
+    /// 数据损坏/队列为空/索引越界同样返回 false 并清掉脏数据。
+    func restoreLastSessionIfNeeded() -> Bool {
+        guard queue.isEmpty else { return false }
+        guard let data = UserDefaults.standard.data(forKey: Self.sessionKey),
+              let s = try? JSONDecoder().decode(SavedSession.self, from: data),
+              !s.queue.isEmpty, s.queue.indices.contains(s.currentIndex) else {
+            UserDefaults.standard.removeObject(forKey: Self.sessionKey)
+            return false
+        }
+        // 长时间重开（如隔 10 分钟）：不接着上次，重新进带随机性的新鲜推荐流
+        let age = Date().timeIntervalSince1970 - s.savedAt
+        guard age < Self.sessionResumeWindow else {
+            UserDefaults.standard.removeObject(forKey: Self.sessionKey)
+            return false
+        }
+        // 恢复模式 / 循环模式 / 搜索上下文 / 队列
+        listenMode = ListenMode(rawValue: s.listenMode) ?? .normal
+        if PlayMode.allCases.indices.contains(s.playModeIndex) {
+            playMode = PlayMode.allCases[s.playModeIndex]
+        }
+        if PlayMode.allCases.indices.contains(s.savedNormalModeIndex) {
+            savedNormalMode = PlayMode.allCases[s.savedNormalModeIndex]
+        }
+        // 搜索上下文只属于 normal 模式：liked/works 恢复时清空，避免污染后续推荐流
+        if listenMode == .normal {
+            Library.shared.searchContext = s.searchContext
+        } else {
+            Library.shared.searchContext = nil
+        }
+        queue = s.queue
+        // 恢复队列里的歌加入推荐去重集合：后续滑到队尾续推不重复这批
+        recommendedIds.formUnion(s.queue.map { $0.id })
+        // 接着上次那首的下一首（上次在最后一首则回绕第一首，列表循环语义）
+        let resume = s.queue.indices.contains(s.currentIndex + 1) ? s.currentIndex + 1 : 0
+        currentIndex = resume
+        playCurrent(autoResume: s.wasPlaying)
+        return true
     }
 
     deinit {
@@ -852,14 +941,17 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 队列 = 后端多路召回 + MMR 重排的个性化推荐，滑到队尾自动续拉下一批推荐（不重复）。
     /// - Parameter track: 期望从这首歌开始（发现页点击歌曲时传入；不在推荐列表则置为队首，后续接推荐）
     /// - Parameter fallback: 推荐拉取失败时的保底队列（全库流），保证点歌必有声音
-    func startRecommendedStream(startingAt track: Track? = nil, fallback: [Track] = []) {
+    /// - Parameter fresh: 长时间重开 App 的新鲜会话——后端加大随机扰动/探索权重，
+    ///   重新开始的一批推荐带随机性、不固定重复上次
+    func startRecommendedStream(startingAt track: Track? = nil, fallback: [Track] = [],
+                                 fresh: Bool = false) {
         if listenMode != .normal {
             saveSession(for: listenMode)
             listenMode = .normal
         }
         let excluding = Array(recommendedIds.suffix(recommendedExcludeCap))
         Task { @MainActor in
-            let list = (try? await API.recommend(excluding: excluding)) ?? []
+            let list = (try? await API.recommend(excluding: excluding, fresh: fresh)) ?? []
             if list.isEmpty {
                 // 推荐不可用（未登录/曲库太小/网络失败）：回退保底队列
                 if !fallback.isEmpty {

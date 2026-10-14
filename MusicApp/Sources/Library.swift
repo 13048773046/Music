@@ -55,10 +55,13 @@ final class Library: ObservableObject {
                 await MainActor.run {
                     self.tracks = list
                     self.isLoaded = true
-                    // 首次拿到列表且播放器还没有队列时，自动进入个性化推荐流（汽水式无限听歌流）
+                    // 首次拿到列表且播放器还没有队列时：先尝试恢复上次播放会话——
+                    // 短时间重开 App 接着「上次那首的下一首」继续播；
+                    // 无可恢复会话 / 长时间重开（如隔 10 分钟）→ 进入带随机性的新鲜个性化推荐流
                     if PlayerManager.shared.queue.isEmpty {
-                        // 冷启动：以推荐流为队列（多路召回 + MMR 重排），推荐不可用时回退全库流
-                        PlayerManager.shared.startRecommendedStream(fallback: list)
+                        if !PlayerManager.shared.restoreLastSessionIfNeeded() {
+                            PlayerManager.shared.startRecommendedStream(fallback: list, fresh: true)
+                        }
                     }
                 }
             } catch {

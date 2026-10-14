@@ -284,6 +284,12 @@ def run_all(port, root, strict_port, strict_root):
         for i in range(len(rec_titles)) for j in range(i + 1, len(rec_titles)))
     check("recommend 歌名相似度≥80% 不同批推送",
           not dup_title, f"titles={[t.get('title') for t in rec]}")
+    # fresh 新鲜会话（长时间重开 App）：加大随机扰动，接口正常返回非空且无重复
+    s, body, _ = req("GET", "/api/recommend?fresh=1", headers=AUTH)
+    rec4 = json.loads(body)
+    check("recommend fresh 新鲜会话正常",
+          s == 200 and isinstance(rec4, list) and len(rec4) >= 1
+          and len({t["id"] for t in rec4}) == len(rec4), f"s={s} {body[:100]}")
     # 未登录：热度 + 新歌 + 随机三路兜底，同样返回非空且无重复
     s, body, _ = req("GET", "/api/recommend")
     rec2 = json.loads(body)
