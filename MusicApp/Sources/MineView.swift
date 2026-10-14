@@ -155,9 +155,13 @@ struct MineView: View {
                             .frame(height: 160 + topInset)
                             .clipped()
                     } else {
-                        Rectangle()
-                            .fill(Theme.card)
-                            .frame(height: 160 + topInset)
+                        // 无背景图：深薄荷→暗紫渐变，和整体设计语言统一
+                        LinearGradient(
+                            colors: [Theme.accentSoft, Color(hex: 0x2A2440)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .frame(height: 160 + topInset)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
@@ -270,20 +274,28 @@ struct MineView: View {
             }
             .frame(height: topInset + 160 + 36)       // 背景 + 头像露出下半部
 
-            // 签名 + 听歌时长（信息区，再往下移一点）
-            VStack(alignment: .leading, spacing: 10) {
+            // 签名 + 听歌时长（软卡片，和首页卡片风统一）
+            VStack(alignment: .leading, spacing: 12) {
                 if let sig = u?.signature, !sig.isEmpty {
-                    Text(sig)
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.textSecondary)
-                        .lineLimit(1)
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "quote.bubble.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textTertiary)
+                        Text(sig)
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(2)
+                    }
                 }
 
-                // 听歌时长：一行数据（非卡片）
+                // 听歌时长：软卡片数据行
                 HStack(spacing: 8) {
-                    Image(systemName: "clock.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.sky)
+                    ZStack {
+                        Circle().fill(Theme.accentSoft).frame(width: 30, height: 30)
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.accent)
+                    }
                     Text("累计听歌")
                         .font(.system(size: 13))
                         .foregroundColor(Theme.textSecondary)
@@ -292,6 +304,8 @@ struct MineView: View {
                         .font(.system(size: 15, weight: .bold))
                         .foregroundColor(Theme.accent)
                 }
+                .padding(12)
+                .softCard(radius: 14)
             }
             .padding(.horizontal, 20)
             .padding(.top, 22)
@@ -392,7 +406,7 @@ struct MineView: View {
     // MARK: - 作品页（分页加载，直接在外层整页 ScrollView 中惰性渲染）
 
     private var worksList: some View {
-        LazyVStack(spacing: 0) {
+        LazyVStack(spacing: 10) {
             if works.failed {
                 loadFailedHint
             } else if works.isEmpty {
@@ -412,7 +426,7 @@ struct MineView: View {
     // MARK: - 点赞页（分页加载）
 
     private var likesList: some View {
-        LazyVStack(spacing: 0) {
+        LazyVStack(spacing: 10) {
             if likes.failed {
                 loadFailedHint
             } else if likes.isEmpty {
@@ -432,7 +446,7 @@ struct MineView: View {
     // MARK: - 评论页（分页加载）
 
     private var commentsList: some View {
-        LazyVStack(spacing: 0) {
+        LazyVStack(spacing: 10) {
             if comments.failed {
                 loadFailedHint
             } else if comments.isEmpty {
@@ -478,8 +492,10 @@ struct MineView: View {
                 .foregroundColor(.red.opacity(0.9))
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
+                .softCard(radius: 14)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableButtonStyle())
+            .padding(.horizontal, 20)
             .padding(.bottom, 6)
         }
     }
@@ -529,18 +545,11 @@ struct MineView: View {
                 }
             }
             .padding(.vertical, 10)
-            .overlay(alignment: .bottom) {
-                // 行间分割线：必须显式指定为全宽横线（Divider 在 overlay 中会渲染成竖线）
-                Rectangle()
-                    .fill(Theme.cardBorder)
-                    .frame(height: 0.5)
-                    .frame(maxWidth: .infinity)
-            }
+            .padding(.horizontal, 12)
+            .softCard(radius: 14)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
-
-    // MARK: - 评论行
 
     private func commentRow(_ c: API.MyComment) -> some View {
         Button {
@@ -569,15 +578,10 @@ struct MineView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.vertical, 10)
-            .overlay(alignment: .bottom) {
-                // 行间分割线：显式全宽横线，避免 Divider 渲染成竖线
-                Rectangle()
-                    .fill(Theme.cardBorder)
-                    .frame(height: 0.5)
-                    .frame(maxWidth: .infinity)
-            }
+            .padding(.horizontal, 12)
+            .softCard(radius: 14)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 
     // MARK: - 通用小组件
