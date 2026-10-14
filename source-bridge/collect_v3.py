@@ -18,6 +18,76 @@ DY_MUSIC_URL = "https://aweme.snssdk.com/aweme/v1/chart/music/list/"
 DY_CHART_ID = "6853972723954146568"   # 抖音热歌榜 chart_id
 DY_HEADERS = {"User-Agent": "okhttp3"}
 
+# —— 网络热门榜（非抖音）：网易云热歌榜 / QQ音乐热歌榜 ——
+# 榜单提供"当前热门歌曲清单"，音源统一走 gd 音源桥搜索同名歌曲下载（gd 桥已验证可用）。
+# 网易云热歌榜（歌单 3778678 = 云音乐热歌榜，n=100 取全榜 100 首）
+WY_HOT_URL = "https://music.163.com/api/v6/playlist/detail?id=3778678&n=100"
+# QQ音乐热歌榜（topid=26 = 热歌榜）
+QQ_HOT_URL = "https://c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg?topid=26&type=toplist&format=json&page=1&num=100"
+
+def fetch_wy_hot():
+    """网易云热歌榜：返回 [{name, singer}] 列表"""
+    items = []
+    try:
+        req = urllib.request.Request(WY_HOT_URL, headers={"User-Agent": "Mozilla/5.0",
+                                                          "Referer": "https://music.163.com/"})
+        with urllib.request.urlopen(req, timeout=15, context=make_ctx()) as r:
+            d = json.loads(r.read().decode("utf-8", "ignore"))
+        for t in ((d.get("playlist") or {}).get("tracks") or []):
+            items.append({"name": t.get("name") or "",
+                          "singer": ",".join(a.get("name", "") for a in (t.get("ar") or []))})
+    except Exception as e:
+        print("[wy_hot-err] %s" % e, flush=True)
+    return items
+
+def fetch_qq_hot():
+    """QQ音乐热歌榜：返回 [{name, singer}] 列表"""
+    items = []
+    try:
+        req = urllib.request.Request(QQ_HOT_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15, context=make_ctx()) as r:
+            d = json.loads(r.read().decode("utf-8", "ignore"))
+        for s in (d.get("songlist") or []):
+            it = s.get("data") or {}
+            items.append({"name": it.get("songname") or "",
+                          "singer": ",".join(x.get("name", "") for x in (it.get("singer") or []))})
+    except Exception as e:
+        print("[qq_hot-err] %s" % e, flush=True)
+    return items
+
+def norm_name(s):
+    """归一化歌名/歌手，用于跨源匹配"""
+    return re.sub(r"[\s\-–—·.()（）【】\[\]&&]|feat.*|ft\.?.*", "", str(s or "").lower())
+
+# 翻唱/模仿/伴奏类歌手特征：热门榜匹配时跳过这些非原唱版本
+COVER_MARK = ("小迷妹","翻唱","cover","Cover","模仿","深情","女声","男声","钢琴","吉他","伴奏",
+              "弹唱","Remix","remix","DJ","Live","live","现场","纯享","慢摇","串烧","车载",
+              "唢呐","笛子","二胡","古筝","萨克斯","小提琴","童声","粤语版","英文版","日语版")
+
+def search_gd_match(name, singer):
+    """用 gd 音源桥搜索同名歌曲（翻 2 页 + 失败重试）；歌名精确匹配 + 歌手包含任一方向，
+    排除翻唱/模仿/伴奏等非原唱歌手。返回 (songmid, singer, album, interval, img) 或 None"""
+    nn, ns = norm_name(name), norm_name(singer)
+    for page in (1, 2):
+        try:
+            r = br("/search", {"source": "gd", "kw": f"{name} {singer}", "page": page, "limit": 15})
+            if not r.get("ok"):
+                time.sleep(0.5)
+                r = br("/search", {"source": "gd", "kw": f"{name} {singer}", "page": page, "limit": 15})
+            if not r.get("ok"):
+                continue
+            for s in r.get("list", []):
+                sg_n = norm_name(s.get("singer"))
+                # 跳过翻唱/模仿/伴奏等非原唱版本
+                if any(m in sg_n for m in COVER_MARK):
+                    continue
+                if norm_name(s.get("name")) == nn and (ns and (ns in sg_n or sg_n in ns)):
+                    return s.get("songmid"), s.get("singer"), s.get("albumName"), s.get("interval"), s.get("img")
+        except Exception:
+            continue
+        time.sleep(0.2)
+    return None
+
 # —— 标签歌名过滤 ——
 # 部分采集结果把"分类/场景标签"直接当歌名（如"伤感流行 - 南叙"、"2026热门DJ歌曲"、
 # "emo合集"、"车载劲爆DJ"），并非真实歌曲，采集入库前一律剔除。
@@ -91,7 +161,7 @@ def load_cfg():
         if isinstance(j, dict):
             ps = j.get("platforms")
             if isinstance(ps, list) and ps:
-                cfg["platforms"] = [p for p in ps if p in ("kw","wy","kg","tx","gd","qs","soda","gm_migu","gm_fivesing","gm_joox","gm_kugou","gm_kuwo","gm_qq","dy")]
+                cfg["platforms"] = [p for p in ps if p in ("kw","wy","kg","tx","gd","qs","soda","gm_migu","gm_fivesing","gm_joox","gm_kugou","gm_kuwo","gm_qq","dy","wy_hot","qq_hot")]
             m = j.get("mode")
             if m in ("search", "hot"):
                 cfg["mode"] = m
@@ -338,7 +408,8 @@ def main():
                     pass
                 time.sleep(0.6)
 
-    # 2) 热门榜兜底（所有选的平台翻页；dy=抖音官方音乐榜，只采热门视频/图集配乐 BGM）
+    # 2) 热门榜兜底（所有选的平台翻页；dy=抖音官方音乐榜；wy_hot/qq_hot=网易云/QQ音乐热歌榜，
+    #    只采全网热门歌曲，音源统一走 gd 桥，标签歌名过滤自动生效）
     for src in plats:
         if inserted >= args.target: break
         if src == "dy":
@@ -350,6 +421,21 @@ def main():
                     time.sleep(0.4)
             except Exception as e:
                 print("[dy-err] %s" % e, flush=True)
+            continue
+        if src in ("wy_hot", "qq_hot"):
+            try:
+                items = fetch_wy_hot() if src == "wy_hot" else fetch_qq_hot()
+                for it in items:
+                    if inserted >= args.target: break
+                    hit = search_gd_match(it["name"], it["singer"])
+                    if hit:
+                        mid, sg2, alb2, iv2, im2 = hit
+                        add_candidate("gd", mid, it["name"], sg2 or it["singer"], alb2, iv2, im2)
+                    else:
+                        print("[%s-skip] %s - %s （gd 未匹配同名热门歌）" % (src, it["name"], it["singer"] or "?"), flush=True)
+                    time.sleep(0.4)
+            except Exception as e:
+                print("[%s-err] %s" % (src, e), flush=True)
             continue
         for page in range(1, 25):
             if inserted >= args.target: break

@@ -1465,9 +1465,11 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="tgtrow"><input id="tgt" type="number" min="1" inputmode="numeric" placeholder="目标数量"><span class="tgtlbl">目标</span></div>
 </div>
 
-<div class="sec"><b>采集平台</b>（多选；默认勾选的可直接采集，G 后缀=聚合源，抖音BGM=抖音官方音乐榜热门配乐）</div>
+<div class="sec"><b>采集平台</b>（多选；默认勾选的可直接采集，G 后缀=聚合源，抖音BGM=抖音官方音乐榜热门配乐，网易云热歌/QQ热歌=全网热歌榜）</div>
 <div class="chips" id="platChips">
   <div class="chip on" data-v="dy">抖音BGM</div>
+  <div class="chip on" data-v="wy_hot">网易云热歌</div>
+  <div class="chip on" data-v="qq_hot">QQ热歌</div>
   <div class="chip on" data-v="gd">网易云G</div>
   <div class="chip on" data-v="soda">汽水Soda</div>
   <div class="chip" data-v="gm_migu">咪咕G*</div>
@@ -3646,7 +3648,7 @@ async function delNotify(id){
                     pass
                 # 解析新参数：平台/模式/关键词
                 _VALID_PLATS = ("kw","wy","kg","tx","gd","qs","soda","gm_migu","gm_fivesing",
-                                "gm_joox","gm_kugou","gm_kuwo","gm_qq")
+                                "gm_joox","gm_kugou","gm_kuwo","gm_qq","dy","wy_hot","qq_hot")
                 _plats = [x for x in str(_params.get("platforms", ["gd,soda"])[0]).split(",") if x in _VALID_PLATS]
                 if not _plats: _plats = ["gd","soda"]
                 _mode = str(_params.get("mode", ["search"])[0]).strip()
