@@ -124,7 +124,8 @@ def db():
                        ("like_count", "INTEGER DEFAULT 0"),
                        ("share_count", "INTEGER DEFAULT 0"),
                        ("offline", "INTEGER DEFAULT 0"),
-                       ("offline_reason", "TEXT DEFAULT ''")]:
+                       ("offline_reason", "TEXT DEFAULT ''"),
+                       ("genre", "TEXT DEFAULT ''")]:
         if _col not in tcols:
             c.execute("ALTER TABLE tracks ADD COLUMN %s %s" % (_col, _ddl))
     c.execute("""CREATE TABLE IF NOT EXISTS likes(
@@ -152,7 +153,8 @@ def db():
         UNIQUE(source, source_id))""")
     ccols = [r[1] for r in c.execute("PRAGMA table_info(collected_tracks)")]
     for _col, _ddl in [("offline", "INTEGER DEFAULT 0"),
-                       ("offline_reason", "TEXT DEFAULT ''")]:
+                       ("offline_reason", "TEXT DEFAULT ''"),
+                       ("genre", "TEXT DEFAULT ''")]:
         if _col not in ccols:
             c.execute("ALTER TABLE collected_tracks ADD COLUMN %s %s" % (_col, _ddl))
     # 用户行为事件表（个性化推荐数据源）
@@ -2770,6 +2772,13 @@ async function delNotify(id){
                 if tok_uid:
                     viewer_id = tok_uid
                 now = time.time()
+                # —— 新歌刷新配置（个性化推送混入新歌）——
+                # 窗口：仅混入最近 N 天内上架/采集的歌曲，窗口随日期滚动，自然形成"时不时刷新"
+                # 数量：每次推荐最多混入的新歌数（推荐总量 20 首，默认约占 20%）
+                # 概率：每次请求按该概率触发混入，避免新歌池较小时每次都重复同一批
+                NEW_SONG_WINDOW_DAYS = 14
+                NEW_SONG_MIX_COUNT = 4
+                NEW_SONG_MIX_PROB = 0.75
                 # 1) 行为打分：事件权重 + 收听阈值/时长/重复 + 时间衰减
                 #    收听规则：进度 < 0.5 不记录；>= 0.5 有效收听（满分约 +2.5）
                 #    同一首歌完整听过多遍（plays>=2）额外加成
@@ -2930,6 +2939,40 @@ async function delNotify(id){
                         if tid not in used and tid not in avoid:
                             chosen.append(tid)
                             used.add(tid)
+                # 4.5) 新歌刷新：从近期新上架/采集的歌曲池随机混入少量新歌，
+                #      让个性化推送时不时带新歌（配合 WebSocket recommend 事件触发客户端刷新），
+                #      避免推荐池长期停留在同一批旧歌。
+                #      排除：用户本人上传、已强互动（avoid）、与已选候选重复。
+                if random.random() < NEW_SONG_MIX_PROB:
+                    used = set(chosen)
+                    _win = now - NEW_SONG_WINDOW_DAYS * 86400.0
+                    _mix = c.execute(
+                        "SELECT id FROM ("
+                        "  SELECT id, created FROM tracks WHERE offline=0 AND user_id!=?"
+                        "  UNION ALL"
+                        "  SELECT id, created FROM collected_tracks WHERE offline=0"
+                        ") WHERE created >= ? ORDER BY RANDOM() LIMIT ?",
+                        (viewer_id, _win, NEW_SONG_MIX_COUNT * 4)).fetchall()
+                    _new = []
+                    for (tid,) in _mix:
+                        if len(_new) >= NEW_SONG_MIX_COUNT:
+                            break
+                        if tid in used or tid in avoid:
+                            continue
+                        _new.append(tid)
+                        used.add(tid)
+                    if _new:
+                        # 候选未满直接追加补位；已满 20 则替换尾部低分候选
+                        if len(chosen) < 20:
+                            chosen += _new[:20 - len(chosen)]
+                        else:
+                            chosen = chosen[:20 - len(_new)] + _new
+                        # 新歌随机穿插进列表，避免总是沉底
+                        _newset = set(_new)
+                        _rest = [t for t in chosen if t not in _newset]
+                        for t in _new:
+                            _rest.insert(random.randint(0, len(_rest)), t)
+                        chosen = _rest
                 if not chosen:
                     c.close()
                     self._json(200, [])

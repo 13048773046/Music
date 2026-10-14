@@ -237,6 +237,16 @@ def run_all(port, root, strict_port, strict_root):
     check("无相关歌曲时补全随机返回", s == 200 and isinstance(tracks_none, list)
           and len(tracks_none) > 0, f"s={s} {body[:100]}")
 
+    print("== 10.6 个性化推荐（新歌混入刷新兼容）==")
+    s, body, _ = req("GET", "/api/recommend", headers=AUTH)
+    rec = json.loads(body)
+    check("recommend 200", s == 200, f"s={s} {body[:100]}")
+    check("recommend 返回列表且<=20", isinstance(rec, list) and len(rec) <= 20, body[:100])
+    check("recommend 无重复歌曲", len({t["id"] for t in rec}) == len(rec), body[:100])
+    check("recommend 不含本人上传", all(t["userId"] != uid for t in rec), body[:100])
+    check("recommend 字段完整", all(all(k in t for k in ("id", "title", "artist", "album",
+          "created", "durText", "playCount", "likeCount")) for t in rec), body[:100])
+
     print("== 11. 流式 Range ==")
     s, body, hdrs = req("GET", f"/api/stream/{tid}", headers={"Range": "bytes=0-99"})
     check("Range 206", s == 206 and len(body) == 100, f"s={s} len={len(body)}")
