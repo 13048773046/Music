@@ -40,6 +40,7 @@ import urllib.request
 import re
 import base64
 import threading
+import difflib
 from html import escape as html_escape
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -987,6 +988,8 @@ REC_MAX_PER_ARTIST = 3         # 重排后同一歌手最多保留几首
 REC_MAX_PER_GENRE = 5          # 重排后同一风格最多保留几首
 REC_MMR_LAMBDA = 0.7           # MMR 相关分权重（1−λ 为多样性权重）
 REC_NOISE = 0.12               # 融合分随机扰动幅度（探索，避免结果完全固定）
+REC_TITLE_SIM_THRESHOLD = 0.8  # 歌名相似度阈值：与已选推荐歌名相似 ≥ 此值（如 80%）则跳过，
+                               # 保证同一批推荐里不出现歌名高度相似的歌（90% 相似更不会同批推送）
 REC_LIMITS = {                 # 每路候选上限
     "behavior": 40, "artist": 30, "genre": 30,
     "hot": 20, "fresh": 10, "explore": 30,
@@ -1016,6 +1019,24 @@ def _rec_sim(a, b):
     if ka and kb and (ka & kb):
         sim += 0.2
     return min(sim, 1.0)
+
+
+def _rec_title_key(title):
+    """歌名相似度比较用的规范化键：
+    转小写、去空格、去括号及括号内容（(Live)/(伴奏)/remix 等版本后缀），
+    让《晴天》与《晴天 (Live)》规整为同一键，按相似度拦截。"""
+    t = (title or "").strip().lower()
+    t = re.sub(r"[（(][^）)]*[)）]", "", t)
+    return re.sub(r"\s+", "", t)
+
+
+def _rec_title_sim(a, b):
+    """两首歌「歌名相似度」0..1（规范化后字符级相似，SequenceMatcher）。
+    空歌名不参与歌名相似约束（返回 0），避免空串误伤。"""
+    ka, kb = _rec_title_key(a["title"]), _rec_title_key(b["title"])
+    if not ka or not kb:
+        return 0.0
+    return difflib.SequenceMatcher(None, ka, kb).ratio()
 
 
 def _rec_reason(sources):
@@ -1244,6 +1265,10 @@ def build_recommendations(c, viewer_id, exclude=None):
             if it["artist"] and used_artist.get(it["artist"], 0) >= REC_MAX_PER_ARTIST:
                 continue
             if it["genre"] and used_genre.get(it["genre"], 0) >= REC_MAX_PER_GENRE:
+                continue
+            # 歌名相似硬约束：与任一已选歌歌名相似度 ≥ 阈值（80%）则跳过，
+            # 同一批推荐不推送歌名高度相似的歌（90% 相似更不会同批出现）
+            if ranked and any(_rec_title_sim(it, r) >= REC_TITLE_SIM_THRESHOLD for _, r in ranked):
                 continue
             div = max((_rec_sim(it, r) for _, r in ranked), default=0.0) if ranked else 0.0
             s = REC_MMR_LAMBDA * it["score"] - (1.0 - REC_MMR_LAMBDA) * div \

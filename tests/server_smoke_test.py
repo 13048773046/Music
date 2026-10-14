@@ -20,6 +20,8 @@ import argparse
 import urllib.request
 import urllib.error
 import urllib.parse
+import difflib
+import re
 import subprocess
 import hashlib
 import sqlite3
@@ -248,6 +250,7 @@ def run_all(port, root, strict_port, strict_root):
         ("rec_3", "海阔天空", "Beyond", "乐与怒", "", 300, "gd", "gd_3", "", 0, _now - 100, "rec_owner", 40, 10, 2, "", 0, "摇滚"),
         ("rec_4", "后来", "刘若英", "我等你", "", 280, "gd", "gd_4", "", 0, _now - 200, "rec_owner", 20, 8, 1, "", 0, "流行"),
         ("rec_5", "平凡之路", "朴树", "猎户星座", "", 260, "gd", "gd_5", "", 0, _now - 300, "rec_owner", 10, 5, 1, "", 0, "民谣"),
+        ("rec_6", "晴天 (Live)", "周杰伦", "叶惠美", "", 245, "gd", "gd_6", "", 0, _now, "rec_owner", 45, 18, 4, "", 0, "流行"),
     ]:
         conn.execute(
             "INSERT OR IGNORE INTO collected_tracks"
@@ -269,6 +272,18 @@ def run_all(port, root, strict_port, strict_root):
     check("recommend 多歌手多样性（MMR 重排）",
           len({t.get("artist") for t in rec if t.get("artist")}) >= 2,
           f"artists={sorted({t.get('artist') for t in rec if t.get('artist')})}")
+    # 歌名相似过滤：歌名高度相似的歌（晴天 vs 晴天 (Live)）不同批推送
+    def _title_key(s):
+        s = (s or "").strip().lower()
+        s = re.sub(r"[（(][^）)]*[)）]", "", s)
+        return re.sub(r"\s+", "", s)
+    rec_titles = [_title_key(t.get("title") or "") for t in rec]
+    rec_titles = [k for k in rec_titles if k]
+    dup_title = any(
+        difflib.SequenceMatcher(None, rec_titles[i], rec_titles[j]).ratio() >= 0.8
+        for i in range(len(rec_titles)) for j in range(i + 1, len(rec_titles)))
+    check("recommend 歌名相似度≥80% 不同批推送",
+          not dup_title, f"titles={[t.get('title') for t in rec]}")
     # 未登录：热度 + 新歌 + 随机三路兜底，同样返回非空且无重复
     s, body, _ = req("GET", "/api/recommend")
     rec2 = json.loads(body)
