@@ -58,6 +58,8 @@ struct SoftCardModifier: ViewModifier {
                             .stroke(Theme.cardBorder, lineWidth: 1)
                     )
             )
+            // 柔和投影：卡片从深底上浮出，增加层次
+            .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 3)
     }
 }
 

@@ -161,6 +161,7 @@ struct DiscoverView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.white)
             }
+            .shadow(color: Theme.accent.opacity(0.4), radius: 12, x: 0, y: 4)
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -275,7 +276,7 @@ private struct RecommendCard: View {
             }
             .frame(width: 190, alignment: .leading)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 }
 
@@ -301,6 +302,6 @@ private struct LatestCard: View {
             .frame(width: 150, alignment: .leading)
             .softCard(radius: 18, padding: 12)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 }

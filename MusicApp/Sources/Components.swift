@@ -31,6 +31,8 @@ struct AlbumArt: View {
             RoundedRectangle(cornerRadius: radius ?? size * 0.22, style: .continuous)
                 .stroke(Theme.cardBorder, lineWidth: 1)
         )
+        // 封面柔和投影：在卡片上浮起
+        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 3)
     }
 
     private var placeholder: some View {
@@ -182,7 +184,7 @@ struct TrackRow: View {
                     Text(track.title)
                         .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
-                        .foregroundColor(Theme.textPrimary)
+                        .foregroundColor(isCurrent ? Theme.accent : Theme.textPrimary)
                     HStack(spacing: 4) {
                         Text(track.displayAuthor)
                             .font(.system(size: 13))
@@ -221,7 +223,7 @@ struct TrackRow: View {
             }
             .padding(.vertical, 8)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 }
 
@@ -241,6 +243,17 @@ struct SharePayload: Identifiable {
 }
 
 // MARK: - 通用时间格式化
+
+/// 按压反馈按钮样式：按下轻微缩放+变暗，松手恢复（替代 plain 无反馈）
+struct PressableButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.97
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1.0)
+            .opacity(configuration.isPressed ? 0.85 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
 
 func formatTime(_ seconds: Double) -> String {
     guard seconds.isFinite, seconds >= 0 else { return "0:00" }
