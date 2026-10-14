@@ -797,7 +797,7 @@ struct MineView: View {
                           dur: nil, durText: nil, created: c.created,
                           playCount: nil, likeCount: nil, shareCount: nil,
                           commentCount: nil, userId: nil, userName: nil,
-                          hasLyric: nil, isLiked: nil)
+                          hasLyric: nil, isLiked: nil, reason: nil)
         player.play(track, in: [track])
     }
 }
