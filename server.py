@@ -1465,8 +1465,9 @@ h1{font-size:20px;font-weight:600;margin-bottom:4px}
   <div class="tgtrow"><input id="tgt" type="number" min="1" inputmode="numeric" placeholder="目标数量"><span class="tgtlbl">目标</span></div>
 </div>
 
-<div class="sec"><b>采集平台</b>（多选；默认勾选的可直接采集，G 后缀=聚合源）</div>
+<div class="sec"><b>采集平台</b>（多选；默认勾选的可直接采集，G 后缀=聚合源，抖音BGM=抖音官方音乐榜热门配乐）</div>
 <div class="chips" id="platChips">
+  <div class="chip on" data-v="dy">抖音BGM</div>
   <div class="chip on" data-v="gd">网易云G</div>
   <div class="chip on" data-v="soda">汽水Soda</div>
   <div class="chip" data-v="gm_migu">咪咕G*</div>
