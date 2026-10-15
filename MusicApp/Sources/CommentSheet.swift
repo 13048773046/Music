@@ -12,6 +12,8 @@ struct CommentSheet: View {
     @State private var loading = true
     @State private var text = ""
     @State private var sending = false
+    /// 评论点赞状态：commentId -> (liked: Bool, count: Int)
+    @State private var likeState: [String: (liked: Bool, count: Int)] = [:]
 
     var body: some View {
         ZStack {
@@ -69,6 +71,22 @@ struct CommentSheet: View {
                                             Text(c.content)
                                                 .font(.system(size: 14))
                                                 .foregroundColor(Theme.textPrimary)
+                                        }
+
+                                        Spacer()
+
+                                        // 点赞按钮
+                                        Button {
+                                            Task { await toggleLike(c) }
+                                        } label: {
+                                            VStack(spacing: 2) {
+                                                Image(systemName: isCommentLiked(c.id) ? "heart.fill" : "heart")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(isCommentLiked(c.id) ? .red : Theme.textTertiary)
+                                                Text("\(commentLikeCount(c.id))")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(Theme.textTertiary)
+                                            }
                                         }
                                     }
                                     .padding(.horizontal, 10)
@@ -154,5 +172,21 @@ struct CommentSheet: View {
         } catch {
         }
         sending = false
+    }
+
+    // MARK: - 评论点赞
+    private func isCommentLiked(_ commentId: String) -> Bool {
+        likeState[commentId]?.liked ?? false
+    }
+
+    private func commentLikeCount(_ commentId: String) -> Int {
+        likeState[commentId]?.count ?? 0
+    }
+
+    private func toggleLike(_ c: API.Comment) async {
+        do {
+            let result = try await API.toggleCommentLike(c.id)
+            likeState[c.id] = (liked: result.liked, count: result.likeCount)
+        } catch {}
     }
 }

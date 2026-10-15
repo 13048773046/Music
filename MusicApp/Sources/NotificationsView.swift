@@ -172,6 +172,18 @@ struct NotificationsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                Task { await deleteNotification(n) }
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    private func deleteNotification(_ n: API.Notification) async {
+        await API.deleteNotification(n.id)
+        notifications.removeAll { $0.id == n.id }
     }
 
     // MARK: - 组件

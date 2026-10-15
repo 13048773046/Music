@@ -4395,11 +4395,15 @@ async function delNotify(id){
                     # 检查是否已存在
                     existing = c.execute("SELECT id FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid)).fetchone()
                     if not existing:
+                        cover = data.get("cover") or ""
                         c.execute("""INSERT INTO playlist_tracks(playlist_id, track_id, track_title, track_artist, track_cover, source, created)
                                      VALUES(?,?,?,?,?,?,?)""",
                                   (pid, tid, data.get("title") or "", data.get("artist") or "",
-                                   data.get("cover") or "", data.get("source") or "upload", time.time()))
+                                   cover, data.get("source") or "upload", time.time()))
                         c.execute("UPDATE playlists SET track_count=track_count+1 WHERE id=?", (pid,))
+                        # 自动更新歌单封面：用最新添加的歌曲封面
+                        if cover:
+                            c.execute("UPDATE playlists SET cover=? WHERE id=?", (cover, pid))
                 c.commit()
                 c.close()
                 self._json(200, {"ok": True})
@@ -5730,12 +5734,18 @@ async function delNotify(id){
                     c.close()
                     self._err(401, "unauthorized"); return
                 # 验证歌单属于当前用户
-                pl = c.execute("SELECT id FROM playlists WHERE id=? AND user_id=?", (pid, uid)).fetchone()
+                pl = c.execute("SELECT id, cover FROM playlists WHERE id=? AND user_id=?", (pid, uid)).fetchone()
                 if not pl:
                     c.close()
                     self._err(404, "playlist not found"); return
+                old_cover = pl[1] or ""
                 c.execute("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid))
                 c.execute("UPDATE playlists SET track_count=MAX(0, track_count-1) WHERE id=?", (pid,))
+                # 如果删除的是当前封面对应的歌曲，更新封面为最新一首的封面
+                if old_cover:
+                    newest = c.execute("SELECT track_cover FROM playlist_tracks WHERE playlist_id=? AND track_cover != '' ORDER BY created DESC LIMIT 1", (pid,)).fetchone()
+                    new_cover = newest[0] if newest else ""
+                    c.execute("UPDATE playlists SET cover=? WHERE id=?", (new_cover, pid))
                 c.commit()
                 c.close()
                 self._json(200, {"ok": True}); return

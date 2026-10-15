@@ -15,6 +15,8 @@ struct SearchView: View {
     @State private var hasSearched = false
     /// 请求序号：快速连续搜索时旧响应后到直接丢弃，防止旧结果覆盖新结果
     @State private var searchToken = 0
+    /// 搜索历史
+    @State private var searchHistory: [SearchHistoryItem] = []
 
     var body: some View {
         NavigationStack {
@@ -34,16 +36,56 @@ struct SearchView: View {
                         emptyState
                             .frame(maxHeight: .infinity)
                     } else if results.isEmpty {
-                        // 初始状态：推荐提示
-                        VStack(spacing: 12) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 40))
-                                .foregroundColor(.white.opacity(0.3))
-                            Text("搜索歌曲、歌手")
-                                .font(.system(size: 15))
-                                .foregroundColor(.white.opacity(0.5))
+                        // 初始状态：显示搜索历史
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack {
+                                    Text("搜索历史")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.7))
+                                    Spacer()
+                                    if !searchHistory.isEmpty {
+                                        Button {
+                                            Task {
+                                                await API.clearSearchHistory()
+                                                searchHistory = []
+                                            }
+                                        } label: {
+                                            Image(systemName: "trash")
+                                                .font(.system(size: 13))
+                                                .foregroundColor(.white.opacity(0.5))
+                                        }
+                                    }
+                                }
+                                if searchHistory.isEmpty {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 40))
+                                            .foregroundColor(.white.opacity(0.3))
+                                        Text("搜索歌曲、歌手")
+                                            .font(.system(size: 15))
+                                            .foregroundColor(.white.opacity(0.5))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.top, 40)
+                                } else {
+                                    ForEach(searchHistory) { item in
+                                        Button {
+                                            keyword = item.keyword
+                                            doSearch()
+                                        } label: {
+                                            Text(item.keyword)
+                                                .font(.system(size: 14))
+                                                .foregroundColor(.white.opacity(0.8))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .padding(.vertical, 8)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.top, 16)
                         }
-                        .frame(maxHeight: .infinity)
                     } else {
                         ScrollView {
                             LazyVStack(spacing: 10) {
@@ -62,6 +104,11 @@ struct SearchView: View {
             .navigationTitle("搜索")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .onAppear {
+                Task {
+                    searchHistory = (try? await API.fetchSearchHistory()) ?? []
+                }
+            }
         }
     }
 
@@ -119,6 +166,8 @@ struct SearchView: View {
         let ev = API.BehaviorEvent(trackId: "", event: "search", value: 0,
                                    meta: API.BehaviorEvent.metaJSON(["kw": kw]))
         Task { await API.reportBehavior([ev]) }
+        // 记录搜索历史
+        Task { await API.recordSearch(keyword: kw) }
         Task {
             let found = try? await API.search(kw)
             // 旧请求的迟到响应：丢弃，不覆盖最新搜索结果

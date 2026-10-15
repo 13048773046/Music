@@ -1499,7 +1499,16 @@ final class PlayerManager: NSObject, ObservableObject {
         }
         loadTask = task
         loadArtworkIfNeeded()
-        Task { await API.reportPlay(current.id) }
+        Task {
+            await API.reportPlay(current.id)
+            // 记录播放历史
+            await API.recordHistory(
+                trackId: current.id,
+                title: current.title,
+                artist: current.artist,
+                cover: current.coverURL?.absoluteString ?? ""
+            )
+        }
     }
 
     /// 异步加载歌曲封面用于锁屏展示（无封面则保持默认渐变封面）。

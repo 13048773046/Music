@@ -651,4 +651,180 @@ enum API {
         applyAuth(&req)
         _ = try? await URLSession.shared.data(for: req)
     }
+
+    // MARK: - 播放历史
+    /// 记录播放历史
+    static func recordHistory(trackId: String, title: String, artist: String, cover: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("history"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let body: [String: Any] = ["trackId": trackId, "title": title, "artist": artist, "cover": cover]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// 获取播放历史
+    static func fetchHistory(page: Int = 1, pageSize: Int = 30) async throws -> [HistoryTrack] {
+        struct Resp: Decodable { let list: [HistoryTrack] }
+        let r: Resp = try await fetchPage(path: "history?page=\(page)&size=\(pageSize)")
+        return r.list
+    }
+
+    // MARK: - 搜索历史
+    /// 记录搜索历史
+    static func recordSearch(keyword: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("search/history"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let body: [String: Any] = ["keyword": keyword]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// 获取搜索历史
+    static func fetchSearchHistory() async throws -> [SearchHistoryItem] {
+        struct Resp: Decodable { let list: [SearchHistoryItem] }
+        let r: Resp = try await fetchPage(path: "search/history")
+        return r.list
+    }
+
+    /// 清空搜索历史
+    static func clearSearchHistory() async {
+        var req = URLRequest(url: base.appendingPathComponent("search/history"))
+        req.httpMethod = "DELETE"
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    // MARK: - 歌单
+    /// 获取我的歌单列表
+    static func fetchPlaylists() async throws -> [Playlist] {
+        struct Resp: Decodable { let list: [Playlist] }
+        let r: Resp = try await fetchPage(path: "playlists")
+        return r.list
+    }
+
+    /// 创建歌单
+    static func createPlaylist(name: String, description: String = "") async throws -> String {
+        var req = URLRequest(url: base.appendingPathComponent("playlists"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let body: [String: Any] = ["name": name, "description": description]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        struct R: Decodable { let playlistId: String }
+        let r = try JSONDecoder().decode(R.self, from: data)
+        return r.playlistId
+    }
+
+    /// 获取歌单歌曲列表
+    static func fetchPlaylistTracks(_ playlistId: String) async throws -> (playlist: Playlist, tracks: [HistoryTrack]) {
+        struct Resp: Decodable { let playlist: Playlist; let list: [HistoryTrack] }
+        let r: Resp = try await fetchPage(path: "playlists/\(playlistId)/tracks")
+        return (r.playlist, r.list)
+    }
+
+    /// 添加歌曲到歌单
+    static func addToPlaylist(playlistId: String, trackId: String, title: String, artist: String, cover: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("playlists/\(playlistId)/tracks"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let body: [String: Any] = ["trackId": trackId, "title": title, "artist": artist, "cover": cover]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// 从歌单删除歌曲
+    static func removeFromPlaylist(playlistId: String, trackId: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("playlists/\(playlistId)/tracks/\(trackId)"))
+        req.httpMethod = "DELETE"
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    // MARK: - 通知软删除
+    /// 软删除单条通知
+    static func deleteNotification(_ id: String) async {
+        var req = URLRequest(url: base.appendingPathComponent("notifications/\(id)"))
+        req.httpMethod = "DELETE"
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    // MARK: - 评论点赞
+    /// 点赞/取消点赞评论
+    static func toggleCommentLike(_ commentId: String) async throws -> (liked: Bool, count: Int) {
+        var req = URLRequest(url: base.appendingPathComponent("comments/\(commentId)/like"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        struct R: Decodable { let liked: Bool; let likeCount: Int }
+        let r = try JSONDecoder().decode(R.self, from: data)
+        return (r.liked, r.likeCount)
+    }
+
+    // MARK: - 用户主页
+    /// 获取用户主页信息
+    static func fetchUserProfile(_ userId: String) async throws -> UserProfile {
+        struct Resp: Decodable { let userId: String; let account: String; let name: String; let avatar: String; let signature: String; let created: Double; let gender: String; let age: Int; let trackCount: Int; let likeCount: Int }
+        let r: Resp = try await fetchPage(path: "user/\(userId)/profile")
+        return UserProfile(userId: r.userId, account: r.account, name: r.name, avatar: r.avatar, signature: r.signature, created: r.created, gender: r.gender, age: r.age, trackCount: r.trackCount, likeCount: r.likeCount)
+    }
+}
+
+// MARK: - 数据模型
+struct HistoryTrack: Decodable, Identifiable {
+    let id: String
+    let trackId: String
+    let title: String
+    let artist: String
+    let cover: String
+    let source: String
+    let created: Double
+}
+
+struct SearchHistoryItem: Decodable, Identifiable {
+    let id: String
+    let keyword: String
+    let created: Double
+}
+
+struct Playlist: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let cover: String
+    let description: String
+    let trackCount: Int
+    let created: Double
+}
+
+struct UserProfile: Decodable {
+    let userId: String
+    let account: String
+    let name: String
+    let avatar: String
+    let signature: String
+    let created: Double
+    let gender: String
+    let age: Int
+    let trackCount: Int
+    let likeCount: Int
 }

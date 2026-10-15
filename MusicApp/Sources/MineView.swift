@@ -466,6 +466,39 @@ struct MineView: View {
     private var bottomBar: some View {
         VStack(spacing: 0) {
             Divider().background(Theme.cardBorder)
+
+            // 功能入口：播放历史 / 我的歌单
+            HStack(spacing: 0) {
+                NavigationLink {
+                    HistoryView()
+                } label: {
+                    VStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 20, weight: .medium))
+                        Text("播放历史")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(Theme.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                }
+                Divider().frame(height: 40)
+                NavigationLink {
+                    PlaylistsView()
+                } label: {
+                    VStack(spacing: 6) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 20, weight: .medium))
+                        Text("我的歌单")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(Theme.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                }
+            }
+            .padding(.horizontal, 20)
+
             HStack {
                 Text("流萤音乐 v\(appVersion)")
                     .font(.system(size: 12))
