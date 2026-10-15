@@ -843,7 +843,7 @@ struct DioramaLyricView: View {
             let now = display
 
             // 每帧驱动相机（Folia CameraRig 逻辑）
-            _ = Self.driveCamera(cam: cam, lines: lines, frames: frames, c: idx, now: now, seed: seedD)
+            let _ = Self.driveCamera(cam: cam, lines: lines, frames: frames, c: idx, now: now, seed: seedD)
 
             // 渲染挂载窗口 c-2..c+3
             ZStack {
