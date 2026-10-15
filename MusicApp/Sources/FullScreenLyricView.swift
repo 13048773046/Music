@@ -116,7 +116,8 @@ struct FullScreenLyricView: View {
                                           progress: player.progress * player.duration)
                         case .diorama:
                             DioramaLyricView(lines: lines,
-                                             progress: player.progress * player.duration)
+                                             progress: player.progress * player.duration,
+                                             seed: track.id)
                         case .partita:
                             PartitaLyricView(lines: lines,
                                              progress: player.progress * player.duration)

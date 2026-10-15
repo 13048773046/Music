@@ -398,102 +398,617 @@ private struct TiltSegmentRow: View {
 }
 
 // ============================================================
-// 镜台 Diorama：3D 走廊 + 相机飞行正对
-// 歌词行是走廊空间中的实体：当前句正对相机，前后句沿走廊弯曲纵深退远；
-// 相机（视角）随播放沿走廊平滑飞行，逐句正对；切句用单调滚动模拟飞行推进。
+// 镜台 Diorama：Folia 1:1 移植 —— 3D 走廊 + 随机摆位 + 电影运镜 + 相机回正
+// 源码依据：folia-ref/src/components/visualizer/diorama/（Folia 开源真实实现）
+//  · cameraPath.ts：buildDioramaPath 乌龟步进走廊（双频正弦 yaw/pitch）、
+//    getDioramaTextPlacement 确定性随机摆位、getDioramaShot 13 种运镜加权选取+相邻去重、
+//    resolveShotOffset 各运镜偏移曲线（1:1）、resolveCameraDrift 手持有呼吸感、
+//    resolveReadHeadTruck 逐词横向跟摄、resolveHoldSettle 句末构图释放
+//  · CameraRig.tsx：smoothDamp 临界阻尼平滑追踪 read-head；reading-alignment 回正——
+//    行开始前 0.6s 起 ramp、开始后 0.35s 完全"回正"到文字平面，每运镜有回正上限
+//  · dioramaSceneConstants.ts：挂载窗口 LINES_BEHIND=2/LINES_AHEAD=3、邻行透明度曲线、
+//    FOG_NEAR=12/FOG_FAR=30 雾带、LINE_FONT_SIZE=0.62 世界字号、长行 fit 按 hero 固定
 // ============================================================
 
+// MARK: - 镜台 3D 数学工具（Folia 1:1）
+
+private struct DVec3 {
+    var x: Double
+    var y: Double
+    var z: Double
+    static let zero = DVec3(x: 0, y: 0, z: 0)
+}
+
+private func dvAdd(_ a: DVec3, _ b: DVec3) -> DVec3 { DVec3(x: a.x + b.x, y: a.y + b.y, z: a.z + b.z) }
+private func dvSub(_ a: DVec3, _ b: DVec3) -> DVec3 { DVec3(x: a.x - b.x, y: a.y - b.y, z: a.z - b.z) }
+private func dvScale(_ a: DVec3, _ s: Double) -> DVec3 { DVec3(x: a.x * s, y: a.y * s, z: a.z * s) }
+private func dvCross(_ a: DVec3, _ b: DVec3) -> DVec3 {
+    DVec3(x: a.y * b.z - a.z * b.y,
+          y: a.z * b.x - a.x * b.z,
+          z: a.x * b.y - a.y * b.x)
+}
+private func dvNorm(_ a: DVec3) -> DVec3 {
+    let l = (a.x * a.x + a.y * a.y + a.z * a.z).squareRoot()
+    if l < 1e-9 { return .zero }
+    return dvScale(a, 1 / l)
+}
+private func dvLen(_ a: DVec3) -> Double { (a.x * a.x + a.y * a.y + a.z * a.z).squareRoot() }
+
+private func dFract(_ x: Double) -> Double { x - floor(x) }
+/// Folia seededUnit 1:1：同 seed 同结果（切歌不跳变）
+private func dSeeded(_ seed: Double) -> Double { dFract(sin(seed * 12.9898) * 43758.5453) }
+/// Folia hashSeed 1:1（31 哈希 mod 100000）
+private func dHash(_ seed: String) -> Double {
+    if seed.isEmpty { return 1 }
+    var h = 0
+    for u in seed.unicodeScalars { h = (h * 31 + Int(u.value)) % 100000 }
+    return Double(h == 0 ? 1 : h)
+}
+private func dClamp01(_ v: Double) -> Double { min(max(v, 0), 1) }
+private func dClamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double { min(max(v, lo), hi) }
+private func dSmoothstep01(_ t: Double) -> Double { let c = dClamp01(t); return c * c * (3 - 2 * c) }
+private func dEaseInOut(_ p: Double) -> Double { dSmoothstep01(p) }
+/// Folia smoothDamp 1:1（Unity 式临界阻尼，带回弹速度，起停都平滑）
+private func dSmoothDamp(_ current: Double, _ target: Double, _ velocity: Double,
+                         _ smoothTime: Double, _ dt: Double) -> (value: Double, velocity: Double) {
+    let t = max(smoothTime, 0.0001)
+    let omega = 2 / t
+    let x = omega * dt
+    let exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+    let change = current - target
+    let temp = (velocity + omega * change) * dt
+    let newVel = (velocity - omega * temp) * exp
+    let value = target + (change + temp) * exp
+    return (value, newVel)
+}
+
+/// 走廊局部坐标系（行锚点 + 正交基）
+private struct DioramaFrame {
+    var position: DVec3
+    var forward: DVec3
+    var right: DVec3
+    var up: DVec3
+}
+
+/// 单行文字摆位（Folia getDioramaTextPlacement）
+private struct DioramaPlacement {
+    var offsetR: Double
+    var offsetU: Double
+    var scale: Double
+    var roll: Double
+    var yaw: Double
+    var lookR: Double
+}
+
+/// 13 种电影运镜（Folia DioramaShotKind）
+private enum DioramaShotKind: String, CaseIterable {
+    case pushIn, pullBack, orbit, track, crane, hold, swell, spiral, pendulum, flyby, arc, float, glide
+}
+
+/// 镜头偏移（行局部系：right/up/back）
+private struct DioramaShotOffset {
+    var right: Double
+    var up: Double
+    var back: Double
+}
+
+private struct DioramaDrift {
+    var swayX: Double
+    var swayY: Double
+    var lift: Double
+    var dist: Double
+}
+
+/// 相机平滑状态（引用类型，TimelineView 每帧更新不触发额外重绘）
+private final class DioramaCamState {
+    var pos = DVec3.zero
+    var vel = DVec3.zero
+    var look = DVec3.zero
+    var lookVel = DVec3.zero
+    var yaw = 0.0
+    var pitch = 0.0
+    var roll = 0.0
+    var initDone = false
+}
+
+private struct DioramaView {
+    // MARK: 常量（Folia dioramaSceneConstants / cameraPath 1:1）
+    static let STEP = 8.0               // 行距（世界单位）
+    static let HERO = 5.2               // 相机主距离
+    static let LIFT = 0.5               // 相机抬升
+    static let MAX_YAW = 0.5            // 路径最大偏航（rad）
+    static let MAX_PITCH = 0.32         // 路径最大俯仰（rad）
+    static let TEXT_OFFSET_R = 1.8      // 摆位横向幅度
+    static let TEXT_OFFSET_U = 1.2      // 摆位纵向幅度
+    static let TEXT_ROLL = 0.2          // 摆位滚转（rad）
+    static let TEXT_YAW = 0.16          // 摆位偏航（rad）
+    static let TEXT_LOOK = 1.1          // 三分法取景偏移
+    static let SWAY_AMP = 0.4           // 手持有呼吸：横摆
+    static let LIFT_AMP = 0.4           // 手持有呼吸：升降
+    static let DIST_AMP = 0.5           // 手持有呼吸：远近
+    static let SMOOTH_TIME = 0.42       // normal 相机平滑时间
+    static let MOVE_SCALE = 1.0         // normal 运镜幅度
+    static let DRIFT_SCALE = 0.62       // normal 呼吸幅度
+    static let WEAVE = 1.0              // normal 摆位幅度
+    static let FOG_NEAR = 12.0          // 雾带近
+    static let FOG_FAR = 30.0           // 雾带远
+    static let LINE_FONT_SIZE = 0.62    // 世界字号（em→世界单位）
+    static let TARGET_FRAME_WIDTH_FRACTION = 0.72
+    static let MIN_FIT_SCALE = 0.28
+    static let SAFE_FRAME_FRACTION = 0.92
+    static let PX = 30.0                // 世界单位 → 屏幕点
+    static let FOV = 55.0               // 垂直 FOV（度）
+    static let ASPECT = 1.75            // 横屏视口宽高比
+    // 回正（CameraRig ALIGN_*）
+    static let ALIGN_LEAD_IN = 0.6
+    static let ALIGN_SETTLE = 0.35
+    static let ALIGN_RELEASE = 1.0
+    static let ALIGN_RATE = 1.2
+
+    /// buildDioramaPath 1:1：乌龟步进走廊，heading 双频正弦 yaw/pitch
+    static func buildFrames(count: Int, seed: Double) -> [DioramaFrame] {
+        let n = max(count, 1)
+        let base = seed
+        var positions: [DVec3] = []
+        var pos = DVec3.zero
+        for i in 0...n {
+            positions.append(pos)
+            let yaw = MAX_YAW * (sin(Double(i) * 0.23 + base * 0.017) * 0.62
+                                 + sin(Double(i) * 0.11 + base * 0.041 + 1.3) * 0.38)
+            let pitch = MAX_PITCH * sin(Double(i) * 0.17 + base * 0.029 + 0.7)
+            let cp = cos(pitch)
+            let dir = DVec3(x: sin(yaw) * cp, y: sin(pitch), z: -cos(yaw) * cp)
+            pos = DVec3(x: pos.x + dir.x * STEP, y: pos.y + dir.y * STEP, z: pos.z + dir.z * STEP)
+        }
+        var frames: [DioramaFrame] = []
+        let upWorld = DVec3(x: 0, y: 1, z: 0)
+        for i in 0..<n {
+            let fwd = dvNorm(dvSub(positions[i + 1], positions[i]))
+            let right = dvNorm(dvCross(fwd, upWorld))
+            let up = dvNorm(dvCross(right, fwd))
+            frames.append(DioramaFrame(position: positions[i], forward: fwd, right: right, up: up))
+        }
+        return frames
+    }
+
+    /// getDioramaTextPlacement 1:1
+    static func placement(_ i: Int, _ seed: Double, weave: Double) -> DioramaPlacement {
+        let idx = max(i, 0)
+        let jitterR = (dSeeded(seed + Double(idx * 11 + 2)) - 0.5) * 0.6
+        let jitterU = (dSeeded(seed + Double(idx * 11 + 4)) - 0.5) * 0.6
+        let wanderR = sin(Double(idx) * 0.47 + seed * 0.019) * 0.7 + jitterR
+        let wanderU = sin(Double(idx) * 0.29 + seed * 0.027 + 0.9) * 0.7 + jitterU
+        return DioramaPlacement(
+            offsetR: wanderR * TEXT_OFFSET_R * weave,
+            offsetU: wanderU * TEXT_OFFSET_U * weave,
+            scale: 0.82 + dSeeded(seed + Double(idx * 11 + 5)) * 0.46,
+            roll: (dSeeded(seed + Double(idx * 11 + 6)) - 0.5) * 2 * TEXT_ROLL * weave,
+            yaw: (dSeeded(seed + Double(idx * 11 + 7)) - 0.5) * 2 * TEXT_YAW * weave,
+            lookR: (dSeeded(seed + Double(idx * 11 + 8)) - 0.5) * 2 * TEXT_LOOK * weave)
+    }
+
+    /// 行在走廊中的世界锚点（路径 + 摆位偏移）
+    static func worldAnchor(_ i: Int, frames: [DioramaFrame], seed: Double) -> DVec3 {
+        let f = frames[max(0, min(i, frames.count - 1))]
+        let pl = placement(i, seed, WEAVE)
+        return DVec3(x: f.position.x + f.right.x * pl.offsetR + f.up.x * pl.offsetU,
+                     y: f.position.y + f.right.y * pl.offsetR + f.up.y * pl.offsetU,
+                     z: f.position.z + f.right.z * pl.offsetR + f.up.z * pl.offsetU)
+    }
+
+    /// 行长（世界单位）
+    static func lineWidth(_ line: KRCLine) -> Double {
+        let chars = Double(line.text.filter { !$0.isWhitespace }.count)
+        return max(chars * LINE_FONT_SIZE, 0.5)
+    }
+
+    /// 长行 fit（按 hero 距离固定，真实 dolly 缩放）——Folia fit scale
+    static func fitScale(_ line: KRCLine) -> Double {
+        let halfW = HERO * tan(FOV * Double.pi / 180 / 2) * ASPECT
+        return dClamp(TARGET_FRAME_WIDTH_FRACTION * halfW / lineWidth(line), MIN_FIT_SCALE, 1)
+    }
+
+    /// 可见半宽（hero 距离 × 安全帧比例）
+    static func visibleHalfWidth() -> Double {
+        HERO * tan(FOV * Double.pi / 180 / 2) * ASPECT * SAFE_FRAME_FRACTION
+    }
+
+    /// resolveReadHeadTruck 1:1（tanh 饱和横向跟摄）
+    static func readHeadTruck(_ wordProgress: Double, _ trackWidth: Double, _ visibleHalfWidth: Double) -> Double {
+        if trackWidth <= 0 { return 0 }
+        let wordOffset = (dClamp01(wordProgress) - 0.5) * trackWidth
+        let allowed = max(abs(visibleHalfWidth - trackWidth / 2), 0.001)
+        let th = (exp(2 * wordOffset / allowed) - 1) / (exp(2 * wordOffset / allowed) + 1)
+        return allowed * th
+    }
+
+    /// 行内演唱进度（词 reveal 比例）
+    static func wordProgress(_ line: KRCLine, _ now: Double) -> Double {
+        let words = line.words
+        if words.isEmpty { return now >= line.start ? 1 : 0 }
+        for (k, w) in words.enumerated() {
+            if now >= w.end {
+                if k == words.count - 1 { return 1 }
+            } else if now >= w.start {
+                let span = max(w.end - w.start, 0.001)
+                return (Double(k) + dClamp01((now - w.start) / span)) / Double(words.count)
+            } else {
+                return Double(k) / Double(words.count)
+            }
+        }
+        return 1
+    }
+
+    // MARK: 13 种运镜（Folia getDioramaShot + resolveShotOffset 1:1）
+
+    /// 行音符特征（长音/短促，用于运镜倾向）
+    private static func noteProfile(_ line: KRCLine?) -> (maxNote: Double, avgNote: Double, count: Int) {
+        guard let line else { return (0, 0, 0) }
+        var maxNote = 0.0, sum = 0.0, count = 0
+        for w in line.words {
+            let d = w.end - w.start
+            if d > 0 { maxNote = max(maxNote, d); sum += d; count += 1 }
+        }
+        return (maxNote, count > 0 ? sum / Double(count) : 0, count)
+    }
+
+    /// computeShotWeights 1:1（normal 模式）
+    private static func shotWeights(_ i: Int, _ lines: [KRCLine]) -> [DioramaShotKind: Double] {
+        var w: [DioramaShotKind: Double] = [.pushIn: 1, .pullBack: 1, .orbit: 1, .track: 1, .crane: 1,
+                                            .hold: 1, .swell: 0.85, .spiral: 0.9, .pendulum: 1,
+                                            .flyby: 0.9, .arc: 1, .float: 0.9, .glide: 1]
+        let line = lines.indices.contains(i) ? lines[i] : nil
+        let prev = i > 0 && lines.indices.contains(i - 1) ? lines[i - 1] : nil
+        let wordCount = line?.words.count ?? 0
+        // 副歌近似：长句多词（KRCLine 无 isChorus 字段，用词数代理）
+        let isChorus = wordCount >= 10
+        let sectionStart = prev != nil && line != nil && (line!.start - prev!.end) > 0.6
+        let np = noteProfile(line)
+        let hasLongNote = np.maxNote >= 1.3
+        let staccato = np.count >= 4 && np.avgNote > 0 && np.avgNote <= 0.34
+
+        if isChorus {
+            w[.orbit]! += 2.4; w[.pushIn]! += 1.8; w[.spiral]! += 1.2; w[.crane]! += 0.8
+            w[.flyby]! += 0.6; w[.arc]! += 1.0; w[.glide]! += 0.6
+            w[.hold]! -= 0.6; w[.track]! -= 0.2
+        } else {
+            w[.track]! += 1.1; w[.crane]! += 0.9; w[.hold]! += 0.9; w[.pendulum]! += 0.8
+            w[.float]! += 0.8; w[.glide]! += 0.6; w[.arc]! += 0.4
+        }
+        if wordCount >= 8 {
+            w[.track]! += 1.6; w[.pullBack]! += 1; w[.orbit]! -= 0.4; w[.pushIn]! -= 0.3
+        } else if wordCount <= 3 {
+            w[.pushIn]! += 1.4; w[.orbit]! += 0.9; w[.hold]! += 0.5; w[.track]! -= 0.8
+        }
+        if sectionStart { w[.pullBack]! += 2.2; w[.crane]! += 1.4; w[.glide]! += 1.0; w[.pushIn]! -= 0.4 }
+        if hasLongNote { w[.swell]! += 2.4; w[.spiral]! += 1.0; w[.float]! += 1.2; w[.pendulum]! += 0.6; w[.orbit]! += 0.8; w[.arc]! += 0.6; w[.hold]! += 0.3; w[.track]! -= 0.5 }
+        if staccato { w[.track]! += 1.4; w[.flyby]! += 1.5; w[.pushIn]! += 0.8; w[.swell]! -= 1.6; w[.hold]! -= 0.8; w[.crane]! -= 0.4 }
+        for k in DioramaShotKind.allCases { w[k] = max(w[k] ?? 0, 0.05) }
+        return w
+    }
+
+    private static func pickShot(_ w: [DioramaShotKind: Double], _ u: Double) -> DioramaShotKind {
+        let total = DioramaShotKind.allCases.reduce(0.0) { $0 + (w[$1] ?? 0) }
+        var acc = dClamp01(u) * total
+        for k in DioramaShotKind.allCases {
+            acc -= w[k] ?? 0
+            if acc <= 0 { return k }
+        }
+        return .hold
+    }
+
+    /// getDioramaShot 1:1（加权选取 + 与前两行去重）
+    static func getShot(_ i: Int, _ lines: [KRCLine], _ seed: Double) -> DioramaShotKind {
+        guard lines.indices.contains(i) else { return .hold }
+        let pick = pickShot(shotWeights(i, lines), dSeeded(seed + Double(i * 101 + 7)))
+        let prev1 = i > 0 ? pickShot(shotWeights(i - 1, lines), dSeeded(seed + Double((i - 1) * 101 + 7))) : nil
+        let prev2 = i > 1 ? pickShot(shotWeights(i - 2, lines), dSeeded(seed + Double((i - 2) * 101 + 7))) : nil
+        if pick == prev1 || pick == prev2 {
+            var pool = DioramaShotKind.allCases.filter { $0 != pick && $0 != prev1 && $0 != prev2 }
+            if pool.isEmpty { pool = DioramaShotKind.allCases.filter { $0 != pick } }
+            let alt = dSeeded(seed + Double(i * 53 + 19))
+            return pool[Int(dClamp01(alt) * Double(pool.count)) % pool.count]
+        }
+        return pick
+    }
+
+    /// resolveShotOffset 1:1：13 种运镜的相机偏移曲线（行局部系 right/up/back）
+    static func shotOffset(_ kind: DioramaShotKind, progress: Double, wordProgress: Double,
+                           hero: Double, lift: Double, seed: Double, lineIndex: Int, moveScale: Double) -> DioramaShotOffset {
+        let e = dEaseInOut(progress)
+        let dir = dSeeded(seed + Double(lineIndex * 7 + 3)) < 0.5 ? -1.0 : 1.0
+        var right = 0.0
+        var up = lift
+        var back = hero
+        switch kind {
+        case .pushIn:
+            back = hero * (1.5 - 0.8 * e); up = lift * (1.2 - 0.5 * e) + 0.15
+        case .pullBack:
+            back = hero * (0.85 + 1.15 * e); up = lift + 1.7 * e
+        case .orbit:
+            let theta = dir * 0.55 * (2 * e - 1)
+            right = hero * sin(theta); back = hero * cos(theta); up = lift + 0.4
+        case .track:
+            right = dir * hero * 0.34 * sin(Double.pi * dClamp01(wordProgress))
+            back = hero * 1.06; up = lift + 0.12
+        case .crane:
+            let from = dir > 0 ? -1.5 : 2.4
+            let to = dir > 0 ? 2.4 : -1.4
+            up = from + (to - from) * e; back = hero * 1.05
+        case .swell:
+            let theta = dir * 0.4 * e
+            right = hero * sin(theta) * 1.1; back = hero * (1.0 + 0.35 * e); up = lift + 1.2 * e + 0.3
+        case .spiral:
+            let theta = dir * 0.7 * (2 * e - 1)
+            right = hero * sin(theta) * 0.85; back = hero * (1.05 - 0.1 * e); up = lift - 0.8 + 2.4 * e
+        case .pendulum:
+            right = dir * hero * 0.45 * (2 * e - 1)
+            up = lift + 0.9 - 0.9 * sin(Double.pi * e); back = hero * 1.02
+        case .flyby:
+            right = dir * hero * (0.7 - 1.4 * e); back = hero * (0.78 + 0.12 * sin(Double.pi * e)); up = lift + 0.05
+        case .arc:
+            let theta = dir * 0.5 * sin(Double.pi * e)
+            right = hero * sin(theta) * 1.3; back = hero * (1.05 + 0.12 * (1 - cos(theta))); up = lift + 0.5 * sin(Double.pi * e)
+        case .float:
+            right = dir * hero * 0.16 * sin(e * Double.pi * 2)
+            up = lift + 0.6 + 0.5 * sin(e * Double.pi * 2 + 1.0)
+            back = hero * (1.05 + 0.06 * sin(e * Double.pi))
+        case .glide:
+            right = dir * hero * 0.22 * e; up = lift + 1.4 * e; back = hero * (1.15 - 0.25 * e)
+        case .hold:
+            up = lift + 0.3 * sin(progress * Double.pi); back = hero
+        }
+        let m = moveScale
+        return DioramaShotOffset(right: right * m,
+                                 up: lift + (up - lift) * m,
+                                 back: hero + (back - hero) * m)
+    }
+
+    /// resolveCameraDrift 1:1：双频正弦手持有呼吸
+    static func cameraDrift(_ time: Double, _ seed: Double, _ scale: Double) -> DioramaDrift {
+        let ph = seed * 0.017
+        return DioramaDrift(
+            swayX: (sin(time * 0.11 + ph) * 0.6 + sin(time * 0.047 + ph * 1.7) * 0.4) * SWAY_AMP * scale,
+            swayY: sin(time * 0.09 + ph * 0.7) * SWAY_AMP * 0.5 * scale,
+            lift: (sin(time * 0.13 + ph * 1.3) * 0.6 + sin(time * 0.061 + ph * 2.1) * 0.4) * LIFT_AMP * scale,
+            dist: sin(time * 0.05 + ph * 1.1) * DIST_AMP * scale)
+    }
+
+    /// resolveHoldSettle 1:1：句完 3s 后构图缓慢释放
+    static func holdSettle(_ secondsHeld: Double) -> Double {
+        let t = dClamp01((secondsHeld - 3) / 5)
+        return 1 - t * t * (3 - 2 * t)
+    }
+
+    /// 回正需求（CameraRig readNeed 1:1）：行开始前 ramp in，开始后 0.35s 完全回正
+    static func readNeed(_ line: KRCLine, _ now: Double, ceiling: Double) -> Double {
+        let rampIn = dSmoothstep01((now - (line.start - ALIGN_LEAD_IN)) / (ALIGN_LEAD_IN + ALIGN_SETTLE))
+        let renderEnd = max(line.end, line.start)
+        let rampOut = 1 - dSmoothstep01((now - renderEnd) / ALIGN_RELEASE)
+        return min(rampIn, rampOut) * ceiling
+    }
+
+    /// 每运镜回正上限（CameraRig ALIGN_SHOT_CEILING 1:1）
+    static func shotCeiling(_ kind: DioramaShotKind) -> Double {
+        switch kind {
+        case .hold: return 0.9
+        case .pushIn, .track: return 0.85
+        case .swell: return 0.8
+        case .float: return 0.78
+        case .glide: return 0.72
+        case .crane, .pullBack: return 0.7
+        case .arc: return 0.62
+        case .pendulum: return 0.6
+        case .orbit: return 0.55
+        case .spiral, .flyby: return 0.5
+        }
+    }
+
+    /// 邻行透明度（dioramaSceneConstants resolveNeighborLineOpacity 1:1）
+    static func neighborOpacity(_ offset: Int) -> Double {
+        switch offset {
+        case -1: return 0.3
+        case -2: return 0.1
+        case 1: return 0.34
+        case 2: return 0.16
+        case 3: return 0.06
+        default: return 0
+        }
+    }
+}
+
+/// 镜台：3D 走廊 + 相机运镜 + 回正（Folia 1:1）
 struct DioramaLyricView: View {
     let lines: [KRCLine]
     let progress: Double
     var fontSize: CGFloat = 30
+    var seed: String = "diorama"
 
-    private var rowGap: CGFloat { fontSize * 1.6 }
-    private static let scrollDuration: Double = 0.32
-    private let anglePerLine: Double = 13        // 走廊侧弯角（度/句）
-    private let bendRadius: CGFloat = 46          // 走廊横向弯曲半径
-    private let zPerspective: CGFloat = 0.42      // 透视强度
-
-    private func depthScale(_ d: Int) -> Double { pow(0.78, Double(abs(d))) }
-    private func depthOpacity(_ d: Int) -> Double { pow(0.58, Double(abs(d))) }
-
-    private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
+    private final class Tracker { var lastC: Int = -2 }
+    private final class PathCache { var frames: [DioramaFrame] = [] }
     @State private var tracker = Tracker()
-
-    /// 最长歌词行字符数（用于溢出自适应缩放估算）
-    private var maxChars: Int {
-        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
-    }
+    @State private var cam = DioramaCamState()
+    @State private var pathCache = PathCache()
 
     var body: some View {
-        TimelineView(.animation) { _ in
+        TimelineView(.animation) { ctx in
             let display = lyricDisplayTime(progress)
             let c = lyricCurrentIndex(display, lines: lines)
-            let raw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-            let t = advance(raw, c)
-            let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0
-            let scrolling = c > 0 && t < 1
-            let base = scrolling ? c - 1 : c
-            let offsetY = scrolling ? -rowGap * CGFloat(eased) : 0
+            let _ = tick(c)
+            let seedD = dHash(seed)
+            // 走廊路径（每歌缓存一次）
+            let _ = Self.ensurePath(cache: pathCache, count: lines.count, seed: seedD)
+            let frames = pathCache.frames
+            let idx = dClamp(Double(c), 0, Double(max(lines.count - 1, 0)))
+            let now = display
 
-            ZStack(alignment: .center) {
-                ForEach((base - 3)..<(base + 4), id: \.self) { li in
-                    if lines.indices.contains(li) {
-                        corridorRow(li: li, c: c, display: display, eased: eased)
+            // 每帧驱动相机（Folia CameraRig 逻辑）
+            Self.driveCamera(cam: cam, lines: lines, frames: frames, c: idx, now: now, seed: seedD)
+
+            // 渲染挂载窗口 c-2..c+3
+            ZStack {
+                ForEach((c - 2)...(c + 3), id: \.self) { i in
+                    if i >= 0 && i < lines.count {
+                        Self.rowView(i: i, c: c, lines: lines, frames: frames,
+                                     cam: cam, seed: seedD, now: now, fontSize: fontSize)
                     }
                 }
             }
-            .offset(y: offsetY)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // 相机运镜（Folia diorama 的镜头缓移：扫视 + 推拉 + 游移）
-            .modifier(CameraMotion())
             // 双向防溢出：走廊纵深超高时整体等比缩放，完整显示
             .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
                                estHeight: fontSize * 11.2))
         }
     }
 
-    private func advance(_ raw: Double, _ c: Int) -> Double {
-        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-        tracker.maxT = max(tracker.maxT, raw)
-        return tracker.maxT
+    private func tick(_ c: Int) -> Bool {
+        if c != tracker.lastC { tracker.lastC = c; return true }
+        return false
     }
+
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
+    // MARK: 相机驱动（1:1 CameraRig：SmoothDamp 追踪 read-head + 镜头偏移 + 回正）
+
+    static func driveCamera(cam: DioramaCamState, lines: [KRCLine], frames: [DioramaFrame],
+                            c: Double, now: Double, seed: Double) {
+        guard !lines.isEmpty, frames.count > 0 else { return }
+        let idx = Int(c)
+        let line = lines[idx]
+        let frame = frames[idx]
+        let pl = DioramaView.placement(idx, seed, DioramaView.WEAVE)
+        let wp = DioramaView.wordProgress(line, now)
+        let dur = max(line.end - line.start, 0.001)
+        let pr = line.end > line.start ? dClamp01((now - line.start) / dur) : (now >= line.start ? 1 : 0)
+        let shot = DioramaView.getShot(idx, lines, seed)
+        let settle = DioramaView.holdSettle(now - line.end)
+        let so = DioramaView.shotOffset(shot, progress: pr, wordProgress: wp,
+                                        hero: DioramaView.HERO, lift: DioramaView.LIFT,
+                                        seed: seed, lineIndex: idx, moveScale: DioramaView.MOVE_SCALE * settle)
+        let dr = DioramaView.cameraDrift(now, seed, DioramaView.DRIFT_SCALE * settle)
+        // read-head：文字实际位置 + 逐词横向跟摄
+        let truck = DioramaView.readHeadTruck(wp, DioramaView.lineWidth(line), DioramaView.visibleHalfWidth()) * settle
+        let headR = pl.offsetR + truck
+        let headU = pl.offsetU
+        let readHead = DVec3(
+            x: frame.position.x + frame.right.x * headR + frame.up.x * headU,
+            y: frame.position.y + frame.right.y * headR + frame.up.y * headU,
+            z: frame.position.z + frame.right.z * headR + frame.up.z * headU)
+        // 相机目标位姿（行局部系合成世界）
+        let offRight = so.right + dr.swayX
+        let offUp = so.up + dr.swayY + dr.lift
+        let offBack = so.back + dr.dist
+        let camTarget = DVec3(
+            x: frame.position.x + frame.right.x * offRight + frame.up.x * offUp - frame.forward.x * offBack,
+            y: frame.position.y + frame.right.y * offRight + frame.up.y * offUp - frame.forward.y * offBack,
+            z: frame.position.z + frame.right.z * offRight + frame.up.z * offUp - frame.forward.z * offBack)
+        let lookTarget = DVec3(
+            x: readHead.x + frame.right.x * pl.lookR * settle,
+            y: readHead.y + frame.right.y * pl.lookR * settle,
+            z: readHead.z + frame.right.z * pl.lookR * settle)
+        // 回正需求
+        let readTarget = DioramaView.readNeed(line, now, ceiling: DioramaView.shotCeiling(shot))
+        // 平滑推进（TimelineView 以 60fps 驱动）
+        let dt = 1.0 / 60.0
+        let sx = dSmoothDamp(cam.pos.x, camTarget.x, cam.vel.x, DioramaView.SMOOTH_TIME, dt)
+        let sy = dSmoothDamp(cam.pos.y, camTarget.y, cam.vel.y, DioramaView.SMOOTH_TIME, dt)
+        let sz = dSmoothDamp(cam.pos.z, camTarget.z, cam.vel.z, DioramaView.SMOOTH_TIME, dt)
+        let lx = dSmoothDamp(cam.look.x, lookTarget.x, cam.lookVel.x, DioramaView.SMOOTH_TIME, dt)
+        let ly = dSmoothDamp(cam.look.y, lookTarget.y, cam.lookVel.y, DioramaView.SMOOTH_TIME, dt)
+        let lz = dSmoothDamp(cam.look.z, lookTarget.z, cam.lookVel.z, DioramaView.SMOOTH_TIME, dt)
+        cam.pos = DVec3(x: sx.value, y: sy.value, z: sz.value)
+        cam.vel = DVec3(x: sx.velocity, y: sy.velocity, z: sz.velocity)
+        cam.look = DVec3(x: lx.value, y: ly.value, z: lz.value)
+        cam.lookVel = DVec3(x: lx.velocity, y: ly.velocity, z: lz.velocity)
+        if !cam.initDone {
+            cam.initDone = true
+            cam.pos = camTarget
+            cam.look = lookTarget
+        }
+        // 相机朝向：lookAt read-head
+        let dir = dvSub(cam.look, cam.pos)
+        cam.yaw = atan2(dir.x, -dir.z)
+        cam.pitch = atan2(dir.y, (dir.x * dir.x + dir.z * dir.z).squareRoot())
+        // 回正：相机滚转向文字平面平滑（当前行正对）
+        let alignTargetRoll = pl.roll * readTarget
+        cam.roll += (alignTargetRoll - cam.roll) * (1 - exp(-DioramaView.ALIGN_RATE * dt))
+    }
+
+    static func ensurePath(cache: PathCache, count: Int, seed: Double) {
+        if cache.frames.isEmpty {
+            cache.frames = DioramaView.buildFrames(count: count, seed: seed)
+        }
+    }
+
+    // MARK: 行渲染（世界→相机→屏幕投影 + 雾化 + 3D 倾斜）
 
     @ViewBuilder
-    private func corridorRow(li: Int, c: Int, display: Double, eased: Double) -> some View {
-        let line = lines[li]
-        let rawD = li - c
-        let isCurrent = li == c
-        let isOld = li == c - 1
+    static func rowView(i: Int, c: Int, lines: [KRCLine], frames: [DioramaFrame],
+                        cam: DioramaCamState, seed: Double, now: Double, fontSize: CGFloat) -> some View {
+        // 世界坐标
+        let frame = frames[i]
+        let pl = DioramaView.placement(i, seed, DioramaView.WEAVE)
+        let wx = frame.position.x + frame.right.x * pl.offsetR + frame.up.x * pl.offsetU
+        let wy = frame.position.y + frame.right.y * pl.offsetR + frame.up.y * pl.offsetU
+        let wz = frame.position.z + frame.right.z * pl.offsetR + frame.up.z * pl.offsetU
+        // 相机空间
+        let dx = wx - cam.pos.x
+        let dy = wy - cam.pos.y
+        let dz = wz - cam.pos.z
+        let cY = cos(cam.yaw), sY = sin(cam.yaw)
+        let cP = cos(cam.pitch), sP = sin(cam.pitch)
+        let x1 = dx * cY - dz * sY
+        let z1 = dx * sY + dz * cY
+        let y2 = dy * cP - z1 * sP
+        let z2 = dy * sP + z1 * cP
+        let isBehind = z2 <= 0.35
+        let factor = isBehind ? 1.0 : DioramaView.PX / z2
+        let sx = x1 * factor
+        let sy = y2 * factor
+        let sc = isBehind ? 0.001 : DioramaView.HERO / z2 * pl.scale * DioramaView.fitScale(lines[i])
+        let fog = isBehind ? 0 : dClamp01((DioramaView.FOG_FAR - z2) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR))
+        let baseOp = i == c ? 1.0 : DioramaView.neighborOpacity(i - c)
+        let op = isBehind ? 0 : baseOp * fog
+        // 3D 倾斜：当前行随回正抵消滚转（正对），邻行保持摆位滚转/偏航
+        let rollDeg = i == c ? (pl.roll - cam.roll) * 57.2958 : pl.roll * 57.2958
+        let yawDeg = i == c ? pl.yaw * 57.2958 * 0.4 : pl.yaw * 57.2958
+        // 深度雾化模糊（远行轻微虚化）
+        let blurR = isBehind ? 0 : max(0, (DioramaView.FOG_FAR - z2) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR) - 0.55) * 6
+        // zIndex：近的在上
+        let zI = isBehind ? -999 : -z2
 
-        // 切句飞行：新句从走廊深处推进，旧句退远淡出
-        let scrollIn = isCurrent && eased > 0 ? (1 - eased) : 0.0
-        let scrollOut = isOld && eased > 0 ? eased : 0.0
-        let effD = Double(rawD) + scrollIn - scrollOut
-
-        let scale = isCurrent ? (0.82 + 0.26 * (1 - scrollIn)) : depthScale(rawD) * (isOld ? (1 - 0.3 * eased) : 1)
-        let opacity = isCurrent ? (0.35 + 0.65 * (1 - scrollIn)) : depthOpacity(rawD) * (isOld ? (1 - 0.45 * eased) : 1)
-        let bend = effD * anglePerLine
-        // 走廊横向弯曲：随纵深 sin 弯曲 + 纵深缩放
-        let xBend = CGFloat(sin(effD * 0.45)) * bendRadius * CGFloat(depthScale(rawD))
-        let yOff = CGFloat(effD) * rowGap
-
-        LyricRowView(
-            line: line,
-            currentTime: li <= c ? display : -1,
-            scale: scale,
-            opacity: opacity,
-            tint: .white,
-            fontSize: fontSize,
-            fontWeight: .semibold
-        )
-        .rotation3DEffect(.degrees(bend), axis: (x: 0, y: 1, z: 0), perspective: zPerspective)
-        .offset(x: xBend, y: yOff)
-        .shadow(color: isCurrent ? .white.opacity(0.28) : .clear, radius: 22)
-        .zIndex(Double(-abs(li - c)))
+        let line = lines[i]
+        if i == c {
+            // 当前行：逐字卡拉OK + 辉光
+            LyricRowView(line: line, currentTime: now, scale: 1.0, opacity: 1.0,
+                         tint: .white, fontSize: fontSize, fontWeight: .semibold)
+                .shadow(color: .white.opacity(0.30), radius: 20)
+                .offset(x: CGFloat(sx), y: CGFloat(sy))
+                .scaleEffect(CGFloat(sc))
+                .rotation3DEffect(.degrees(rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.55)
+                .rotation3DEffect(.degrees(yawDeg), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
+                .opacity(op)
+                .blur(radius: CGFloat(blurR))
+                .zIndex(zI)
+        } else {
+            // 邻行：单色整行，雾化退远
+            Text(line.text)
+                .font(.system(size: fontSize, weight: .medium))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                .offset(x: CGFloat(sx), y: CGFloat(sy))
+                .scaleEffect(CGFloat(sc))
+                .rotation3DEffect(.degrees(rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.55)
+                .rotation3DEffect(.degrees(yawDeg), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
+                .opacity(op)
+                .blur(radius: CGFloat(blurR))
+                .zIndex(zI)
+        }
     }
 }
-
 // ============================================================
 // 云阶 Partita：分栏 chunk 布局
 // 当前句按标点拆成块、稳定分栏；词在栏内逐字点亮，当前词放大高亮；
