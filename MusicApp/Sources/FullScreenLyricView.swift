@@ -166,11 +166,9 @@ struct FullScreenLyricView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 素笺：词墙扩散到全屏（不用内边距）；其余模式保留安全区留白
+                // 歌词允许溢出屏幕，前后句自然跑出边界形成纵深感
                 .padding(.leading, 0)
                 .padding(.trailing, 0)
-                // 裁剪保护：任何模式下歌词都不会溢出屏幕外
-                .clipped()
                 // 相机运镜仅由镜台（Diorama）模式内部承载，其余模式保持平正排版
 
                 // 底部：时间 + 进度

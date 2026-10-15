@@ -857,9 +857,7 @@ struct DioramaLyricView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // 双向防溢出：走廊纵深超高时整体等比缩放，完整显示
-            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
-                               estHeight: fontSize * 11.2))
+            // 歌词允许溢出屏幕（不强制缩放适配），前后句自然跑出边界形成 3D 纵深感
         }
     }
 
