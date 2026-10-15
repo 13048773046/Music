@@ -1277,7 +1277,7 @@ private struct AddToPlaylistSheet: View {
         isCreating = true
         do {
             let pid = try await API.createPlaylist(name: newPlaylistName)
-            await API.addToPlaylist(
+            try await API.addToPlaylist(
                 playlistId: pid,
                 trackId: track.id,
                 title: track.title,
@@ -1290,7 +1290,9 @@ private struct AddToPlaylistSheet: View {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             dismiss()
         } catch {
-            print("创建歌单失败: \(error)")
+            errorText = "创建失败: \(error.localizedDescription)"
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            errorText = ""
         }
         isCreating = false
     }
