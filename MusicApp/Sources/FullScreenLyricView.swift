@@ -111,9 +111,9 @@ struct FullScreenLyricView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.leading, max(safeArea.leading, 0) + 24)
-                .padding(.trailing, max(safeArea.trailing, 0) + 20)
-                .padding(.top, safeArea.top + 8)
+                .padding(.leading, 24)
+                .padding(.trailing, 20)
+                .padding(.top, 8)
                 // 确保顶栏永远在最上层、按钮命中区域明确
                 .zIndex(10)
                 .allowsHitTesting(true)
@@ -167,8 +167,8 @@ struct FullScreenLyricView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // 素笺：词墙扩散到全屏（不用内边距）；其余模式保留安全区留白
-                .padding(.leading, selectedMode == .paper ? 0 : max(safeArea.leading, 0) + 20)
-                .padding(.trailing, selectedMode == .paper ? 0 : max(safeArea.trailing, 0) + 20)
+                .padding(.leading, 0)
+                .padding(.trailing, 0)
                 // 裁剪保护：任何模式下歌词都不会溢出屏幕外
                 .clipped()
                 // 相机运镜仅由镜台（Diorama）模式内部承载，其余模式保持平正排版
@@ -196,9 +196,9 @@ struct FullScreenLyricView: View {
                     }
                     .frame(height: 3)
                 }
-                .padding(.leading, max(safeArea.leading, 0) + 26)
-                .padding(.trailing, max(safeArea.trailing, 0) + 26)
-                .padding(.bottom, max(safeArea.bottom, 0) + 16)
+                .padding(.leading, 26)
+                .padding(.trailing, 26)
+                .padding(.bottom, 16)
             }
         }
         // 沿用播放页的沉浸式状态栏方式：不隐藏状态栏，背景铺满、内容在安全区内
