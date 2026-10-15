@@ -151,7 +151,7 @@ final class AuthManager: ObservableObject {
 
 // MARK: - 接口错误信息
 
-enum APIError: Error {
+enum APIError: LocalizedError {
     case message(String)
 
     var errorDescription: String? {
