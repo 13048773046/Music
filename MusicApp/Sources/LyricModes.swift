@@ -1660,51 +1660,54 @@ struct LyricModePickerOverlay: View {
     }
 }
 
+
 // MARK: - 素笺（Folia 浅色镜台）
 
 // ============================================================
 // 素笺 Paper：Folia 镜台浅色主题版（1:1 参照视频与源码）
-// 浅色纸张背景 + 暗角；歌词拆成"词卡"，沿弯曲扇形词墙分布——
+// 浅色纸张背景 + 暗角（由 FullScreenLyricView 最外层承载，铺满全屏）；
+// 歌词按"词"在 3D 空间摆位——
 //   当前唱词正对相机、最近最大（黑色粗体+投影）；
-//   已唱词沿词墙退向左侧（橙红 accent，带框）；
-//   未唱词退向右侧/前方（深灰）；
-//   场景散布圆圈/十字/方块/三角/花瓣/菱形/虚线框（固定 seed）；
-//   相机 smoothDamp 追踪当前词，词相对镜头流动，形成运镜。
-// 源码依据：cameraPath.ts（placement 随机摆位/step）、DioramaScene.tsx
-//   （主题色 primary/accent/bg、雾、FOG）、dioramaSceneConstants.ts（透明度/窗口/生命周期）。
+//   已唱词沿弧形词墙退向左侧（橙红 accent，带框）；
+//   未唱词退向右前方（深灰）；
+//   场景散布圆圈/十字/方块/三角/菱形/虚线框/花瓣/小环（固定 seed）。
+// 词位置按"词序号差"针孔投影（不依赖真实时间），故 KRC 快字也能逐词展开。
+// 依据：cameraPath.ts(placement)、DioramaScene.tsx(主题色/雾)、dioramaScene*.ts(常量/词拆分)。
 // ============================================================
 
-/// 词墙几何装饰（固定 seed，与 Folia 场景道具一致）
 private enum PaperProps {
-    // 纸张主题（固定浅色，对应视频里的浅色主题）
-    static let bgTop = Color(red: 0.933, green: 0.922, blue: 0.894)
-    static let bgCenter = Color(red: 0.961, green: 0.953, blue: 0.933)
-    static let ink = Color(red: 0.105, green: 0.094, blue: 0.082)      // 黑墨
-    static let accent = Color(red: 0.72, green: 0.32, blue: 0.17)       // 橙红（赭石）
-    static let dimInk = Color(red: 0.42, green: 0.39, blue: 0.35)      // 未唱深灰
-    static let deco = Color(red: 0.55, green: 0.52, blue: 0.47)        // 装饰灰
-    static let decoLight = Color(red: 0.70, green: 0.67, blue: 0.62)
+    static let ink = Color(red: 0.105, green: 0.094, blue: 0.082)
+    static let accent = Color(red: 0.72, green: 0.32, blue: 0.17)
+    static let dimInk = Color(red: 0.42, green: 0.39, blue: 0.35)
+    static let deco = Color(red: 0.55, green: 0.52, blue: 0.47)
+    static let decoLight = Color(red: 0.72, green: 0.69, blue: 0.64)
 
-    // 扇形词墙参数（从视频校准）
-    static let ANGLE_PER_SEC = 0.155   // 每单位演唱时间的角度（rad）
-    static let DIST_PER_SEC = 2.15     // 每单位时间的纵深距离
-    static let MAX_TH = 0.85           // 词墙最大角度
+    // 弧形词墙：每词角度/纵深步进
+    static let ANGLE_STEP = 0.175
+    static let DIST_STEP = 0.95
+    static let MAX_TH = 0.86
     static let HERO = 5.2
-    static let PX = 30.0
+    static let FOV_V = 0.49            // 垂直 FOV（rad，约 28°半角=56°）
     static let FOG_NEAR = 9.0
-    static let FOG_FAR = 24.0
-    static let SMOOTH_TIME = 0.38
+    static let FOG_FAR = 26.0
 }
 
-/// 词卡空间布局（屏幕坐标，已含透视）
 private struct PaperWordSlot {
-    var x: Double
-    var y: Double
+    var x: CGFloat
+    var y: CGFloat
     var scale: Double
     var opacity: Double
     var blur: Double
     var rollDeg: Double
     var yawDeg: Double
+}
+
+private struct FlatEntry: Identifiable {
+    let id: Int
+    let li: Int
+    let wk: Int
+    let word: KRWord
+    let line: KRCLine
 }
 
 struct PaperDioramaLyricView: View {
@@ -1713,10 +1716,6 @@ struct PaperDioramaLyricView: View {
     var fontSize: CGFloat = 34
     var seed: String = "paper"
 
-    private final class Tracker { var lastC: Int = -2; var smoothT: Double = 0; var smoothVel: Double = 0
-                                  var smoothY: Double = 0; var yVel: Double = 0 }
-    @State private var tracker = Tracker()
-    /// 几何装饰（每歌固定 seed，只算一次）
     private final class DecoCache {
         var items: [PaperDecoItem] = []
         var built = false
@@ -1724,144 +1723,86 @@ struct PaperDioramaLyricView: View {
     @State private var decoCache = DecoCache()
 
     var body: some View {
-        TimelineView(.animation) { _ in
-            let display = lyricDisplayTime(progress)
-            let c = lyricCurrentIndex(display, lines: lines)
-            let seedD = dHash(seed)
-            let now = display
-            let _ = Self.ensureDeco(decoCache, seed: seedD)
+        GeometryReader { geo in
+            TimelineView(.animation) { _ in
+                let display = lyricDisplayTime(progress)
+                let c = lyricCurrentIndex(display, lines: lines)
+                let seedD = dHash(seed)
+                let now = display
+                let _ = Self.ensureDeco(decoCache, seed: seedD)
 
-            // 当前唱词的"演唱时间"（带句内平滑）——词墙以此为中心
-            let tSung = Self.sungTime(c: c, lines: lines, now: now, tracker: tracker)
+                // 展平词序列 + 当前词索引
+                let flat = Self.flatEntries(c: c, lines: lines)
+                let fi = Self.currentEntryIndex(flat: flat, now: now, c: c)
+                // 针孔焦距（pt）：f = (屏高/2)/tan(垂直FOV/2)
+                let focalPt = Double(geo.size.height) / (2 * tan(PaperProps.FOV_V / 2))
 
-            ZStack {
-                // 背景
-                PaperBackground()
-
-                // 几何装饰（随相机轻微视差）
-                PaperDecoLayer(items: decoCache.items, drift: now)
-
-                // 词墙：c-2..c+3 句的所有词
                 ZStack {
-                    ForEach((c - 2)...(c + 3), id: \.self) { li in
-                        if lines.indices.contains(li) {
-                            let line = lines[li]
-                            let vw = Self.visualWords(line)
-                            ForEach(Array(vw.enumerated()), id: \.offset) { wk, word in
-                                let slot = Self.slot(li: li, wk: wk, line: line, word: word,
-                                                     c: c, tSung: tSung, now: now, seed: seedD)
-                                PaperWordCard(word: word, line: line, li: li, wk: wk,
-                                              slot: slot, now: now, fontSize: fontSize, seed: seedD)
-                            }
+                    // 几何装饰
+                    PaperDecoLayer(items: decoCache.items)
+
+                    // 弧形词墙
+                    ZStack {
+                        ForEach(flat) { entry in
+                            let n = entry.id - fi
+                            let slot = Self.slot(n: n, entry: entry, c: c, focalPt: focalPt,
+                                                 seed: seedD)
+                            PaperWordCard(word: entry.word, li: entry.li, wk: entry.wk,
+                                          slot: slot, now: now, fontSize: fontSize, seed: seedD)
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.2,
-                               estHeight: fontSize * 9.5))
         }
     }
 
-    private var maxChars: Int {
-        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    private static func flatEntries(c: Int, lines: [KRCLine]) -> [FlatEntry] {
+        var out: [FlatEntry] = []
+        var uid = 0
+        for li in (c - 2)...(c + 3) {
+            guard lines.indices.contains(li) else { continue }
+            let line = lines[li]
+            for (wk, word) in visualWords(line).enumerated() {
+                out.append(FlatEntry(id: uid, li: li, wk: wk, word: word, line: line))
+                uid += 1
+            }
+        }
+        return out
     }
 
-    /// 当前唱词的平滑时间：词墙中心跟随当前词，smoothDamp 让流动有惯性
-    private static func sungTime(c: Int, lines: [KRCLine], now: Double, tracker: Tracker) -> Double {
-        guard lines.indices.contains(c) else { return now }
-        let line = lines[c]
-        // 当前词的时间中心（正在唱的词）
-        var target = now
-        for w in line.words {
-            if now >= w.start && now < w.end { target = (w.start + w.end) / 2 }
-            else if now < w.start { target = w.start; break }
+    private static func currentEntryIndex(flat: [FlatEntry], now: Double, c: Int) -> Int {
+        for e in flat where e.li == c {
+            if now >= e.word.start && now < e.word.end { return e.id }
         }
-        let dt = 1.0 / 60.0
-        let r = dSmoothDamp(tracker.smoothT, target, tracker.smoothVel, PaperProps.SMOOTH_TIME, dt)
-        tracker.smoothT = r.value
-        tracker.smoothVel = r.velocity
-        if tracker.lastC != c {
-            tracker.lastC = c
-            tracker.smoothT = target
-            tracker.smoothVel = 0
+        for e in flat where e.li == c {
+            if now < e.word.start { return e.id }
         }
-        return tracker.smoothT
+        for e in flat.reversed() where e.li == c { return e.id }
+        return flat.isEmpty ? 0 : flat.count / 2
     }
 
-    /// 单个词的扇形词墙布局
-    private static func slot(li: Int, wk: Int, line: KRCLine, word: KRWord,
-                             c: Int, tSung: Double, now: Double, seed: Double) -> PaperWordSlot {
-        let tc = (word.start + word.end) / 2
-        let dt = tc - tSung                       // 相对当前唱词的时间差
-        let th = min(max(dt * PaperProps.ANGLE_PER_SEC, -PaperProps.MAX_TH), PaperProps.MAX_TH)
-        // 距离：当前词 HERO，其余按 |dt| 退远；句差额外加纵深
-        let lineGap = Double(li - c) * 8.0
-        let d = max(PaperProps.HERO, PaperProps.HERO + abs(dt) * PaperProps.DIST_PER_SEC + lineGap * 0.35)
-        // 随机摆位（固定 seed）
-        let plSeed = dSeeded(seed + Double(li * 13 + wk * 7))
-        let upOff = (plSeed - 0.5) * 2.6
-        let roll = (dSeeded(seed + Double(li * 13 + wk * 7 + 3)) - 0.5) * 0.18
+    private static func slot(n: Int, entry: FlatEntry, c: Int, focalPt: Double,
+                             seed: Double) -> PaperWordSlot {
+        let nd = Double(n)
+        let th = min(max(nd * PaperProps.ANGLE_STEP, -PaperProps.MAX_TH), PaperProps.MAX_TH)
+        let d = max(PaperProps.HERO, PaperProps.HERO + abs(nd) * PaperProps.DIST_STEP)
+        let li = entry.li, wk = entry.wk
+        let r = dSeeded(seed + Double(li * 13 + wk * 7))
+        let upOff = (r - 0.5) * 3.2
+        let roll = (dSeeded(seed + Double(li * 13 + wk * 7 + 3)) - 0.5) * 0.16
         let yaw = (dSeeded(seed + Double(li * 13 + wk * 7 + 5)) - 0.5) * 0.22
-        // 屏幕坐标
-        let sx = PaperProps.PX * sin(th)
-        let sy = upOff * PaperProps.PX / d
-        let scale = PaperProps.HERO / d * (0.85 + dSeeded(seed + Double(li*13+wk*7+7)) * 0.4)
-        // 雾化（距离远变淡）
+        // 针孔投影（屏幕坐标）
+        let sx = CGFloat(focalPt * sin(th))
+        let sy = CGFloat(upOff * focalPt / d)
+        let scale = PaperProps.HERO / d * (0.92 + dSeeded(seed + Double(li * 13 + wk * 7 + 7)) * 0.28)
         let fog = min(max((PaperProps.FOG_FAR - d) / (PaperProps.FOG_FAR - PaperProps.FOG_NEAR), 0), 1)
-        // 基础透明度：当前句清晰，邻句按句差
         let lineBase = li == c ? 1.0 : DioramaView.neighborOpacity(li - c)
         let opacity = fog * lineBase
         let blur = max(0, (d - PaperProps.FOG_NEAR) / (PaperProps.FOG_FAR - PaperProps.FOG_NEAR)) * 3
         return PaperWordSlot(x: sx, y: sy, scale: scale, opacity: opacity, blur: blur,
                              rollDeg: roll * 57.2958, yawDeg: yaw * 57.2958)
-    }
-
-    /// 视觉词：KRC 用真实逐字词；LRC 整句按语义/字数切成 2-3 字词（句内均匀时间），
-    /// 以便素笺在 LRC 下仍有"词级随机摆位"，且整句在前 72% 时间内快速唱完（不假拖长）。
-    private static func visualWords(_ line: KRCLine) -> [KRWord] {
-        if line.words.count > 1 { return line.words }
-        let groups = splitPaperGroups(line.text)
-        guard groups.count > 1 else { return line.words }
-        let total = groups.map(\.count).reduce(0, +)
-        let span = max((line.end - line.start) * 0.72, Double(groups.count) * 0.32)
-        let t0 = line.start
-        var acc = 0
-        var words: [KRWord] = []
-        for g in groups {
-            let w = max(g.count, 1)
-            let ws = t0 + span * Double(acc) / Double(total)
-            let we = t0 + span * Double(acc + w) / Double(total)
-            words.append(KRWord(text: g, start: ws, end: max(we, ws + 0.3)))
-            acc += w
-        }
-        return words
-    }
-
-    private static func splitPaperGroups(_ s: String) -> [String] {
-        let separators = Set("，。！？、,.!?;：:~～()（）【】[] ")
-        var groups: [String] = []
-        var current = ""
-        for ch in s {
-            if separators.contains(ch) {
-                if !current.isEmpty { groups += chunkPaper(current); current = "" }
-            } else { current.append(ch) }
-        }
-        if !current.isEmpty { groups += chunkPaper(current) }
-        return groups
-    }
-
-    private static func chunkPaper(_ s: String) -> [String] {
-        let chars = Array(s)
-        var out: [String] = []
-        var i = 0
-        while i < chars.count {
-            let rem = chars.count - i
-            let take = rem > 3 && rem % 3 != 0 ? 2 : min(3, rem)
-            out.append(String(chars[i..<i + take]))
-            i += take
-        }
-        return out
     }
 
     private static func ensureDeco(_ cache: DecoCache, seed: Double) {
@@ -1874,40 +1815,103 @@ struct PaperDioramaLyricView: View {
         var items: [PaperDecoItem] = []
         let kinds: [PaperDecoKind] = [.circle, .cross, .square, .triangle, .diamond, .dashedBox,
                                       .flower, .smallDot, .ring]
-        for i in 0..<34 {
+        for i in 0..<38 {
             let s = seed + Double(i * 17)
             let kind = kinds[Int(dSeeded(s)) % kinds.count]
-            let x = (dSeeded(s + 1) - 0.5) * 2.2        // 横（-1.1..1.1 比例）
+            let x = (dSeeded(s + 1) - 0.5) * 2.3
             let y = (dSeeded(s + 2) - 0.5) * 2.4
-            let size = 0.05 + dSeeded(s + 4) * 0.20
-            let depth = dSeeded(s + 6)                  // 0近 1远
-            let alpha = 0.10 + (1 - depth) * 0.22
+            let size = 0.05 + dSeeded(s + 4) * 0.22
+            let depth = dSeeded(s + 6)
+            let alpha = 0.12 + (1 - depth) * 0.24
             items.append(PaperDecoItem(kind: kind, x: x, y: y, size: size,
-                                       depth: depth, alpha: alpha, seed: s))
+                                       depth: depth, alpha: alpha))
         }
         return items
     }
+
+    /// 视觉词：KRC 按"字间停顿/最多3字"聚合词；LRC 按语义切 2-3 字（句内均匀时间）。
+    fileprivate static func visualWords(_ line: KRCLine) -> [KRWord] {
+        let src = line.words
+        guard let first = src.first else { return src }
+        if src.count <= 1 {
+            let groups = splitPaperGroups(line.text)
+            guard groups.count > 1 else { return src }
+            let total = groups.map(\.count).reduce(0, +)
+            let span = max((line.end - line.start) * 0.72, Double(groups.count) * 0.32)
+            var acc = 0
+            var out: [KRWord] = []
+            for g in groups {
+                let w = max(g.count, 1)
+                let ws = line.start + span * Double(acc) / Double(total)
+                let we = line.start + span * Double(acc + w) / Double(total)
+                out.append(KRWord(text: g, start: ws, end: max(we, ws + 0.3)))
+                acc += w
+            }
+            return out
+        }
+        // KRC：按停顿/最多 3 字聚合
+        var out: [KRWord] = []
+        var curT = first.text
+        var curS = first.start
+        var curE = first.end
+        var curN = 1
+        for k in 1..<src.count {
+            let w = src[k]
+            let gap = w.start - curE
+            if curN < 3 && gap < 0.4 && !w.text.trimmingCharacters(in: .whitespaces).isEmpty {
+                curT += w.text
+                curE = w.end
+                curN += 1
+            } else {
+                out.append(KRWord(text: curT, start: curS, end: curE))
+                curT = w.text; curS = w.start; curE = w.end; curN = 1
+            }
+        }
+        out.append(KRWord(text: curT, start: curS, end: curE))
+        return out
+    }
+
+    fileprivate static func splitPaperGroups(_ s: String) -> [String] {
+        let separators = Set("，。！？、,.!?;：:~～()（）【】[] ")
+        var groups: [String] = []
+        var current = ""
+        for ch in s {
+            if separators.contains(ch) {
+                if !current.isEmpty { groups += chunkPaper(current); current = "" }
+            } else { current.append(ch) }
+        }
+        if !current.isEmpty { groups += chunkPaper(current) }
+        return groups
+    }
+
+    fileprivate static func chunkPaper(_ s: String) -> [String] {
+        let chars = Array(s)
+        var out: [String] = []
+        var i = 0
+        while i < chars.count {
+            let rem = chars.count - i
+            let take = rem > 3 && rem % 3 != 0 ? 2 : min(3, rem)
+            out.append(String(chars[i..<i + take]))
+            i += take
+        }
+        return out
+    }
 }
 
-// MARK: - 背景
+// MARK: - 背景（铺满全屏，由 FullScreenLyricView 最外层承载）
 
-private struct PaperBackground: View {
+struct PaperBackground: View {
     var body: some View {
         ZStack {
-            // 纸张底色（中心亮、四周暗的径向渐变，模拟晕影）
             RadialGradient(
-                gradient: Gradient(colors: [PaperProps.bgCenter, PaperProps.bgTop,
-                                           Color(red: 0.78, green: 0.76, blue: 0.72)]),
-                center: .center,
-                startRadius: 40,
-                endRadius: 900)
-            // 四角暗角（vignette）
+                gradient: Gradient(colors: [Color(red: 0.965, green: 0.957, blue: 0.937),
+                                           Color(red: 0.905, green: 0.894, blue: 0.866),
+                                           Color(red: 0.76, green: 0.74, blue: 0.70)]),
+                center: .center, startRadius: 30, endRadius: 950)
             RadialGradient(
                 gradient: Gradient(colors: [.clear,
-                                           Color(red: 0.25, green: 0.23, blue: 0.20).opacity(0.28)]),
-                center: .center,
-                startRadius: 420,
-                endRadius: 1050)
+                                           Color(red: 0.22, green: 0.20, blue: 0.18).opacity(0.32)]),
+                center: .center, startRadius: 380, endRadius: 1080)
         }
         .ignoresSafeArea()
     }
@@ -1919,28 +1923,24 @@ private enum PaperDecoKind { case circle, cross, square, triangle, diamond, dash
 
 private struct PaperDecoItem {
     let kind: PaperDecoKind
-    let x: Double      // 横（-1.1..1.1，比例 × 宽）
+    let x: Double
     let y: Double
     let size: Double
     let depth: Double
     let alpha: Double
-    let seed: Double
 }
 
 private struct PaperDecoLayer: View {
     let items: [PaperDecoItem]
-    let drift: Double
-
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 ForEach(Array(items.enumerated()), id: \.offset) { i, it in
-                    let px = it.x * Double(geo.size.width)
-                    let py = it.y * Double(geo.size.height)
                     let d = it.size * Double(min(geo.size.width, geo.size.height))
                     PaperDecoShape(item: it)
                         .frame(width: d, height: d)
-                        .position(x: px, y: py)
+                        .position(x: it.x * Double(geo.size.width),
+                                  y: it.y * Double(geo.size.height))
                         .opacity(it.alpha)
                 }
             }
@@ -2007,9 +2007,9 @@ private struct PaperFlower: Shape {
         var p = Path()
         for k in 0..<4 {
             let a = Double(k) * .pi / 2
-            let pcx = cx + CGFloat(cos(a)) * r
-            let pcy = cy + CGFloat(sin(a)) * r
-            p.addEllipse(in: CGRect(x: pcx - r, y: pcy - r, width: r*2, height: r*2))
+            let px = cx + CGFloat(cos(a)) * r
+            let py = cy + CGFloat(sin(a)) * r
+            p.addEllipse(in: CGRect(x: px - r, y: py - r, width: r * 2, height: r * 2))
         }
         return p
     }
@@ -2019,7 +2019,6 @@ private struct PaperFlower: Shape {
 
 private struct PaperWordCard: View {
     let word: KRWord
-    let line: KRCLine
     let li: Int
     let wk: Int
     let slot: PaperWordSlot
@@ -2028,14 +2027,11 @@ private struct PaperWordCard: View {
     let seed: Double
 
     var body: some View {
-        // 词状态：当前唱（黑）/已唱（橙红）/未唱（深灰）
         let isCurrent = now >= word.start && now < word.end
         let isSung = now >= word.end
         let col: Color = isCurrent ? PaperProps.ink : (isSung ? PaperProps.accent : PaperProps.dimInk)
-        // 词是否带框（确定性：约 1/3 词带虚线框/角框）
-        let hasBox = dSeeded(seed + Double(li*13+wk*11)) < 0.34
-        let dashed = dSeeded(seed + Double(li*13+wk*11+2)) < 0.5
-        // 词字号（当前词最大）
+        let hasBox = dSeeded(seed + Double(li * 13 + wk * 11)) < 0.38
+        let dashed = dSeeded(seed + Double(li * 13 + wk * 11 + 2)) < 0.5
         let fs = fontSize * (isCurrent ? 1.12 : 0.92)
         let weight: Font.Weight = isCurrent ? .heavy : .bold
 
@@ -2044,8 +2040,8 @@ private struct PaperWordCard: View {
             .foregroundColor(col)
             .lineLimit(1)
             .minimumScaleFactor(0.5)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
             .overlay {
                 if hasBox {
                     if dashed {
@@ -2057,22 +2053,20 @@ private struct PaperWordCard: View {
             }
             .shadow(color: PaperProps.ink.opacity(isCurrent ? 0.30 : 0.18),
                     radius: isCurrent ? 7 : 4, y: 2)
-            .offset(x: CGFloat(slot.x), y: CGFloat(slot.y))
+            .offset(x: slot.x, y: slot.y)
             .scaleEffect(CGFloat(slot.scale))
             .rotation3DEffect(.degrees(slot.rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.6)
             .rotation3DEffect(.degrees(slot.yawDeg), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
             .opacity(slot.opacity)
             .blur(radius: CGFloat(slot.blur))
-            .zIndex(isCurrent ? 50 : -abs(slot.x))
+            .zIndex(isCurrent ? 100 : Double(50 - abs(slot.x) / 10))
     }
 }
 
-/// 四角 L 线框（Folia 词卡的"角框"）
 private struct PaperCornerBox: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        let L: CGFloat = min(10, rect.width * 0.25)
-        // 四角 L
+        let L = min(10, rect.width * 0.25)
         let corners: [(CGPoint, CGFloat, CGFloat)] = [
             (rect.origin, L, L),
             (CGPoint(x: rect.maxX, y: rect.minY), -L, L),

@@ -45,10 +45,32 @@ struct FullScreenLyricView: View {
         return Color(hex: 0x121214)
     }
 
+    /// 前景色：素笺浅色背景用深墨，其余深色背景用白
+    private var fg: Color {
+        selectedMode == .paper ? Color(red: 0.16, green: 0.14, blue: 0.12) : .white
+    }
+    private var fgSoft: Color {
+        selectedMode == .paper
+            ? Color(red: 0.16, green: 0.14, blue: 0.12).opacity(0.58)
+            : .white.opacity(0.65)
+    }
+    private var fgBtn: Color {
+        selectedMode == .paper
+            ? Color(red: 0.16, green: 0.14, blue: 0.12).opacity(0.92)
+            : .white.opacity(0.9)
+    }
+    private var fgBtnBg: Color {
+        selectedMode == .paper ? Color.black.opacity(0.10) : Color.white.opacity(0.14)
+    }
+
     var body: some View {
         ZStack {
-            // 背景：主色渐变 + 视差粒子光斑（相机缓移感）
-            background
+            // 背景：素笺为浅色纸张（铺满），其余为主色渐变 + 视差粒子
+            if selectedMode == .paper {
+                PaperBackground()
+            } else {
+                background
+            }
 
             VStack(spacing: 0) {
                 // 顶部：歌名/歌手（左）+ 关闭（右）
@@ -56,11 +78,11 @@ struct FullScreenLyricView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(track.title)
                             .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundColor(fg)
                             .lineLimit(1)
                         Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
                             .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.65))
+                            .foregroundColor(fgSoft)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
@@ -70,9 +92,9 @@ struct FullScreenLyricView: View {
                     } label: {
                         Image(systemName: "square.grid.2x2")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(fgBtn)
                             .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.14), in: Circle())
+                            .background(fgBtnBg, in: Circle())
                     }
                     .buttonStyle(.plain)
                     Button {
@@ -83,9 +105,9 @@ struct FullScreenLyricView: View {
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(fgBtn)
                             .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.14), in: Circle())
+                            .background(fgBtnBg, in: Circle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -155,19 +177,19 @@ struct FullScreenLyricView: View {
                     HStack {
                         Text(fmt(player.progress * player.duration))
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundColor(fgSoft)
                             .monospacedDigit()
                         Spacer()
                         Text(fmt(player.duration))
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundColor(fgSoft)
                             .monospacedDigit()
                     }
                     // 细进度条
                     GeometryReader { g in
                         ZStack(alignment: .leading) {
-                            Capsule().fill(Color.white.opacity(0.16))
-                            Capsule().fill(Color.white.opacity(0.85))
+                            Capsule().fill(fg.opacity(0.16))
+                            Capsule().fill(fg.opacity(0.85))
                                 .frame(width: max(4, g.size.width * min(max(player.progress, 0), 1)))
                         }
                     }
@@ -179,8 +201,9 @@ struct FullScreenLyricView: View {
             }
         }
         // 沿用播放页的沉浸式状态栏方式：不隐藏状态栏，背景铺满、内容在安全区内
-        .preferredColorScheme(.dark)
-        .background(Color.black)
+        .preferredColorScheme(selectedMode == .paper ? .light : .dark)
+        .background(selectedMode == .paper
+                    ? Color(red: 0.90, green: 0.89, blue: 0.86) : Color.black)
         // 歌词展示模式切换浮层（页面内 overlay，不依赖 sheet）
         .overlay {
             if showModePicker {
