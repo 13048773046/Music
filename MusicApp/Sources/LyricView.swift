@@ -271,6 +271,15 @@ struct LyricRowView: View, Equatable {
     /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
     private var filledWidth: CGFloat {
         guard currentTime >= 0 else { return 0 }
+        // LRC 整句行（无逐字时间戳，words 只有 1 个）：句开始即整行一次性亮起，
+        // 不做"按整句时长线性填充"——没有逐字时间时线性填充必然和真实演唱错位
+        // （快唱的字被拖慢、拖长的字提前），整句高亮才是 LRC 的正确显示方式。
+        if line.words.count <= 1 {
+            if let w = line.words.first, currentTime >= w.start {
+                return charWidths.reduce(0, +)
+            }
+            return 0
+        }
         var w: CGFloat = 0
         for (i, word) in line.words.enumerated() {
             let cw = charWidths.indices.contains(i) ? charWidths[i] : 0

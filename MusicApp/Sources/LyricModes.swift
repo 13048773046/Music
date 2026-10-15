@@ -971,9 +971,12 @@ struct DioramaLyricView: View {
         // 切句时新句不是硬切满透明，而是从邻行透明度 0.34 平滑升到 1.0、尺寸渐增——
         // 相机这 0.42s 沿走廊飞过去，新句从远处雾中拉近到眼前，形成"飞去找歌词"的连续过程
         let line = lines[i]
-        let dom = (i == c) ? DioramaView.readNeed(line, now, ceiling: 1.0) : 0
-        let baseOp = (i == c) ? (0.34 + 0.66 * dom) : DioramaView.neighborOpacity(i - c)
-        let scaleGain = (i == c) ? (0.72 + 0.28 * dom) : 0.75
+        // 文字点亮程度：从 line.start 起 0.35s 平滑升到全显（不提前、不跳变）。
+        // 相机回正/飞行另由 driveCamera 的 readNeed 提前 0.6s 驱动，二者解耦——
+        // 相机可以提前转过去，但文字严格在唱到的瞬间才开始亮。
+        let lightDom = (i == c) ? dSmoothstep01((now - line.start) / 0.35) : 0
+        let baseOp = (i == c) ? (0.34 + 0.66 * lightDom) : DioramaView.neighborOpacity(i - c)
+        let scaleGain = (i == c) ? (0.72 + 0.28 * lightDom) : 0.75
         let sc = isBehind ? 0.001 : DioramaView.HERO / z2 * pl.scale * DioramaView.fitScale(line) * scaleGain
         let fog = isBehind ? 0 : dClamp01((DioramaView.FOG_FAR - z2) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR))
         let op = isBehind ? 0 : baseOp * fog
@@ -988,10 +991,10 @@ struct DioramaLyricView: View {
         let zI = isBehind ? -999 : -z2
 
         if i == c {
-            // 当前行：逐字卡拉OK + 轻辉光（不再大半径光晕，避免糊边）
+            // 当前行：逐字卡拉OK（KRC）或整句亮起（LRC）+ 辉光
             LyricRowView(line: line, currentTime: now, scale: 1.0, opacity: 1.0,
                          tint: .white, fontSize: fontSize, fontWeight: .semibold)
-                .shadow(color: .white.opacity(0.20), radius: 8)
+                .shadow(color: .white.opacity(0.34), radius: 14)
                 .offset(x: CGFloat(sx), y: CGFloat(sy))
                 .scaleEffect(CGFloat(sc))
                 .rotation3DEffect(.degrees(rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.55)
