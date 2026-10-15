@@ -22,6 +22,10 @@ struct MineView: View {
 
     // 听歌时长（秒）
     @State private var listenSeconds: Int = 0
+    // 社交数据
+    @State private var followerCount: Int = 0
+    @State private var followingCount: Int = 0
+    @State private var mutualCount: Int = 0
 
     // 三个分页列表：我的作品 / 我的喜欢 / 我的评论
     @State private var works = MinePager<Track>()
@@ -304,6 +308,17 @@ struct MineView: View {
                 }
                 .padding(12)
                 .softCard(radius: 14)
+
+                // 社交数据：粉丝 / 关注 / 互关
+                HStack(spacing: 0) {
+                    socialStatItem(value: "\(followerCount)", label: "粉丝")
+                    Divider().frame(height: 30)
+                    socialStatItem(value: "\(followingCount)", label: "关注")
+                    Divider().frame(height: 30)
+                    socialStatItem(value: "\(mutualCount)", label: "互关")
+                }
+                .padding(.vertical, 12)
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
             }
             .padding(.horizontal, 20)
             .padding(.top, 22)
@@ -462,6 +477,20 @@ struct MineView: View {
     }
 
     // MARK: - 底部（关于 + 退出登录）
+
+    // MARK: - 功能入口卡片（播放历史 / 我的歌单）
+
+    private func socialStatItem(value: String, label: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(Theme.textPrimary)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
@@ -792,6 +821,14 @@ struct MineView: View {
     private func loadStats() async {
         if let seconds = try? await API.myStats() {
             listenSeconds = seconds
+        }
+        // 加载社交数据
+        if let uid = auth.currentUser?.id {
+            if let p = try? await API.fetchUserProfile(uid) {
+                followerCount = p.followerCount
+                followingCount = p.followingCount
+                mutualCount = p.mutualCount
+            }
         }
     }
 

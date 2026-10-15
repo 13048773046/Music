@@ -809,9 +809,46 @@ enum API {
         applyAuth(&req)
         let (data, resp) = try await URLSession.shared.data(for: req)
         try checkAuth(resp)
-        struct Resp: Decodable { let userId: String; let account: String; let name: String; let avatar: String; let signature: String; let created: Double; let gender: String; let age: Int; let trackCount: Int; let likeCount: Int }
+        struct Resp: Decodable {
+            let userId: String; let account: String; let name: String; let avatar: String
+            let signature: String; let created: Double; let gender: String; let age: Int
+            let trackCount: Int; let likeCount: Int
+            let followerCount: Int; let followingCount: Int; let mutualCount: Int
+            let isFollowing: Bool
+        }
         let r = try JSONDecoder().decode(Resp.self, from: data)
-        return UserProfile(userId: r.userId, account: r.account, name: r.name, avatar: r.avatar, signature: r.signature, created: r.created, gender: r.gender, age: r.age, trackCount: r.trackCount, likeCount: r.likeCount)
+        return UserProfile(userId: r.userId, account: r.account, name: r.name, avatar: r.avatar,
+                          signature: r.signature, created: r.created, gender: r.gender, age: r.age,
+                          trackCount: r.trackCount, likeCount: r.likeCount,
+                          followerCount: r.followerCount, followingCount: r.followingCount,
+                          mutualCount: r.mutualCount, isFollowing: r.isFollowing)
+    }
+
+    /// 关注/取关用户
+    static func toggleFollow(_ userId: String) async throws -> Bool {
+        var req = URLRequest(url: base.appendingPathComponent("user/\(userId)/follow"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        struct R: Decodable { let isFollowing: Bool }
+        let r = try JSONDecoder().decode(R.self, from: data)
+        return r.isFollowing
+    }
+
+    /// 获取用户上传的歌曲
+    static func fetchUserTracks(_ userId: String) async throws -> [Track] {
+        var req = URLRequest(url: base.appendingPathComponent("user/\(userId)/tracks"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
+        struct Resp: Decodable { let list: [Track] }
+        let r = try JSONDecoder().decode(Resp.self, from: data)
+        return r.list
     }
 }
 
@@ -852,4 +889,8 @@ struct UserProfile: Decodable {
     let age: Int
     let trackCount: Int
     let likeCount: Int
+    let followerCount: Int
+    let followingCount: Int
+    let mutualCount: Int
+    let isFollowing: Bool
 }

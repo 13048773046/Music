@@ -13,6 +13,7 @@ struct NotificationsView: View {
     @State private var isLoading = false
     @State private var loadFailed = false
     @State private var showOfficialChat = false
+    @State private var showUserProfile: String?
 
     var body: some View {
         ZStack {
@@ -52,6 +53,12 @@ struct NotificationsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showOfficialChat) {
             OfficialMessagesView()
+                .environmentObject(player)
+                .environmentObject(auth)
+        }
+        // 用户主页弹窗
+        .sheet(item: $showUserProfile) { uid in
+            UserProfileView(userId: uid)
                 .environmentObject(player)
                 .environmentObject(auth)
         }
@@ -124,11 +131,13 @@ struct NotificationsView: View {
     // MARK: - 互动通知行（头像 + 文字 + 封面）
 
     private func interactionRow(_ n: API.Notification) -> some View {
-        Button {
-            Task { await handleTap(n) }
-        } label: {
-            HStack(spacing: 12) {
-                // 点赞者头像（右上角未读角标）
+        HStack(spacing: 12) {
+            // 头像：点击跳转用户主页
+            Button {
+                if let uid = n.fromUserId, !uid.isEmpty {
+                    showUserProfile = uid
+                }
+            } label: {
                 avatarView(for: n)
                     .overlay(alignment: .topTrailing) {
                         if n.unread {
@@ -140,8 +149,15 @@ struct NotificationsView: View {
                                 )
                         }
                     }
+            }
+            .buttonStyle(.plain)
 
-                // 文字内容
+            // 文字内容：点击跳转用户主页
+            Button {
+                if let uid = n.fromUserId, !uid.isEmpty {
+                    showUserProfile = uid
+                }
+            } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(n.fromUser ?? "有人")
@@ -157,21 +173,39 @@ struct NotificationsView: View {
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textTertiary)
                 }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                // 歌曲封面（右侧，尺寸与头像一致更统一）
+            // 右侧：关注类型显示回关按钮，其他显示歌曲封面
+            if n.type == "follow" {
+                Button {
+                    Task {
+                        if let uid = n.fromUserId {
+                            _ = try? await API.toggleFollow(uid)
+                        }
+                    }
+                } label: {
+                    Text("回关")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(PressableButtonStyle())
+            } else {
                 albumCover(for: n)
             }
-            .padding(.vertical, 12)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Theme.cardBorder.opacity(0.6))
-                    .frame(height: 0.5)
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.cardBorder.opacity(0.6))
+                .frame(height: 0.5)
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 Task { await deleteNotification(n) }
