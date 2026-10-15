@@ -267,13 +267,6 @@ struct MainTabView: View {
     /// 稳定闭包容器（见 SidebarHandlers 注释）
     @State private var handlers = SidebarHandlers()
 
-    /// 状态栏真实高度（keyWindow 直读）：GlobalTopBar 显式下移避开状态栏
-    static var windowSafeAreaTop: CGFloat {
-        (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?
-            .windows.first(where: { $0.isKeyWindow })?
-            .safeAreaInsets.top ?? 0
-    }
-
     /// 侧边栏宽度（约屏宽 85%）
     private let panelWidth = UIScreen.main.bounds.width * 0.85
 
@@ -318,13 +311,12 @@ struct MainTabView: View {
 
                 // 顶部栏只在首页（播放页）展示：切到发现/我的后隐藏，
                 // 内容区完全沉浸，不残留全局顶部栏。
-                // 顶部显式读取 keyWindow 安全区：portraitLocked().ignoresSafeArea()
-                // 可能把布局扩展到状态栏后，这里显式下移保证三横线/标题不被状态栏压住。
+                // portraitLocked 已保持安全区完整（不再清空），顶栏自然落在状态栏下方
                 if router.selectedTab == 1 {
                     GlobalTopBar(onOpenSidebar: handlers.onOpen)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
-                        .padding(.top, Self.windowSafeAreaTop + 8)
+                        .padding(.top, 8)
                         .alignmentGuide(.top) { d in d[.top] }
                         .frame(maxHeight: .infinity, alignment: .top)
                 }

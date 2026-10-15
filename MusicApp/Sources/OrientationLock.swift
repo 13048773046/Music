@@ -77,10 +77,12 @@ extension View {
             .ignoresSafeArea()
     }
 
-    /// 锁定竖屏（主界面 / 登录页，防止系统横屏授权被主界面接管）
+    /// 锁定竖屏（主界面 / 登录页，防止系统横屏授权被主界面接管）。
+    /// 注意：不能加 .ignoresSafeArea()——它会把主界面安全区环境清空，
+    /// 导致 GlobalTopBar 顶到状态栏后、底部 TabBar 沉到 Home 指示条后被挡住；
+    /// 各页面背景自行铺满（内部已有 ignoresSafeArea），此处保持安全区完整。
     func portraitLocked() -> some View {
         OrientationLock(mask: .portrait, force: .portrait)
             .overlay(self)
-            .ignoresSafeArea()
     }
 }
