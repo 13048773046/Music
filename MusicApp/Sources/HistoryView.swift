@@ -15,19 +15,21 @@ struct HistoryView: View {
                     ProgressView()
                         .padding(.top, 60)
                 } else if items.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 40))
-                            .foregroundColor(Theme.textTertiary)
-                        Text("暂无播放历史")
-                            .font(.system(size: 15))
-                            .foregroundColor(Theme.textTertiary)
-                    }
-                    .padding(.top, 80)
+                    emptyState
+                        .padding(.top, 80)
                 } else {
+                    // 头部统计
+                    headerCard
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, 8)
+
+                    // 历史列表
                     ForEach(items) { item in
                         historyRow(item)
+                            .padding(.horizontal, 16)
                     }
+
                     if hasMore {
                         ProgressView()
                             .padding(.vertical, 16)
@@ -36,14 +38,53 @@ struct HistoryView: View {
                 }
             }
         }
+        .background(Theme.background.ignoresSafeArea())
         .navigationTitle("播放历史")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { Task { await reload() } }
     }
 
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(Theme.card)
+                    .frame(width: 80, height: 80)
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 32))
+                    .foregroundColor(Theme.textTertiary)
+            }
+            Text("暂无播放历史")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(Theme.textSecondary)
+            Text("你听过的歌曲会记录在这里")
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var headerCard: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("最近听过")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("共 \(items.count) 首歌曲")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+            Image(systemName: "clock")
+                .font(.system(size: 24))
+                .foregroundColor(Theme.accent.opacity(0.6))
+        }
+        .padding(16)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+    }
+
     private func historyRow(_ item: HistoryTrack) -> some View {
         Button {
-            // 点击历史记录：播放这首歌
             let track = Track(id: item.trackId, title: item.title, artist: item.artist,
                               album: nil, cover: item.cover, size: nil,
                               dur: nil, durText: nil, created: item.created,
@@ -65,11 +106,10 @@ struct HistoryView: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Image(systemName: "play.fill")
-                    .font(.system(size: 14))
-                    .foregroundColor(Theme.textTertiary)
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(Theme.accent.opacity(0.7))
             }
-            .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
         .buttonStyle(PressableButtonStyle())

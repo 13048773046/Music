@@ -467,37 +467,64 @@ struct MineView: View {
         VStack(spacing: 0) {
             Divider().background(Theme.cardBorder)
 
-            // 功能入口：播放历史 / 我的歌单
-            HStack(spacing: 0) {
+            // 功能入口卡片：播放历史 / 我的歌单
+            HStack(spacing: 12) {
                 NavigationLink {
                     HistoryView()
                 } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 20, weight: .medium))
-                        Text("播放历史")
-                            .font(.system(size: 12, weight: .medium))
+                    VStack(alignment: .leading, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Theme.accentSoft)
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(Theme.accent)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("播放历史")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                            Text("看看最近听过的歌")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textTertiary)
+                        }
                     }
-                    .foregroundColor(Theme.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
                 }
-                Divider().frame(height: 40)
+                .buttonStyle(PressableButtonStyle())
+
                 NavigationLink {
                     PlaylistsView()
                 } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 20, weight: .medium))
-                        Text("我的歌单")
-                            .font(.system(size: 12, weight: .medium))
+                    VStack(alignment: .leading, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.purple.opacity(0.15))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.purple)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("我的歌单")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                            Text("收藏喜欢的歌曲")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textTertiary)
+                        }
                     }
-                    .foregroundColor(Theme.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
                 }
+                .buttonStyle(PressableButtonStyle())
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
 
             HStack {
                 Text("流萤音乐 v\(appVersion)")
