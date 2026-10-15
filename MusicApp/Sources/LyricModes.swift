@@ -244,7 +244,7 @@ private struct TiltActiveLine: View {
 
     var body: some View {
         // 斜体行选择：用行起始时间做种子（Folia tiltStyleProbability ~45%）
-        let segments = splitLines(line.fullText)
+        let segments = splitLines(line.text)
         let tiltProbability = 0.45
         let hasTilt = seeded(line.start) < tiltProbability
         let safeCount = max(segments.count, 1)
@@ -345,7 +345,7 @@ private struct TiltSegmentRow: View {
     let isPassed: Bool
 
     var body: some View {
-        Text(line.fullText)
+        Text(line.text)
             .font(.system(size: fontSize, weight: weight))
             .foregroundColor(.white)
             .lineLimit(1)
@@ -593,7 +593,7 @@ struct LumiereLyricView: View {
         let isCurrent = li == c
         let isOld = li == c - 1
         let timings = lyricCharTimings(line)
-        let chars = Array(line.fullText)
+        let chars = Array(line.text)
         // 非空格序号映射（逐字时间戳按非空格序编号）
         let nonSpaceMap: [Int: Int] = {
             var m: [Int: Int] = [:]
@@ -691,17 +691,17 @@ struct PendoloLyricView: View {
     private func pendoloActiveLine(_ line: KRCLine, display: Double) -> some View {
         let fill = lyricFillWidth(line, at: display, fontSize: fontSize, weight: .semibold)
         ZStack(alignment: .leading) {
-            Text(line.fullText)
+            Text(line.text)
                 .font(.system(size: fontSize, weight: .semibold))
                 .foregroundColor(.white.opacity(0.30))
-            Text(line.fullText)
+            Text(line.text)
                 .font(.system(size: fontSize, weight: .semibold))
                 .foregroundColor(.white)
                 .mask(alignment: .leading) {
                     Rectangle().frame(width: fill)
                 }
             // 扫光条：已唱边界一道纵向亮光
-            Text(line.fullText)
+            Text(line.text)
                 .font(.system(size: fontSize, weight: .semibold))
                 .foregroundColor(.clear)
                 .overlay(alignment: .leading) {
@@ -710,7 +710,7 @@ struct PendoloLyricView: View {
                         .frame(width: fontSize * 0.5)
                         .offset(x: fill - fontSize * 0.25)
                 }
-                .mask(Text(line.fullText).font(.system(size: fontSize, weight: .semibold)))
+                .mask(Text(line.text).font(.system(size: fontSize, weight: .semibold)))
         }
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .center)
