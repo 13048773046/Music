@@ -259,6 +259,15 @@ def db():
     if "is_deleted" not in notif_cols:
         c.execute("ALTER TABLE notifications ADD COLUMN is_deleted INTEGER DEFAULT 0")
 
+    # 关注关系表
+    c.execute("""CREATE TABLE IF NOT EXISTS follows(
+        follower_id TEXT, following_id TEXT, created REAL,
+        PRIMARY KEY(follower_id, following_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_follow_follower ON follows(follower_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_follow_following ON follows(following_id)")
+
+    # 通知类型加 follow 支持（复用 notifications 表，type='follow'）
+
     c.commit()
     return c
 
@@ -2122,6 +2131,8 @@ async function delNotify(id){
             if u.path.startswith("/api/user/") and u.path.endswith("/profile"):
                 target_uid = u.path.split("/")[3]
                 c = db()
+                # 当前登录用户（判断是否已关注）
+                me_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 # 用户基本信息
                 urow = c.execute("SELECT id, account, name, avatar, signature, created, gender, age FROM users WHERE id=?", (target_uid,)).fetchone()
                 if not urow:
@@ -2131,13 +2142,49 @@ async function delNotify(id){
                 track_count = c.execute("SELECT COUNT(*) FROM tracks WHERE user_id=? AND offline=0", (target_uid,)).fetchone()[0]
                 # 获赞总数
                 like_count = c.execute("SELECT COALESCE(SUM(like_count),0) FROM tracks WHERE user_id=?", (target_uid,)).fetchone()[0]
+                # 粉丝数（关注我的人数）
+                follower_count = c.execute("SELECT COUNT(*) FROM follows WHERE following_id=?", (target_uid,)).fetchone()[0]
+                # 关注数（我关注的人数）
+                following_count = c.execute("SELECT COUNT(*) FROM follows WHERE follower_id=?", (target_uid,)).fetchone()[0]
+                # 互关数（互相关注的人数）
+                mutual_count = 0
+                if me_uid:
+                    mutual_count = c.execute("""SELECT COUNT(*) FROM follows f1
+                                                INNER JOIN follows f2 ON f1.follower_id=f2.following_id AND f1.following_id=f2.follower_id
+                                                WHERE f1.follower_id=?""", (me_uid,)).fetchone()[0]
+                # 当前用户是否已关注该用户
+                is_following = False
+                if me_uid and me_uid != target_uid:
+                    exist = c.execute("SELECT follower_id FROM follows WHERE follower_id=? AND following_id=?", (me_uid, target_uid)).fetchone()
+                    is_following = bool(exist)
                 c.close()
                 self._json(200, {
                     "userId": urow[0], "account": urow[1], "name": urow[2],
                     "avatar": urow[3] or "", "signature": urow[4] or "",
                     "created": urow[5], "gender": urow[6] or "", "age": urow[7] or 0,
-                    "trackCount": track_count, "likeCount": like_count
+                    "trackCount": track_count, "likeCount": like_count,
+                    "followerCount": follower_count, "followingCount": following_count,
+                    "mutualCount": mutual_count, "isFollowing": is_following
                 })
+                return
+
+            # ===== 用户上传的歌曲列表 =====
+            if u.path.startswith("/api/user/") and u.path.endswith("/tracks"):
+                target_uid = u.path.split("/")[3]
+                c = db()
+                rows = c.execute("""SELECT id,title,artist,album,cover,fname,size,dur,created,
+                                    play_count,like_count,share_count,user_id,lrc
+                                    FROM tracks WHERE user_id=? AND offline=0
+                                    ORDER BY created DESC LIMIT 50""", (target_uid,)).fetchall()
+                c.close()
+                lst = [{"id": r[0], "title": r[1], "artist": r[2] or "", "album": r[3] or "",
+                        "cover": r[4] or "", "fname": r[5] or "",
+                        "size": int(r[6]) if r[6] is not None else 0,
+                        "dur": r[7], "created": r[8],
+                        "playCount": r[9] or 0, "likeCount": r[10] or 0,
+                        "shareCount": r[11] or 0, "userId": r[12] or "",
+                        "hasLyric": bool(r[13])} for r in rows]
+                self._json(200, {"list": lst})
                 return
 
             # 我的上传歌曲列表（支持分页：page/pageSize，不传 page 时全量返回兼容旧客户端）
@@ -4282,6 +4329,65 @@ async function delNotify(id){
         try:
             u = urllib.parse.urlparse(self.path)
             length = int(self.headers.get("Content-Length", 0))
+
+            # ---------- 关注/取关用户 ----------
+            if u.path.startswith("/api/user/") and u.path.endswith("/follow"):
+                target_uid = u.path.split("/")[3]
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                if target_uid == uid:
+                    c.close()
+                    self._err(400, "cannot follow yourself"); return
+                # 检查目标用户是否存在
+                target = c.execute("SELECT id, name FROM users WHERE id=?", (target_uid,)).fetchone()
+                if not target:
+                    c.close()
+                    self._err(404, "user not found"); return
+                # 切换关注状态
+                existing = c.execute("SELECT follower_id FROM follows WHERE follower_id=? AND following_id=?", (uid, target_uid)).fetchone()
+                if existing:
+                    # 取消关注
+                    c.execute("DELETE FROM follows WHERE follower_id=? AND following_id=?", (uid, target_uid))
+                    is_following = False
+                else:
+                    # 关注
+                    c.execute("INSERT INTO follows(follower_id, following_id, created) VALUES(?,?,?)",
+                              (uid, target_uid, time.time()))
+                    is_following = True
+                    # 检查是否互关（对方也关注了我）
+                    mutual = c.execute("SELECT follower_id FROM follows WHERE follower_id=? AND following_id=?", (target_uid, uid)).fetchone()
+                    # 获取关注者信息
+                    me = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+                    my_name = me[0] if me else "有人"
+                    # 发通知给被关注者
+                    notif_id = uuid.uuid4().hex
+                    if mutual:
+                        # 互关了，通知"回关了你"
+                        content = f"{my_name}回关了你"
+                    else:
+                        # 新关注，通知"关注了你"
+                        content = f"{my_name}关注了你"
+                    c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
+                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                              (notif_id, target_uid, "follow", "新粉丝",
+                               content, uid, my_name, "", "", 0, time.time()))
+                    # WebSocket 推送
+                    ws_push(target_uid, {
+                        "kind": "notification",
+                        "notification": {"id": notif_id, "type": "follow",
+                                         "title": "新粉丝",
+                                         "content": content,
+                                         "fromUserId": uid, "fromUser": my_name,
+                                         "trackId": "", "trackTitle": "",
+                                         "isRead": 0, "created": time.time()},
+                        "unread": _notif_unread(c, target_uid)})
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "isFollowing": is_following})
+                return
 
             # ---------- 记录播放历史 ----------
             if u.path == "/api/history":
