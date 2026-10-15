@@ -166,8 +166,9 @@ struct FullScreenLyricView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.leading, max(safeArea.leading, 0) + 20)
-                .padding(.trailing, max(safeArea.trailing, 0) + 20)
+                // 素笺：词墙扩散到全屏（不用内边距）；其余模式保留安全区留白
+                .padding(.leading, selectedMode == .paper ? 0 : max(safeArea.leading, 0) + 20)
+                .padding(.trailing, selectedMode == .paper ? 0 : max(safeArea.trailing, 0) + 20)
                 // 裁剪保护：任何模式下歌词都不会溢出屏幕外
                 .clipped()
                 // 相机运镜仅由镜台（Diorama）模式内部承载，其余模式保持平正排版
