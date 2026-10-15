@@ -189,7 +189,7 @@ enum API {
     /// - Parameter fresh: 长时间重开 App 的新鲜会话——后端加大随机扰动/探索权重，
     ///   让重新开始的一批推荐带随机性、不固定重复上次
     static func recommend(userId: String? = nil, excluding: [String] = [],
-                           fresh: Bool = false) async throws -> [Track] {
+                           fresh: Bool = false, source: String? = nil) async throws -> [Track] {
         var components = URLComponents(url: base.appendingPathComponent("recommend"),
                                        resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = []
@@ -202,6 +202,9 @@ enum API {
         }
         if fresh {
             items.append(URLQueryItem(name: "fresh", value: "1"))
+        }
+        if let source, !source.isEmpty {
+            items.append(URLQueryItem(name: "source", value: source))
         }
         if !items.isEmpty {
             components.queryItems = items

@@ -3716,9 +3716,15 @@ async function delNotify(id){
                     _excl = {x for x in _ex_s.split(",") if x}
                 # fresh：长时间重开 App 的新鲜会话——加大随机扰动/探索权重，重开不固定重复
                 _fresh = (qs.get("fresh", ["0"])[0] or "").strip() in ("1", "true")
+                # source：来源标记——"discover"（发现页猜你喜欢）不参与 3 小时推送去重，
+                # 不排除已推歌也不记录本次推送（去重只对播放页首页推荐流生效）
+                _source = (qs.get("source", [""])[0] or "").strip()
                 _now = time.time()
                 # 3 小时推送去重：取该用户 3 小时内已推送过的歌，本次不再推送
-                _pushed = _rec_recent_pushed(viewer_id, _now)
+                # （仅播放页首页推荐流；发现页猜你喜欢不受限）
+                _pushed = set()
+                if _source != "discover":
+                    _pushed = _rec_recent_pushed(viewer_id, _now)
                 # 批次轮换：时间桶（同桶主批稳定可复现）+ 会话内序号递增（每次获取不同批）
                 _bucket = int(_now // REC_BUCKET_SECONDS)
                 _seq, _rnd = _rec_next_seq(viewer_id, _bucket, _now, fresh=_fresh)
@@ -3778,7 +3784,9 @@ async function delNotify(id){
                 order = {tid: i for i, tid in enumerate(chosen)}
                 merged.sort(key=lambda x: order.get(x["id"], 999))
                 # 记录本次推送的歌曲：3 小时内不再重复推送（滑动窗口自然过期）
-                _rec_remember_pushed(viewer_id, chosen, _now)
+                # 仅播放页首页推荐流记录；发现页猜你喜欢不占用去重窗口
+                if _source != "discover":
+                    _rec_remember_pushed(viewer_id, chosen, _now)
                 self._json(200, merged)
                 return
 

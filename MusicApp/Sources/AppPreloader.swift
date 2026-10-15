@@ -32,7 +32,9 @@ final class AppPreloader: ObservableObject {
 
     private func loadRecommended() async {
         defer { discoverRecommendedReady = true }
-        if let tracks = try? await API.recommend() {
+        // source=discover：发现页猜你喜欢不参与播放页首页的 3 小时推送去重，
+        // 也不占用去重窗口（启动预加载的歌不应影响播放页推荐流）
+        if let tracks = try? await API.recommend(source: "discover") {
             recommended = Array(tracks.prefix(6))
         }
     }

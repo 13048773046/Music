@@ -229,12 +229,17 @@ struct DiscoverView: View {
         return unique.prefix(3).joined(separator: " · ")
     }
 
-    /// 拉取个性化推荐填充「猜你喜欢」区块（失败静默，区块自动隐藏）
+    /// 拉取个性化推荐填充「猜你喜欢」区块（失败静默，区块自动隐藏）。
+    /// source=discover：猜你喜欢不参与播放页首页的 3 小时推送去重，
+    /// 换一批永远能拿到新候选（不再被去重窗口排空导致区块消失）。
     private func loadRecommended() async {
         do {
-            let tracks = try await API.recommend()
+            let tracks = try await API.recommend(source: "discover")
             guard !Task.isCancelled else { return }
-            recommended = Array(tracks.prefix(6))
+            // 防御：接口返回空时不覆盖旧推荐（区块不消失），仅在新数据非空时更新
+            if !tracks.isEmpty {
+                recommended = Array(tracks.prefix(6))
+            }
         } catch {
             // 静默：接口不可用或网络失败时不展示该区块
         }
