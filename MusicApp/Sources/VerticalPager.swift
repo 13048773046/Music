@@ -448,15 +448,10 @@ struct PlayerCard: View {
                                     showUserProfile = uid
                                 }
                             } label: {
-                                HStack(spacing: 4) {
-                                    Text(track.userName.flatMap { $0.isEmpty ? nil : $0 } ?? "未知用户")
-                                        .font(.system(size: 15))
-                                        .foregroundColor(textSecondary(onLight: onLight))
-                                        .lineLimit(1)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(textSecondary(onLight: onLight).opacity(0.6))
-                                }
+                                Text(track.userName.flatMap { $0.isEmpty ? nil : $0 } ?? "未知用户")
+                                    .font(.system(size: 15))
+                                    .foregroundColor(textSecondary(onLight: onLight))
+                                    .lineLimit(1)
                             }
                         }
                         .layoutPriority(1)
