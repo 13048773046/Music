@@ -1062,6 +1062,8 @@ private struct AddToPlaylistSheet: View {
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var successText = ""
+    @State private var errorText = ""
+    @State private var addingToPlaylistId: String?
 
     var body: some View {
         NavigationStack {
@@ -1115,9 +1117,15 @@ private struct AddToPlaylistSheet: View {
                                             .foregroundColor(.secondary)
                                     }
                                     Spacer()
+                                    
+                                    if addingToPlaylistId == pl.id {
+                                        ProgressView()
+                                            .tint(Theme.accent)
+                                    }
                                 }
                                 .contentShape(Rectangle())
                             }
+                            .disabled(addingToPlaylistId != nil)
                         }
 
                         // 创建新歌单按钮
@@ -1157,6 +1165,8 @@ private struct AddToPlaylistSheet: View {
             .overlay {
                 if showSuccess {
                     successView
+                } else if !errorText.isEmpty {
+                    errorView
                 }
             }
         }
@@ -1214,6 +1224,21 @@ private struct AddToPlaylistSheet: View {
         .background(Color.black.opacity(0.3))
     }
 
+    private var errorView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 48))
+                .foregroundColor(.red)
+            Text(errorText)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.primary)
+        }
+        .padding(24)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemBackground)))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.3))
+    }
+
     private func loadPlaylists() async {
         do {
             let list = try await API.fetchPlaylists()
@@ -1225,18 +1250,26 @@ private struct AddToPlaylistSheet: View {
     }
 
     private func addToPlaylist(_ pl: Playlist) {
+        addingToPlaylistId = pl.id
         Task {
-            await API.addToPlaylist(
-                playlistId: pl.id,
-                trackId: track.id,
-                title: track.title,
-                artist: track.artist ?? "未知歌手",
-                cover: track.coverURL?.absoluteString ?? ""
-            )
-            successText = "已添加到 \(pl.name)"
-            showSuccess = true
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            dismiss()
+            do {
+                try await API.addToPlaylist(
+                    playlistId: pl.id,
+                    trackId: track.id,
+                    title: track.title,
+                    artist: track.artist ?? "未知歌手",
+                    cover: track.coverURL?.absoluteString ?? ""
+                )
+                successText = "已添加到 \(pl.name)"
+                showSuccess = true
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                dismiss()
+            } catch {
+                errorText = "添加失败: \(error.localizedDescription)"
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                errorText = ""
+            }
+            addingToPlaylistId = nil
         }
     }
 

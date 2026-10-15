@@ -755,7 +755,7 @@ enum API {
     }
 
     /// 添加歌曲到歌单
-    static func addToPlaylist(playlistId: String, trackId: String, title: String, artist: String, cover: String) async {
+    static func addToPlaylist(playlistId: String, trackId: String, title: String, artist: String, cover: String) async throws {
         var req = URLRequest(url: base.appendingPathComponent("playlists/\(playlistId)/tracks"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -763,7 +763,10 @@ enum API {
         applyAuth(&req)
         let body: [String: Any] = ["trackId": trackId, "title": title, "artist": artist, "cover": cover]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        _ = try? await URLSession.shared.data(for: req)
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+            throw APIError.invalidResponse
+        }
     }
 
     /// 从歌单删除歌曲
