@@ -127,14 +127,16 @@ struct LyricPreview: View {
     /// 外部进度（秒）：播放页传入，包含拖动条 scrub 预览位置
     let progress: Double
     let tint: Color
+    /// 歌词字号（默认 20 播放页预览；全屏歌词传大字号 30+，行高/间距随之缩放）
+    var fontSize: CGFloat = 20
 
-    // 固定排版尺寸（字号 20 行高约 26，间距 8）
-    private static let rowHeight: CGFloat = 26
-    private static let rowGap: CGFloat = 8
-    private static let step: CGFloat = rowHeight + rowGap   // 单次滚动步长
+    // 排版尺寸随字号缩放（20 号时：行高约 26、间距 8，与系统行高一致）
+    private var rowHeight: CGFloat { fontSize * 1.3 }
+    private var rowGap: CGFloat { fontSize * 0.4 }
+    private var step: CGFloat { rowHeight + rowGap }        // 单次滚动步长
     // 视口只露两行：当前句 + 下一句。第三行（预备行）在 frame 外被 clipped，
     // 在页面上自然被点赞/评论/分享按钮挡住，滚动时从下方滑上来接替下一句。
-    private static let viewHeight: CGFloat = rowHeight * 2 + rowGap
+    private var viewHeight: CGFloat { rowHeight * 2 + rowGap }
     /// 切句滚动时长（秒）：滚动进度 = 距当前行 start 的时间 / 该值
     private static let scrollDuration: Double = 0.28
 
@@ -196,9 +198,9 @@ struct LyricPreview: View {
             // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
             let scrolling = c > 0 && t < 1
             let base = scrolling ? c - 1 : c
-            let offsetY = scrolling ? -Self.step * eased : 0
+            let offsetY = scrolling ? -step * eased : 0
 
-            VStack(spacing: Self.rowGap) {
+            VStack(spacing: rowGap) {
                 ForEach(0..<3, id: \.self) { idx in
                     let li = base + idx
                     if lines.indices.contains(li) {
@@ -217,7 +219,8 @@ struct LyricPreview: View {
                             currentTime: isCurrent ? display : (isOld ? display : -1),
                             scale: scale,
                             opacity: opacity,
-                            tint: tint
+                            tint: tint,
+                            fontSize: fontSize
                         )
                     }
                 }
@@ -225,7 +228,7 @@ struct LyricPreview: View {
             .offset(y: offsetY)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: Self.viewHeight, alignment: .top)
+        .frame(height: viewHeight, alignment: .top)
         .clipped()
     }
 }
@@ -238,13 +241,15 @@ struct LyricPreview: View {
 /// 正在唱的字宽 × 字内进度，视觉效果与逐字 mask 完全一致，但每帧只更新一个
 /// CGFloat 宽度（无 GeometryReader）；每个字的渲染宽度在行出现时用 UIFont
 /// 一次性测量缓存，零布局开销。
-private struct LyricRowView: View, Equatable {
+struct LyricRowView: View, Equatable {
     let line: KRCLine
     /// 当前播放秒数；-1 = 非高亮行（全灰），旧行传 display（已唱完 → 全白淡出）
     let currentTime: Double
     let scale: Double       // 当前句固定 1.0；下一句固定 0.8 小字
     let opacity: Double     // 旧句滚动淡出
     let tint: Color
+    /// 歌词字号（与 LyricPreview.fontSize 保持一致；字宽测量用同款字号）
+    var fontSize: CGFloat = 20
 
     /// 逐字渲染宽度缓存（onAppear 一次性测量）
     @State private var charWidths: [CGFloat] = []
@@ -256,7 +261,8 @@ private struct LyricRowView: View, Equatable {
         lhs.currentTime == rhs.currentTime &&
         lhs.scale == rhs.scale &&
         lhs.opacity == rhs.opacity &&
-        lhs.tint == rhs.tint
+        lhs.tint == rhs.tint &&
+        lhs.fontSize == rhs.fontSize
     }
 
     /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
@@ -294,7 +300,7 @@ private struct LyricRowView: View, Equatable {
                     }
             }
         }
-        .font(.system(size: 20, weight: .medium))
+        .font(.system(size: fontSize, weight: .medium))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .scaleEffect(CGFloat(scale), anchor: .leading)
@@ -312,7 +318,7 @@ private struct LyricRowView: View, Equatable {
 
     /// 用与 SwiftUI 同款字体一次性测量每个字的渲染宽度
     private func measure() {
-        let font = UIFont.systemFont(ofSize: 20, weight: .medium)
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
         charWidths = line.words.map { w in
             (w.text as NSString).size(withAttributes: [.font: font]).width
         }

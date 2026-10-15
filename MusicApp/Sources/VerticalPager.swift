@@ -376,6 +376,13 @@ struct PlayerCard: View {
     @State private var lyricLines: [KRCLine] = []
     /// 音效选择弹窗
     @State private var showEQ = false
+    /// 歌曲信息菜单（竖排三点按钮打开）
+    @State private var showMenu = false
+    /// 菜单内等待执行的后续动作：菜单 sheet dismiss 完成后触发，避免弹窗切换竞态
+    @State private var pendingEQ = false
+    @State private var pendingFullScreen = false
+    /// 全屏沉浸式歌词
+    @State private var showFullScreen = false
 
     init(track: Track, index: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
@@ -438,23 +445,22 @@ struct PlayerCard: View {
                         }
                         .layoutPriority(1)
 
-                        // 音效按钮：固定最右，显示当前选中的音效名，跑马灯时不被遮住
+                        // 更多按钮：竖排三点，打开歌曲信息菜单（音效 / 全屏播放等）
                         Button {
-                            showEQ = true
+                            showMenu = true
                         } label: {
-                            Text(player.selectedEQ)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(textPrimary(onLight: onLight).opacity(0.85))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 19, weight: .semibold))
+                                .rotationEffect(.degrees(90))
+                                .foregroundColor(textPrimary(onLight: onLight))
+                                .frame(width: 38, height: 38)
                                 .background(
-                                    (onLight ? Color.black.opacity(0.08) : Color.white.opacity(0.15)),
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    (onLight ? Color.black.opacity(0.06) : Color.white.opacity(0.14)),
+                                    in: Circle()
                                 )
-                                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .contentShape(Circle())
                         }
+                        .buttonStyle(.plain)
                         .fixedSize()
                         .layoutPriority(2)
                     }
@@ -548,6 +554,25 @@ struct PlayerCard: View {
             EQBSheet(selected: $player.selectedEQ)
                 .environmentObject(player)
                 .presentationDetents([.medium])
+        }
+        // 歌曲信息菜单：关闭后按 pending 标记依次打开音效弹窗 / 全屏歌词，
+        // 在 onDismiss 回调里触发，规避「上一个 sheet 未完全关闭就弹下一个」的竞态。
+        .sheet(isPresented: $showMenu, onDismiss: {
+            if pendingEQ { pendingEQ = false; showEQ = true }
+            if pendingFullScreen { pendingFullScreen = false; showFullScreen = true }
+        }) {
+            TrackMenuSheet(
+                track: track,
+                eqName: player.selectedEQ,
+                onEQ: { pendingEQ = true; showMenu = false },
+                onFullScreen: { pendingFullScreen = true; showMenu = false }
+            )
+            .presentationDetents([.height(320)])
+            .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            FullScreenLyricView(track: track, lines: lyricLines)
+                .environmentObject(player)
         }
         // 音效切换统一走 EQBSheet 的 player.applyEQ（引擎同类切换不重载、进度连续），
         // 不再监听 selectedEQ 变化重载整曲。
@@ -663,6 +688,104 @@ struct PlayerCard: View {
 
     // MARK: - 顶部标题栏
 
+}
+
+// MARK: - 歌曲信息菜单（播放页 ⋮ 三点按钮）
+
+/// 上半：封面 + 歌名/歌手/专辑信息；下半：操作项（音效 → 关本弹窗后开音效弹窗；全屏播放）。
+private struct TrackMenuSheet: View {
+    let track: Track
+    let eqName: String
+    var onEQ: () -> Void
+    var onFullScreen: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 歌曲信息卡：封面 + 标题 / 歌手 / 专辑
+            HStack(spacing: 14) {
+                AlbumArt(size: 60, title: track.title, coverURL: track.coverURL, radius: 10)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(track.title)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    if let album = track.album, !album.isEmpty {
+                        Text("专辑 · \(album)")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 26)
+            .padding(.bottom, 18)
+
+            Divider().padding(.horizontal, 20)
+
+            // 音效：关闭本弹窗，随后（onDismiss）打开音效选择弹窗
+            Button {
+                dismiss()
+                onEQ()
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 18))
+                        .foregroundColor(.primary)
+                        .frame(width: 26)
+                    Text("音效")
+                        .font(.system(size: 16))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Text(eqName)
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // 全屏播放：关闭本弹窗，随后（onDismiss）进入全屏沉浸式歌词
+            Button {
+                dismiss()
+                onFullScreen()
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 18))
+                        .foregroundColor(.primary)
+                        .frame(width: 26)
+                    Text("全屏播放")
+                        .font(.system(size: 16))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Divider().padding(.horizontal, 20)
+
+            Spacer(minLength: 0)
+        }
+    }
 }
 
 // MARK: - 高频播放状态隔离组件（性能关键）
