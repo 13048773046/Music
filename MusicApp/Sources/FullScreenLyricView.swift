@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import UIKit
 
 /// 全屏沉浸式歌词（Folia 式 3D 版，横屏）
 ///
@@ -18,8 +19,16 @@ struct FullScreenLyricView: View {
 
     @EnvironmentObject private var player: PlayerManager
     @Environment(\.dismiss) private var dismiss
-    /// 横屏安全区：刘海在左右两侧，顶部/底部为 0；所有控件避开刘海
-    @Environment(\.safeAreaInsets) private var safeArea
+
+    /// 横屏安全区：刘海在左右两侧，顶部/底部为 0；所有控件避开刘海。
+    /// 与播放页一致从 keyWindow 读取真实 inset（Environment safeAreaInsets 在部分
+    /// Xcode/SDK 组合下 keyPath 推断失败，改用 UIKit 直读，iOS 16 全兼容）。
+    private var safeArea: EdgeInsets {
+        let i = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?
+            .windows.first(where: { $0.isKeyWindow })?
+            .safeAreaInsets ?? .zero
+        return EdgeInsets(top: i.top, leading: i.left, bottom: i.bottom, trailing: i.right)
+    }
 
     /// 背景：封面主色压暗（横屏深底白字沉浸）
     private var baseColor: Color {
