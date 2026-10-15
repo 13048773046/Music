@@ -211,6 +211,54 @@ def db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_collected_user ON collected_tracks(user_id, created DESC)")
     # 点赞列表按用户+时间
     c.execute("CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id, created DESC)")
+
+    # ===== 新增功能表 =====
+    # 播放历史表
+    c.execute("""CREATE TABLE IF NOT EXISTS play_history(
+        id TEXT PRIMARY KEY, user_id TEXT, track_id TEXT,
+        track_title TEXT DEFAULT '', track_artist TEXT DEFAULT '',
+        track_cover TEXT DEFAULT '', source TEXT DEFAULT 'upload',
+        created REAL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON play_history(user_id, created DESC)")
+
+    # 搜索历史表
+    c.execute("""CREATE TABLE IF NOT EXISTS search_history(
+        id TEXT PRIMARY KEY, user_id TEXT, keyword TEXT, created REAL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_search_user ON search_history(user_id, created DESC)")
+
+    # 歌单表
+    c.execute("""CREATE TABLE IF NOT EXISTS playlists(
+        id TEXT PRIMARY KEY, user_id TEXT, name TEXT,
+        cover TEXT DEFAULT '', description TEXT DEFAULT '',
+        track_count INTEGER DEFAULT 0, created REAL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_playlist_user ON playlists(user_id, created DESC)")
+
+    # 歌单-歌曲关联表
+    c.execute("""CREATE TABLE IF NOT EXISTS playlist_tracks(
+        playlist_id TEXT, track_id TEXT,
+        track_title TEXT DEFAULT '', track_artist TEXT DEFAULT '',
+        track_cover TEXT DEFAULT '', source TEXT DEFAULT 'upload',
+        sort INTEGER DEFAULT 0, created REAL,
+        PRIMARY KEY(playlist_id, track_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pltrack_playlist ON playlist_tracks(playlist_id, sort)")
+
+    # 评论图片字段迁移
+    cmt_cols = [r[1] for r in c.execute("PRAGMA table_info(comments)")]
+    if "images" not in cmt_cols:
+        c.execute("ALTER TABLE comments ADD COLUMN images TEXT DEFAULT ''")
+    if "like_count" not in cmt_cols:
+        c.execute("ALTER TABLE comments ADD COLUMN like_count INTEGER DEFAULT 0")
+
+    # 评论点赞表
+    c.execute("""CREATE TABLE IF NOT EXISTS comment_likes(
+        user_id TEXT, comment_id TEXT, created REAL,
+        PRIMARY KEY(user_id, comment_id))""")
+
+    # 通知软删除字段
+    notif_cols = [r[1] for r in c.execute("PRAGMA table_info(notifications)")]
+    if "is_deleted" not in notif_cols:
+        c.execute("ALTER TABLE notifications ADD COLUMN is_deleted INTEGER DEFAULT 0")
+
     c.commit()
     return c
 
@@ -2004,6 +2052,94 @@ async function delNotify(id){
                 self._json(200, {"totalSeconds": total_sec, "trackCount": track_cnt})
                 return
 
+            # ===== 播放历史列表 =====
+            if u.path == "/api/history":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"list": [], "total": 0, "hasMore": False})
+                    return
+                qs = urllib.parse.parse_qs(u.query)
+                page, page_size = parse_page(qs)
+                total = c.execute("SELECT COUNT(*) FROM play_history WHERE user_id=?", (uid,)).fetchone()[0]
+                if page is None:
+                    rows = c.execute("SELECT id, track_id, track_title, track_artist, track_cover, source, created FROM play_history WHERE user_id=? ORDER BY created DESC LIMIT 100", (uid,)).fetchall()
+                else:
+                    rows = c.execute("SELECT id, track_id, track_title, track_artist, track_cover, source, created FROM play_history WHERE user_id=? ORDER BY created DESC LIMIT ? OFFSET ?",
+                                    (uid, page_size, (page - 1) * page_size)).fetchall()
+                c.close()
+                lst = [{"id": r[0], "trackId": r[1], "title": r[2], "artist": r[3], "cover": r[4], "source": r[5], "created": r[6]} for r in rows]
+                self._json(200, {"list": lst, "total": total, "hasMore": bool(page is not None and page * page_size < total)})
+                return
+
+            # ===== 搜索历史列表 =====
+            if u.path == "/api/search/history":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"list": []})
+                    return
+                rows = c.execute("SELECT id, keyword, created FROM search_history WHERE user_id=? ORDER BY created DESC LIMIT 20", (uid,)).fetchall()
+                c.close()
+                self._json(200, {"list": [{"id": r[0], "keyword": r[1], "created": r[2]} for r in rows]})
+                return
+
+            # ===== 我的歌单列表 =====
+            if u.path == "/api/playlists":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._json(200, {"list": []})
+                    return
+                rows = c.execute("SELECT id, name, cover, description, track_count, created FROM playlists WHERE user_id=? ORDER BY created DESC", (uid,)).fetchall()
+                c.close()
+                self._json(200, {"list": [{"id": r[0], "name": r[1], "cover": r[2] or "", "description": r[3] or "", "trackCount": r[4] or 0, "created": r[5]} for r in rows]})
+                return
+
+            # ===== 歌单详情（含歌曲列表） =====
+            if u.path.startswith("/api/playlists/") and u.path.endswith("/tracks"):
+                pid = u.path.split("/")[3]
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                # 验证歌单属于当前用户
+                pl = c.execute("SELECT id, name, cover, description, track_count FROM playlists WHERE id=? AND user_id=?", (pid, uid)).fetchone()
+                if not pl:
+                    c.close()
+                    self._err(404, "playlist not found"); return
+                rows = c.execute("SELECT track_id, track_title, track_artist, track_cover, source, created FROM playlist_tracks WHERE playlist_id=? ORDER BY sort DESC, created DESC", (pid,)).fetchall()
+                c.close()
+                lst = [{"trackId": r[0], "title": r[1], "artist": r[2], "cover": r[3], "source": r[4], "created": r[5]} for r in rows]
+                self._json(200, {"playlist": {"id": pl[0], "name": pl[1], "cover": pl[2] or "", "description": pl[3] or "", "trackCount": pl[4] or 0}, "list": lst})
+                return
+
+            # ===== 用户主页信息 =====
+            if u.path.startswith("/api/user/") and u.path.endswith("/profile"):
+                target_uid = u.path.split("/")[3]
+                c = db()
+                # 用户基本信息
+                urow = c.execute("SELECT id, account, name, avatar, signature, created, gender, age FROM users WHERE id=?", (target_uid,)).fetchone()
+                if not urow:
+                    c.close()
+                    self._err(404, "user not found"); return
+                # 上传歌曲数
+                track_count = c.execute("SELECT COUNT(*) FROM tracks WHERE user_id=? AND offline=0", (target_uid,)).fetchone()[0]
+                # 获赞总数
+                like_count = c.execute("SELECT COALESCE(SUM(like_count),0) FROM tracks WHERE user_id=?", (target_uid,)).fetchone()[0]
+                c.close()
+                self._json(200, {
+                    "userId": urow[0], "account": urow[1], "name": urow[2],
+                    "avatar": urow[3] or "", "signature": urow[4] or "",
+                    "created": urow[5], "gender": urow[6] or "", "age": urow[7] or 0,
+                    "trackCount": track_count, "likeCount": like_count
+                })
+                return
+
             # 我的上传歌曲列表（支持分页：page/pageSize，不传 page 时全量返回兼容旧客户端）
             if u.path == "/api/my-tracks":
                 c = db()
@@ -3700,10 +3836,10 @@ async function delNotify(id){
                 page = max(1, int(qs.get("page", ["1"])[0] or "1"))
                 size = min(50, max(1, int(qs.get("size", ["20"])[0] or "20")))
                 offset = (page - 1) * size
-                rows = c.execute("SELECT id, type, title, content, from_user_id, from_user_name, track_id, track_title, comment_id, is_read, created FROM notifications WHERE user_id=? ORDER BY created DESC LIMIT ? OFFSET ?",
+                rows = c.execute("SELECT id, type, title, content, from_user_id, from_user_name, track_id, track_title, comment_id, is_read, created FROM notifications WHERE user_id=? AND is_deleted=0 ORDER BY created DESC LIMIT ? OFFSET ?",
                                 (tok_uid, size, offset)).fetchall()
-                unread = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0", (tok_uid,)).fetchone()[0]
-                total = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=?", (tok_uid,)).fetchone()[0]
+                unread = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0 AND is_deleted=0", (tok_uid,)).fetchone()[0]
+                total = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_deleted=0", (tok_uid,)).fetchone()[0]
                 has_more = (offset + len(rows)) < total
                 c.close()
                 self._json(200, {"list": [{"id": r[0], "type": r[1], "title": r[2], "content": r[3], "fromUserId": r[4], "fromUser": r[5], "trackId": r[6], "trackTitle": r[7], "commentId": r[8], "isRead": r[9], "created": r[10]} for r in rows], "unread": unread, "hasMore": has_more, "total": total})
@@ -4146,6 +4282,157 @@ async function delNotify(id){
         try:
             u = urllib.parse.urlparse(self.path)
             length = int(self.headers.get("Content-Length", 0))
+
+            # ---------- 记录播放历史 ----------
+            if u.path == "/api/history":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(length, 8192))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    c.close()
+                    self._err(400, "bad json"); return
+                tid = (data.get("trackId") or "").strip()
+                if tid:
+                    # 同一首歌1分钟内重复播放，只更新时间不新增记录
+                    recent = c.execute("SELECT id FROM play_history WHERE user_id=? AND track_id=? AND created > ? ORDER BY created DESC LIMIT 1",
+                                     (uid, tid, time.time() - 60)).fetchone()
+                    if recent:
+                        c.execute("UPDATE play_history SET created=? WHERE id=?", (time.time(), recent[0]))
+                    else:
+                        c.execute("""INSERT INTO play_history(id, user_id, track_id, track_title, track_artist, track_cover, source, created)
+                                     VALUES(?,?,?,?,?,?,?,?)""",
+                                  (uuid.uuid4().hex, uid, tid,
+                                   data.get("title") or "", data.get("artist") or "",
+                                   data.get("cover") or "", data.get("source") or "upload", time.time()))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True})
+                return
+
+            # ---------- 记录搜索历史 ----------
+            if u.path == "/api/search/history":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(length, 4096))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    c.close()
+                    self._err(400, "bad json"); return
+                kw = (data.get("keyword") or "").strip()
+                if kw:
+                    # 同关键词1分钟内不重复记录
+                    recent = c.execute("SELECT id FROM search_history WHERE user_id=? AND keyword=? AND created > ? ORDER BY created DESC LIMIT 1",
+                                     (uid, kw, time.time() - 60)).fetchone()
+                    if recent:
+                        c.execute("UPDATE search_history SET created=? WHERE id=?", (time.time(), recent[0]))
+                    else:
+                        c.execute("INSERT INTO search_history(id, user_id, keyword, created) VALUES(?,?,?,?)",
+                                  (uuid.uuid4().hex, uid, kw, time.time()))
+                    # 最多保留20条
+                    c.execute("""DELETE FROM search_history WHERE user_id=? AND id NOT IN
+                                 (SELECT id FROM search_history WHERE user_id=? ORDER BY created DESC LIMIT 20)""",
+                              (uid, uid))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True})
+                return
+
+            # ---------- 创建歌单 ----------
+            if u.path == "/api/playlists":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(length, 4096))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    c.close()
+                    self._err(400, "bad json"); return
+                name = (data.get("name") or "").strip()
+                if not name:
+                    c.close()
+                    self._err(400, "name required"); return
+                pid = uuid.uuid4().hex
+                c.execute("""INSERT INTO playlists(id, user_id, name, cover, description, track_count, created)
+                             VALUES(?,?,?,?,?,?,?)""",
+                          (pid, uid, name, data.get("cover") or "", data.get("description") or "", 0, time.time()))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "playlistId": pid})
+                return
+
+            # ---------- 添加歌曲到歌单 ----------
+            if u.path.startswith("/api/playlists/") and u.path.endswith("/tracks"):
+                pid = u.path.split("/")[3]
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                pl = c.execute("SELECT id FROM playlists WHERE id=? AND user_id=?", (pid, uid)).fetchone()
+                if not pl:
+                    c.close()
+                    self._err(404, "playlist not found"); return
+                try:
+                    raw = self.rfile.read(min(length, 8192))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    c.close()
+                    self._err(400, "bad json"); return
+                tid = (data.get("trackId") or "").strip()
+                if tid:
+                    # 检查是否已存在
+                    existing = c.execute("SELECT id FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid)).fetchone()
+                    if not existing:
+                        c.execute("""INSERT INTO playlist_tracks(playlist_id, track_id, track_title, track_artist, track_cover, source, created)
+                                     VALUES(?,?,?,?,?,?,?)""",
+                                  (pid, tid, data.get("title") or "", data.get("artist") or "",
+                                   data.get("cover") or "", data.get("source") or "upload", time.time()))
+                        c.execute("UPDATE playlists SET track_count=track_count+1 WHERE id=?", (pid,))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True})
+                return
+
+            # ---------- 点赞评论 ----------
+            if u.path.startswith("/api/comments/") and u.path.endswith("/like"):
+                cid = u.path.split("/")[3]
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                # 检查评论是否存在
+                comment = c.execute("SELECT id, like_count FROM comments WHERE id=?", (cid,)).fetchone()
+                if not comment:
+                    c.close()
+                    self._err(404, "comment not found"); return
+                # 检查是否已点赞
+                liked = c.execute("SELECT user_id FROM comment_likes WHERE user_id=? AND comment_id=?", (uid, cid)).fetchone()
+                if liked:
+                    # 取消点赞
+                    c.execute("DELETE FROM comment_likes WHERE user_id=? AND comment_id=?", (uid, cid))
+                    new_count = max(0, (comment[1] or 0) - 1)
+                else:
+                    # 点赞
+                    c.execute("INSERT INTO comment_likes(user_id, comment_id, created) VALUES(?,?,?)", (uid, cid, time.time()))
+                    new_count = (comment[1] or 0) + 1
+                c.execute("UPDATE comments SET like_count=? WHERE id=?", (new_count, cid))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True, "liked": not liked, "likeCount": new_count})
+                return
 
             # ---------- 后台管理：编辑 / 上下架 ----------
             ADMIN_TOKEN = _admin_token()
@@ -5419,6 +5706,53 @@ async function delNotify(id){
     def do_DELETE(self):
         try:
             u = urllib.parse.urlparse(self.path)
+
+            # ---------- 清空搜索历史 ----------
+            if u.path == "/api/search/history":
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                c.execute("DELETE FROM search_history WHERE user_id=?", (uid,))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True}); return
+
+            # ---------- 从歌单删除歌曲 ----------
+            if u.path.startswith("/api/playlists/") and "/tracks/" in u.path:
+                parts = u.path.split("/")
+                pid = parts[3]
+                tid = parts[5]
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                # 验证歌单属于当前用户
+                pl = c.execute("SELECT id FROM playlists WHERE id=? AND user_id=?", (pid, uid)).fetchone()
+                if not pl:
+                    c.close()
+                    self._err(404, "playlist not found"); return
+                c.execute("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid))
+                c.execute("UPDATE playlists SET track_count=MAX(0, track_count-1) WHERE id=?", (pid,))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True}); return
+
+            # ---------- 软删除单条通知 ----------
+            if u.path.startswith("/api/notifications/"):
+                nid = u.path.rsplit("/", 1)[-1]
+                c = db()
+                uid = resolve_token(c, self.headers.get("Authorization", ""))
+                if not uid:
+                    c.close()
+                    self._err(401, "unauthorized"); return
+                c.execute("UPDATE notifications SET is_deleted=1 WHERE id=? AND user_id=?", (nid, uid))
+                c.commit()
+                c.close()
+                self._json(200, {"ok": True}); return
+
             # 删除官方通知：DELETE /api/admin/official-message/<id>
             # 同时清理该通知在用户侧 notifications 表（type=official）里的关联记录，
             # 否则删除按钮点击后用户端仍残留已删通知。
