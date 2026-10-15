@@ -394,7 +394,7 @@ struct MineView: View {
             }
             .padding(.horizontal, 20)
 
-            // 指示器 tab
+            // 指示器 tab（只显示作品/点赞/评论，历史和歌单通过上面的卡片入口进入）
             HStack(spacing: 26) {
                 segItem(title: "作品", count: works.total, index: 0)
                 segItem(title: "点赞", count: likes.total, index: 1)
