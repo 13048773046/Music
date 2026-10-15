@@ -2030,36 +2030,53 @@ private struct PaperWordCard: View {
         let isCurrent = now >= word.start && now < word.end
         let isSung = now >= word.end
         let col: Color = isCurrent ? PaperProps.ink : (isSung ? PaperProps.accent : PaperProps.dimInk)
-        let hasBox = dSeeded(seed + Double(li * 13 + wk * 11)) < 0.38
+        let hasBox = dSeeded(seed + Double(li * 13 + wk * 11)) < 0.42
         let dashed = dSeeded(seed + Double(li * 13 + wk * 11 + 2)) < 0.5
-        let fs = fontSize * (isCurrent ? 1.12 : 0.92)
+        // 随机横排/竖排：当前词更常竖排（突出），其余词横竖混合
+        let orientSeed = dSeeded(seed + Double(li * 13 + wk * 11 + 9))
+        let vertical = isCurrent ? orientSeed < 0.62 : orientSeed < 0.40
+        let fs = fontSize * (isCurrent ? 1.14 : 0.92)
         let weight: Font.Weight = isCurrent ? .heavy : .bold
 
-        Text(word.text)
-            .font(.system(size: fs, weight: weight))
-            .foregroundColor(col)
-            .lineLimit(1)
-            .minimumScaleFactor(0.5)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .overlay {
-                if hasBox {
-                    if dashed {
-                        Rectangle().stroke(PaperProps.deco, lineWidth: 1.1)
-                    } else {
-                        PaperCornerBox().stroke(PaperProps.deco, lineWidth: 1.4)
+        Group {
+            if vertical {
+                // 竖排：字从上到下正立堆叠（中文传统竖排）
+                VStack(spacing: fs * 0.06) {
+                    ForEach(Array(word.text.indices), id: \.self) { idx in
+                        Text(String(word.text[idx]))
+                            .font(.system(size: fs, weight: weight))
+                            .foregroundColor(col)
                     }
                 }
+            } else {
+                Text(word.text)
+                    .font(.system(size: fs, weight: weight))
+                    .foregroundColor(col)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
             }
-            .shadow(color: PaperProps.ink.opacity(isCurrent ? 0.30 : 0.18),
-                    radius: isCurrent ? 7 : 4, y: 2)
-            .offset(x: slot.x, y: slot.y)
-            .scaleEffect(CGFloat(slot.scale))
-            .rotation3DEffect(.degrees(slot.rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.6)
-            .rotation3DEffect(.degrees(slot.yawDeg), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
-            .opacity(slot.opacity)
-            .blur(radius: CGFloat(slot.blur))
-            .zIndex(isCurrent ? 100 : Double(50 - abs(slot.x) / 10))
+        }
+        .fixedSize()
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .overlay {
+            if hasBox {
+                if dashed {
+                    Rectangle().stroke(PaperProps.deco, lineWidth: 1.1)
+                } else {
+                    PaperCornerBox().stroke(PaperProps.deco, lineWidth: 1.4)
+                }
+            }
+        }
+        .shadow(color: PaperProps.ink.opacity(isCurrent ? 0.32 : 0.18),
+                radius: isCurrent ? 8 : 4, y: 2)
+        .offset(x: slot.x, y: slot.y)
+        .scaleEffect(CGFloat(slot.scale))
+        .rotation3DEffect(.degrees(slot.rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.6)
+        .rotation3DEffect(.degrees(slot.yawDeg), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
+        .opacity(slot.opacity)
+        .blur(radius: CGFloat(slot.blur))
+        .zIndex(isCurrent ? 100 : Double(50 - abs(slot.x) / 10))
     }
 }
 
