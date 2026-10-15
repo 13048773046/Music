@@ -15,16 +15,19 @@ struct MusicApp: App {
                 if showSplash {
                     SplashView()
                         .transition(.opacity)
+                        .portraitLocked()
                 } else if auth.currentUser == nil {
                     LoginView()
                         .environmentObject(auth)
                         .environmentObject(player)
                         .environmentObject(library)
+                        .portraitLocked()
                 } else {
                     MainTabView()
                         .environmentObject(player)
                         .environmentObject(auth)
                         .environmentObject(library)
+                        .portraitLocked()
                 }
             }
             .onAppear {

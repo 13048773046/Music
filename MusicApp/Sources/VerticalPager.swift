@@ -573,6 +573,7 @@ struct PlayerCard: View {
         .fullScreenCover(isPresented: $showFullScreen) {
             FullScreenLyricView(track: track, lines: lyricLines)
                 .environmentObject(player)
+                .landscapeFullScreen()
         }
         // 音效切换统一走 EQBSheet 的 player.applyEQ（引擎同类切换不重载、进度连续），
         // 不再监听 selectedEQ 变化重载整曲。
