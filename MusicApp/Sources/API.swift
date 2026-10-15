@@ -764,8 +764,11 @@ enum API {
         let body: [String: Any] = ["trackId": trackId, "title": title, "artist": artist, "cover": cover]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         let (_, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-            throw APIError.message("网络请求失败")
+        guard let http = resp as? HTTPURLResponse else {
+            throw APIError.message("无响应")
+        }
+        guard http.statusCode == 200 else {
+            throw APIError.message("HTTP \(http.statusCode)")
         }
     }
 
