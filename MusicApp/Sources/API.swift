@@ -667,8 +667,13 @@ enum API {
 
     /// 获取播放历史
     static func fetchHistory(page: Int = 1, pageSize: Int = 30) async throws -> [HistoryTrack] {
+        var req = URLRequest(url: base.appendingPathComponent("history?page=\(page)&size=\(pageSize)"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         struct Resp: Decodable { let list: [HistoryTrack] }
-        let r: Resp = try await fetchPage(path: "history?page=\(page)&size=\(pageSize)")
+        let r = try JSONDecoder().decode(Resp.self, from: data)
         return r.list
     }
 
@@ -687,8 +692,13 @@ enum API {
 
     /// 获取搜索历史
     static func fetchSearchHistory() async throws -> [SearchHistoryItem] {
+        var req = URLRequest(url: base.appendingPathComponent("search/history"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         struct Resp: Decodable { let list: [SearchHistoryItem] }
-        let r: Resp = try await fetchPage(path: "search/history")
+        let r = try JSONDecoder().decode(Resp.self, from: data)
         return r.list
     }
 
@@ -704,8 +714,13 @@ enum API {
     // MARK: - 歌单
     /// 获取我的歌单列表
     static func fetchPlaylists() async throws -> [Playlist] {
+        var req = URLRequest(url: base.appendingPathComponent("playlists"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         struct Resp: Decodable { let list: [Playlist] }
-        let r: Resp = try await fetchPage(path: "playlists")
+        let r = try JSONDecoder().decode(Resp.self, from: data)
         return r.list
     }
 
@@ -729,8 +744,13 @@ enum API {
 
     /// 获取歌单歌曲列表
     static func fetchPlaylistTracks(_ playlistId: String) async throws -> (playlist: Playlist, tracks: [HistoryTrack]) {
+        var req = URLRequest(url: base.appendingPathComponent("playlists/\(playlistId)/tracks"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         struct Resp: Decodable { let playlist: Playlist; let list: [HistoryTrack] }
-        let r: Resp = try await fetchPage(path: "playlists/\(playlistId)/tracks")
+        let r = try JSONDecoder().decode(Resp.self, from: data)
         return (r.playlist, r.list)
     }
 
@@ -784,8 +804,13 @@ enum API {
     // MARK: - 用户主页
     /// 获取用户主页信息
     static func fetchUserProfile(_ userId: String) async throws -> UserProfile {
+        var req = URLRequest(url: base.appendingPathComponent("user/\(userId)/profile"))
+        req.timeoutInterval = 15
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
         struct Resp: Decodable { let userId: String; let account: String; let name: String; let avatar: String; let signature: String; let created: Double; let gender: String; let age: Int; let trackCount: Int; let likeCount: Int }
-        let r: Resp = try await fetchPage(path: "user/\(userId)/profile")
+        let r = try JSONDecoder().decode(Resp.self, from: data)
         return UserProfile(userId: r.userId, account: r.account, name: r.name, avatar: r.avatar, signature: r.signature, created: r.created, gender: r.gender, age: r.age, trackCount: r.trackCount, likeCount: r.likeCount)
     }
 }
