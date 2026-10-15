@@ -312,6 +312,9 @@ struct LyricRowView: View, Equatable {
         // 行内容切换（切歌/下一句替换本行）时字宽缓存过期，必须重测；
         // 否则新行字数 > 缓存字数时后半部分字宽=0，mask 停在前半句——歌词只走到一半就卡住
         .onChange(of: line) { _ in measure() }
+        // 字号变化（多模式歌词里同一行会从小字号变为当前句大字号）也必须重测，
+        // 否则卡拉OK填充宽度用的是旧字号字宽，逐字高亮错位
+        .onChange(of: fontSize) { _ in measure() }
     }
 
     private var baseOpacity: Double {

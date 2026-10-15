@@ -20,6 +20,11 @@ struct FullScreenLyricView: View {
     @EnvironmentObject private var player: PlayerManager
     @Environment(\.dismiss) private var dismiss
 
+    /// 当前歌词展示模式（Folia 多模式，持久化记忆）
+    @State private var selectedMode: LyricDisplayMode = LyricModeStore.current
+    /// 模式选择面板
+    @State private var showModePicker = false
+
     /// 横屏安全区：刘海在左右两侧，顶部/底部为 0；所有控件避开刘海。
     /// 与播放页一致从 keyWindow 读取真实 inset（Environment safeAreaInsets 在部分
     /// Xcode/SDK 组合下 keyPath 推断失败，改用 UIKit 直读，iOS 16 全兼容）。
@@ -59,6 +64,17 @@ struct FullScreenLyricView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
+                    // 歌词展示模式切换（Folia 多模式）
+                    Button {
+                        showModePicker = true
+                    } label: {
+                        Image(systemName: "square.grid.2x2")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .frame(width: 36, height: 36)
+                            .background(Color.white.opacity(0.14), in: Circle())
+                    }
+                    .buttonStyle(.plain)
                     Button {
                         // 退出全屏：先复位全局方向授权 + 强制转回竖屏，再关闭。
                         // 不能只靠 dismiss 后主界面 OrientationVC 的 viewWillAppear——
@@ -81,7 +97,7 @@ struct FullScreenLyricView: View {
 
                 Spacer(minLength: 6)
 
-                // 中央：3D 透视歌词（相机微转）
+                // 中央：按歌词展示模式渲染（8 种 Folia 风格，见 LyricModes.swift）
                 ZStack {
                     if lines.isEmpty {
                         VStack(spacing: 12) {
@@ -93,7 +109,31 @@ struct FullScreenLyricView: View {
                                 .foregroundColor(.white.opacity(0.45))
                         }
                     } else {
-                        FullScreen3DLyricView(lines: lines, fontSize: 32)
+                        switch selectedMode {
+                        case .tilt3D:
+                            FullScreen3DLyricView(lines: lines, fontSize: 32)
+                        case .classic:
+                            ClassicLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
+                        case .lumiere:
+                            LumiereLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
+                        case .cadenza:
+                            CadenzaLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
+                        case .partita:
+                            PartitaLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
+                        case .specchio:
+                            SpecchioLyricView(lines: lines,
+                                              progress: player.progress * player.duration)
+                        case .pendolo:
+                            PendoloLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
+                        case .monet:
+                            MonetLyricView(lines: lines,
+                                           progress: player.progress * player.duration)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -132,6 +172,10 @@ struct FullScreenLyricView: View {
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
         .background(Color.black)
+        // 歌词展示模式切换面板
+        .sheet(isPresented: $showModePicker) {
+            LyricModePickerSheet(selection: $selectedMode)
+        }
         // 兜底：无论以何种方式退出全屏，都复位全局横屏授权（AppDelegate 恢复竖屏）
         .onDisappear {
             FullScreenOrientation.shared.isFullScreen = false
