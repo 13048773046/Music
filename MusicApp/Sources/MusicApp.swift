@@ -1,7 +1,25 @@
 import SwiftUI
+import UIKit
+
+/// 全屏沉浸歌词横屏状态：AppDelegate 按此返回全局允许的方向。
+/// 比 per-View supportedInterfaceOrientations + KVC 更可靠：
+/// 系统旋转决策时直接询问 AppDelegate，进入全屏即授权横屏、退出即锁回竖屏。
+final class FullScreenOrientation: ObservableObject {
+    static let shared = FullScreenOrientation()
+    @Published var isFullScreen = false
+}
+
+/// 全局方向策略：全屏歌词=横屏，其余一律竖屏
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        FullScreenOrientation.shared.isFullScreen ? .landscape : .portrait
+    }
+}
 
 @main
 struct MusicApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var player = PlayerManager.shared
     @StateObject private var auth = AuthManager.shared
     @StateObject private var library = Library.shared
@@ -249,6 +267,13 @@ struct MainTabView: View {
     /// 稳定闭包容器（见 SidebarHandlers 注释）
     @State private var handlers = SidebarHandlers()
 
+    /// 状态栏真实高度（keyWindow 直读）：GlobalTopBar 显式下移避开状态栏
+    static var windowSafeAreaTop: CGFloat {
+        (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?
+            .windows.first(where: { $0.isKeyWindow })?
+            .safeAreaInsets.top ?? 0
+    }
+
     /// 侧边栏宽度（约屏宽 85%）
     private let panelWidth = UIScreen.main.bounds.width * 0.85
 
@@ -292,12 +317,14 @@ struct MainTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 // 顶部栏只在首页（播放页）展示：切到发现/我的后隐藏，
-                // 内容区完全沉浸，不残留全局顶部栏
+                // 内容区完全沉浸，不残留全局顶部栏。
+                // 顶部显式读取 keyWindow 安全区：portraitLocked().ignoresSafeArea()
+                // 可能把布局扩展到状态栏后，这里显式下移保证三横线/标题不被状态栏压住。
                 if router.selectedTab == 1 {
                     GlobalTopBar(onOpenSidebar: handlers.onOpen)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
-                        .padding(.top, 8)
+                        .padding(.top, Self.windowSafeAreaTop + 8)
                         .alignmentGuide(.top) { d in d[.top] }
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
@@ -347,8 +374,7 @@ struct MainTabView: View {
 
     /// 跟手拖拽手势：onChanged 实时更新抽屉进度；onEnded 交给官方
     /// UISpringTimingParameters(initialVelocity:) 落位（继承手指速度，无停顿）
-    private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 10)
+    private var dragGesture: some Gesture {        DragGesture(minimumDistance: 10)
             .onChanged { v in
                 // 侧滑抽屉只在首页（播放页）生效：发现页/我的页不响应，
                 // 避免在"我的"页面左滑误触侧边栏（那里有自己的左右滑动切页）

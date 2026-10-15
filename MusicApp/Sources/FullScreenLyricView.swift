@@ -127,6 +127,10 @@ struct FullScreenLyricView: View {
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
         .background(Color.black)
+        // 兜底：无论以何种方式退出全屏，都复位全局横屏授权（AppDelegate 恢复竖屏）
+        .onDisappear {
+            FullScreenOrientation.shared.isFullScreen = false
+        }
     }
 
     // MARK: - 背景层：主色渐变 + 双层视差粒子

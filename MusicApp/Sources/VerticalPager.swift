@@ -421,9 +421,10 @@ struct PlayerCard: View {
                 VStack(spacing: 0) {
                     // 顶部标题栏已移到 MainTabView 全局层级（与底部 TabBar 平级），
                     // 这里直接从封面开始（顶部留白由全局 TopBar 占位）。
-                    // topInset 为 keyWindow 状态栏真实高度；兜底 50pt 防注入时机/刘海机读数
-                    // 异常为 0 时封面/歌名被状态栏或 TopBar 遮挡。
-                    Spacer(minLength: 6 + max(topInset, 50) + 50)
+                    // topInset 为 keyWindow 状态栏真实高度（刘海机 59 / 非刘海 47）；
+                    // 47 兜底防注入时机读数异常为 0；+56 为全局 TopBar 完整占位高度，
+                    // 保证封面/歌名在任何机型都不会被状态栏或 TopBar 遮挡。
+                    Spacer(minLength: 6 + max(topInset, 47) + 56)
 
                     // 封面区域（1:1 正方形，小圆角，居中）
                     AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)

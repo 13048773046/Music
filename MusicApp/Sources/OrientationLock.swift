@@ -1,10 +1,11 @@
 import SwiftUI
+import UIKit
 
 /// 视图方向锁定：全屏歌词强制横屏、主界面锁定竖屏。
 ///
-/// Info.plist 已声明 Portrait + LandscapeLeft/Right；本控制器按所在视图返回
-/// 允许的方向，并在出现时用 UIDevice KVC 强制旋转到目标方向（dismiss 时由
-/// 下层控制器的 supportedInterfaceOrientations 自动转回竖屏）。
+/// Info.plist 已声明 Portrait + LandscapeLeft/Right；AppDelegate 按 FullScreenOrientation
+/// 全局授权方向（比 per-View supportedInterfaceOrientations 更可靠），本控制器在出现时
+/// 同步全局状态 + UIDevice KVC 触发实际旋转（dismiss 后主界面自动转回竖屏）。
 struct OrientationLock: UIViewControllerRepresentable {
     /// 本视图允许的方向
     var mask: UIInterfaceOrientationMask
@@ -33,16 +34,27 @@ struct OrientationLock: UIViewControllerRepresentable {
 
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
+            syncGlobalOrientation()
             forceOrientation()
         }
 
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
+            syncGlobalOrientation()
             forceOrientation()
         }
 
+        /// 把当前方向同步给全局策略（AppDelegate 依据它授权横屏/竖屏）
+        private func syncGlobalOrientation() {
+            if force == .landscapeRight || force == .landscapeLeft {
+                FullScreenOrientation.shared.isFullScreen = true
+            } else {
+                FullScreenOrientation.shared.isFullScreen = false
+            }
+        }
+
         /// 强制旋转：呈现动画前后各触发一次 + 延迟再触发一次，规避系统方向重算时机问题；
-        /// 配合 supportedInterfaceOrientations，dismiss 后由下层竖屏控制器自动转回。
+        /// AppDelegate 已按 isFullScreen 授权方向，KVC 触发旋转即可被接受。
         private func forceOrientation() {
             guard let force else { return }
             setNeedsUpdateOfSupportedInterfaceOrientations()
