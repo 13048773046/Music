@@ -110,36 +110,37 @@ struct FullScreenLyricView: View {
                         }
                     } else {
                         switch selectedMode {
-                        case .tilt3D:
-                            FullScreen3DLyricView(lines: lines, fontSize: 32)
-                        case .classic:
-                            ClassicLyricView(lines: lines,
-                                             progress: player.progress * player.duration)
-                        case .lumiere:
-                            LumiereLyricView(lines: lines,
-                                             progress: player.progress * player.duration)
-                        case .cadenza:
-                            CadenzaLyricView(lines: lines,
+                        case .tilt:
+                            TiltLyricView(lines: lines,
+                                          progress: player.progress * player.duration)
+                        case .diorama:
+                            DioramaLyricView(lines: lines,
                                              progress: player.progress * player.duration)
                         case .partita:
                             PartitaLyricView(lines: lines,
                                              progress: player.progress * player.duration)
-                        case .specchio:
-                            SpecchioLyricView(lines: lines,
-                                              progress: player.progress * player.duration)
+                        case .lumiere:
+                            LumiereLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
                         case .pendolo:
                             PendoloLyricView(lines: lines,
+                                             progress: player.progress * player.duration)
+                        case .cadenza:
+                            CadenzaLyricView(lines: lines,
                                              progress: player.progress * player.duration)
                         case .monet:
                             MonetLyricView(lines: lines,
                                            progress: player.progress * player.duration)
+                        case .cappella:
+                            CappellaLyricView(lines: lines,
+                                              progress: player.progress * player.duration)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.leading, max(safeArea.leading, 0) + 12)
                 .padding(.trailing, max(safeArea.trailing, 0) + 12)
-                .modifier(CameraMotion())   // 视角转动（相机缓移）
+                // 相机运镜仅由镜台（Diorama）模式内部承载，其余模式保持平正排版
 
                 // 底部：时间 + 进度
                 VStack(spacing: 8) {
@@ -215,133 +216,13 @@ struct FullScreenLyricView: View {
     }
 }
 
-// MARK: - 3D 透视歌词（Folia 式旋转木马：行间翻折 + 多级纵深 + 发光卡拉OK）
-
-/// 当前句正面居中最大、最亮；前后句按句差向纵深翻折（X 轴旋转 + 多级缩放/透明衰减），
-/// 形成清晰的"旋转木马"立体纵深；当前句带柔光 + 逐字卡拉OK填充。
-/// 切句平滑滚动沿用 LyricPreview 的单调滚动模型（无回弹）。
-struct FullScreen3DLyricView: View {
-    let lines: [KRCLine]
-    var fontSize: CGFloat = 32
-
-    @EnvironmentObject private var player: PlayerManager
-
-    // 行间距（随字号）：当前句与下一句的垂直间隔（舒展留白）
-    private var rowGap: CGFloat { fontSize * 1.55 }
-    // 每句差的旋转角（度）：距当前句每远一句多转 32°，向纵深翻折更明显
-    private let anglePerLine: Double = 32
-    // 纵深透视强度（rotation3D perspective 越小越"鱼眼"）
-    private let zPerspective: CGFloat = 0.35
-    // 切句滚动时长
-    private static let scrollDuration: Double = 0.28
-
-    // 多级纵深衰减：|d|=1 → 缩放0.72/透明0.48；|d|=2 → 0.52/0.23；|d|=3 → 0.37/0.11
-    private func depthScale(_ d: Int) -> Double { pow(0.72, Double(abs(d))) }
-    private func depthOpacity(_ d: Int) -> Double { pow(0.48, Double(abs(d))) }
-
-    private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
-    @State private var tracker = Tracker()
-
-    private func displayTime() -> Double {
-        if PlayerManager.shared.usingEngine { return player.progress * player.duration }
-        let now = CMTimeGetSeconds(PlayerManager.shared.player.currentTime())
-        let safe = now.isFinite ? now : 0
-        let ext = player.progress * player.duration
-        return abs(ext - safe) < 0.6 ? safe : ext
-    }
-
-    private func currentIndex(_ display: Double) -> Int {
-        guard !lines.isEmpty else { return -1 }
-        var lo = 0, hi = lines.count
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if lines[mid].start <= display { lo = mid + 1 } else { hi = mid }
-        }
-        return lo - 1
-    }
-
-    private func advanceTracker(c: Int, display: Double) {
-        if c != tracker.lastC {
-            tracker.lastC = c
-            tracker.maxT = 0
-        }
-        let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-        if tRaw > tracker.maxT { tracker.maxT = tRaw }
-    }
-
-    var body: some View {
-        TimelineView(.animation) { _ in
-            let display = displayTime()
-            let c = currentIndex(display)
-            let _ = advanceTracker(c: c, display: display)
-            let t = max(c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1,
-                        tracker.maxT)
-            let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0
-            let scrolling = c > 0 && t < 1
-            let base = scrolling ? c - 1 : c
-            // 滚动期间整体上移一步，新句从下方滑入
-            let offsetY = scrolling ? -rowGap * eased : 0
-
-            ZStack(alignment: .center) {
-                // 显示窗口：当前句 ±3 句（滚动期间再多带一句旧行）
-                ForEach((base - 3)..<(base + 4), id: \.self) { li in
-                    if lines.indices.contains(li) {
-                        lyricRow(li: li, c: c, display: display, eased: eased)
-                    }
-                }
-            }
-            .offset(y: offsetY)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    /// 单行 3D 呈现：句差 → 旋转角 / 缩放 / 透明度 / 垂直错位 / 柔光
-    @ViewBuilder
-    private func lyricRow(li: Int, c: Int, display: Double, eased: Double) -> some View {
-        let line = lines[li]
-        let rawD = li - c                          // 句差：0=当前句，正=下一句方向
-        let isCurrent = li == c
-        let isOld = li == c - 1
-
-        // 切句滚动期间：新句（原下一句）从远到近推进，旧句同步退远淡出
-        let scrollIn = isCurrent && eased > 0 ? (1 - eased) : 0.0
-        let scrollOut = isOld && eased > 0 ? eased : 0.0
-        let effD = Double(rawD) + scrollIn - scrollOut  // 平滑推进/退后
-
-        // 当前句：从 0.80 放大到 1.08（比满屏更大更聚焦）+ 全亮；
-        // 背景句：多级纵深衰减（越远越小越淡）
-        let scale: Double = isCurrent
-            ? (0.80 + 0.28 * (1 - scrollIn))
-            : depthScale(rawD) * (isOld ? (1.0 - 0.35 * eased) : 1.0)
-        let opacity: Double = isCurrent
-            ? (0.30 + 0.70 * (1 - scrollIn))
-            : depthOpacity(rawD) * (isOld ? (1.0 - 0.50 * eased) : 1.0)
-        let angle = effD * anglePerLine
-        let yOff = effD * rowGap
-
-        LyricRowView(
-            line: line,
-            currentTime: li <= c ? display : -1,       // 当前句/已唱句：逐字/全白；预备句：灰
-            scale: scale,
-            opacity: opacity,
-            tint: .white,
-            fontSize: fontSize,
-            fontWeight: .semibold
-        )
-        .rotation3DEffect(.degrees(angle), axis: (x: 1, y: 0, z: 0), perspective: zPerspective)
-        .offset(y: yOff)
-        // 当前句柔光（Folia 光感）：仅当前句带辉光，背景句无
-        .shadow(color: isCurrent ? .white.opacity(0.30) : .clear, radius: 20, x: 0, y: 0)
-        .zIndex(Double(-abs(li - c)))                  // 近句在上层
-    }
-}
-
 // MARK: - 相机运动：整个歌词场景缓慢视角转动 + 镜头推拉平移
 
-/// 模拟"运镜对准歌词"：Y/X 双频正弦微旋转（扫视）+ 镜头推拉呼吸（接近/退后）
-/// + 横向纵向游移（平移），三种运动叠加出相机缓缓运动过去、最终正对当前句的沉浸感。
-/// 幅度克制，不干扰阅读。
-private struct CameraMotion: ViewModifier {
+/// 模拟"运镜对准歌词"（Folia diorama CameraRig 概念）：Y/X 双频正弦微旋转（扫视）
+/// + 镜头推拉呼吸（接近/退后）+ 横向纵向游移（平移），三种运动叠加出相机缓缓
+/// 运动过去、最终正对当前句的沉浸感。幅度克制，不干扰阅读。
+/// 目前仅镜台（Diorama）模式承载。
+struct CameraMotion: ViewModifier {
     func body(content: Content) -> some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
@@ -351,8 +232,8 @@ private struct CameraMotion: ViewModifier {
             // 推拉（zoom 呼吸）：镜头缓慢接近再退回，当前句始终正对屏幕
             let zoom = 1.0 + 0.015 * sin(t * 0.13 + 0.6)
             // 平移（游移）：横向纵向轻微位移，镜头"走过去"的体感
-            let panX = sin(t * 0.09 + 2.1) * 10.0
-            let panY = sin(t * 0.07 + 0.4) * 6.0
+            let panX = CGFloat(sin(t * 0.09 + 2.1) * 10.0)
+            let panY = CGFloat(sin(t * 0.07 + 0.4) * 6.0)
             content
                 .scaleEffect(zoom)
                 .rotation3DEffect(.degrees(camY), axis: (x: 0, y: 1, z: 0), perspective: 0.5)
