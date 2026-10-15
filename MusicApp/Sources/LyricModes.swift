@@ -1704,6 +1704,7 @@ private struct PaperWordSlot {
 
 private struct FlatEntry: Identifiable {
     let id: Int
+    let absId: Int
     let li: Int
     let wk: Int
     let word: KRWord
@@ -1722,6 +1723,14 @@ struct PaperDioramaLyricView: View {
     }
     @State private var decoCache = DecoCache()
 
+    /// 镜头连续位置：smoothDamp 追踪当前词（整数位置），切换时平滑平移过渡
+    private final class CamTracker {
+        var smooth: Double = 0
+        var vel: Double = 0
+        var initialized = false
+    }
+    @State private var cam = CamTracker()
+
     var body: some View {
         GeometryReader { geo in
             TimelineView(.animation) { _ in
@@ -1734,6 +1743,8 @@ struct PaperDioramaLyricView: View {
                 // 展平词序列 + 当前词索引
                 let flat = Self.flatEntries(c: c, lines: lines)
                 let fi = Self.currentEntryIndex(flat: flat, now: now, c: c)
+                // 镜头连续中心：smoothDamp 平滑追踪当前词（切换时平移过渡，不硬跳）
+                let fFloat = Self.updateCam(cam, target: Double(fi))
                 // 针孔焦距（pt）：f = (屏高/2)/tan(垂直FOV/2)
                 let focalPt = Double(geo.size.height) / (2 * tan(PaperProps.FOV_V / 2))
 
@@ -1744,7 +1755,7 @@ struct PaperDioramaLyricView: View {
                     // 弧形词墙
                     ZStack {
                         ForEach(flat) { entry in
-                            let n = entry.id - fi
+                            let n = Double(entry.absId) - fFloat
                             let slot = Self.slot(n: n, entry: entry, c: c, focalPt: focalPt,
                                                  seed: seedD)
                             PaperWordCard(word: entry.word, li: entry.li, wk: entry.wk,
@@ -1760,16 +1771,28 @@ struct PaperDioramaLyricView: View {
 
     private static func flatEntries(c: Int, lines: [KRCLine]) -> [FlatEntry] {
         var out: [FlatEntry] = []
-        var uid = 0
         for li in (c - 2)...(c + 3) {
             guard lines.indices.contains(li) else { continue }
             let line = lines[li]
+            // 该句首词的绝对位置 = 句 0..li-1 的视觉词数（缓存）
+            var base = 0
+            for m in 0..<li { base += cachedCount(lines[m]) }
             for (wk, word) in visualWords(line).enumerated() {
-                out.append(FlatEntry(id: uid, li: li, wk: wk, word: word, line: line))
-                uid += 1
+                let abs = base + wk
+                out.append(FlatEntry(id: abs, absId: abs, li: li, wk: wk, word: word, line: line))
             }
         }
         return out
+    }
+
+    private final class WcCache { var map: [String: Int] = [:] }
+    private static let wcCache = WcCache()
+    private static func cachedCount(_ line: KRCLine) -> Int {
+        let k = String(format: "%.3f", line.start)
+        if let v = wcCache.map[k] { return v }
+        let v = countVisualWords(line)
+        wcCache.map[k] = v
+        return v
     }
 
     private static func currentEntryIndex(flat: [FlatEntry], now: Double, c: Int) -> Int {
@@ -1783,9 +1806,22 @@ struct PaperDioramaLyricView: View {
         return flat.isEmpty ? 0 : flat.count / 2
     }
 
-    private static func slot(n: Int, entry: FlatEntry, c: Int, focalPt: Double,
+    /// 镜头平滑追踪：critical-damping 让当前词在中心、切换时平滑平移过渡（不硬跳）
+    private static func updateCam(_ cam: CamTracker, target: Double) -> Double {
+        if !cam.initialized {
+            cam.initialized = true
+            cam.smooth = target
+            return target
+        }
+        let r = dSmoothDamp(cam.smooth, target, cam.vel, 0.34, 1.0 / 60.0)
+        cam.smooth = r.value
+        cam.vel = r.velocity
+        return r.value
+    }
+
+    private static func slot(n: Double, entry: FlatEntry, c: Int, focalPt: Double,
                              seed: Double) -> PaperWordSlot {
-        let nd = Double(n)
+        let nd = n
         let th = min(max(nd * PaperProps.ANGLE_STEP, -PaperProps.MAX_TH), PaperProps.MAX_TH)
         let d = max(PaperProps.HERO, PaperProps.HERO + abs(nd) * PaperProps.DIST_STEP)
         let li = entry.li, wk = entry.wk
@@ -1869,6 +1905,26 @@ struct PaperDioramaLyricView: View {
         }
         out.append(KRWord(text: curT, start: curS, end: curE))
         return out
+    }
+
+    /// 视觉词数量（轻量纯计数，不构造时间）——用于绝对位置累计
+    fileprivate static func countVisualWords(_ line: KRCLine) -> Int {
+        let src = line.words
+        if src.count <= 1 {
+            return max(1, splitPaperGroups(line.text).count)
+        }
+        var n = 1
+        var curN = 1
+        for k in 1..<src.count {
+            let gap = src[k].start - src[k - 1].end
+            if curN < 3 && gap < 0.4 && !src[k].text.trimmingCharacters(in: .whitespaces).isEmpty {
+                curN += 1
+            } else {
+                n += 1
+                curN = 1
+            }
+        }
+        return n
     }
 
     fileprivate static func splitPaperGroups(_ s: String) -> [String] {
