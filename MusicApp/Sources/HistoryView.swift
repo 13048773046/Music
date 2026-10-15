@@ -44,7 +44,12 @@ struct HistoryView: View {
     private func historyRow(_ item: HistoryTrack) -> some View {
         Button {
             // 点击历史记录：播放这首歌
-            let track = Track(id: item.trackId, title: item.title, artist: item.artist, cover: item.cover)
+            let track = Track(id: item.trackId, title: item.title, artist: item.artist,
+                              album: nil, cover: item.cover, size: nil,
+                              dur: nil, durText: nil, created: item.created,
+                              playCount: nil, likeCount: nil, shareCount: nil,
+                              commentCount: nil, userId: nil, userName: nil,
+                              hasLyric: nil, isLiked: nil, reason: nil)
             player.play(track, in: [track])
         } label: {
             HStack(spacing: 12) {

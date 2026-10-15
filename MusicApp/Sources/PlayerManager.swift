@@ -1505,7 +1505,7 @@ final class PlayerManager: NSObject, ObservableObject {
             await API.recordHistory(
                 trackId: current.id,
                 title: current.title,
-                artist: current.artist,
+                artist: current.artist ?? "",
                 cover: current.coverURL?.absoluteString ?? ""
             )
         }

@@ -192,8 +192,19 @@ struct PlaylistDetailView: View {
 
     private func trackRow(_ t: HistoryTrack) -> some View {
         Button {
-            let track = Track(id: t.trackId, title: t.title, artist: t.artist, cover: t.cover)
-            player.play(track, in: tracks.map { Track(id: $0.trackId, title: $0.title, artist: $0.artist, cover: $0.cover) })
+            let track = Track(id: t.trackId, title: t.title, artist: t.artist,
+                              album: nil, cover: t.cover, size: nil,
+                              dur: nil, durText: nil, created: t.created,
+                              playCount: nil, likeCount: nil, shareCount: nil,
+                              commentCount: nil, userId: nil, userName: nil,
+                              hasLyric: nil, isLiked: nil, reason: nil)
+            let queue = tracks.map { Track(id: $0.trackId, title: $0.title, artist: $0.artist,
+                                            album: nil, cover: $0.cover, size: nil,
+                                            dur: nil, durText: nil, created: $0.created,
+                                            playCount: nil, likeCount: nil, shareCount: nil,
+                                            commentCount: nil, userId: nil, userName: nil,
+                                            hasLyric: nil, isLiked: nil, reason: nil) }
+            player.play(track, in: queue)
         } label: {
             HStack(spacing: 12) {
                 AlbumArt(size: 44, title: t.title, coverURL: URL(string: t.cover), radius: 9)
