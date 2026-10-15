@@ -20,6 +20,9 @@ struct CommentSheet: View {
     @State private var showImagePicker = false
     /// 大图预览中的图片文件名
     @State private var previewImage: String?
+    /// 发布失败提示
+    @State private var showSendError = false
+    @State private var sendErrorMsg = "评论发布失败，请重试"
 
     var body: some View {
         ZStack {
@@ -74,9 +77,12 @@ struct CommentSheet: View {
                                             Text(c.userName.isEmpty ? "用户" : c.userName)
                                                 .font(.system(size: 13, weight: .medium))
                                                 .foregroundColor(Theme.accent)
-                                            Text(c.content)
-                                                .font(.system(size: 14))
-                                                .foregroundColor(Theme.textPrimary)
+                                            // 纯图片评论无文字时隐藏文字行，图片直接跟在昵称下方
+                                            if !c.content.isEmpty {
+                                                Text(c.content)
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(Theme.textPrimary)
+                                            }
                                             // 评论图片：横向缩略图，点击放大预览
                                             if let imgs = c.images, !imgs.isEmpty {
                                                 HStack(spacing: 6) {
@@ -227,6 +233,12 @@ struct CommentSheet: View {
                 Task { await uploadImages(datas) }
             }
         }
+        // 发布失败提示
+        .alert("评论发布失败", isPresented: $showSendError) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(sendErrorMsg)
+        }
         // 评论图片大图预览（点击缩略图打开）
         .sheet(isPresented: Binding(
             get: { previewImage != nil },
@@ -279,6 +291,9 @@ struct CommentSheet: View {
             let ev = API.BehaviorEvent(trackId: track.id, event: "comment", value: 1)
             Task { await API.reportBehavior([ev]) }
         } catch {
+            // 发布失败必须让用户知道（静默失败会让人误以为列表没加载）
+            sendErrorMsg = "评论发布失败，请检查网络后重试"
+            showSendError = true
         }
         sending = false
     }

@@ -5762,16 +5762,8 @@ async function delNotify(id){
                         return
                     uname = (body.get("userName") or "").strip()[:20]
                     content = (body.get("content") or "").strip()[:MAX_COMMENT]
-                    if not content:
-                        c.close()
-                        self._err(400, "评论内容不能为空")
-                        return
                     # 过滤控制字符（防注入/异常渲染）
                     content = "".join(ch for ch in content if ch >= " " or ch == "\n").strip()
-                    if not content:
-                        c.close()
-                        self._err(400, "评论内容不能为空")
-                        return
                     # 评论图片：仅接受本服务上传接口生成的 cmt_ 文件（白名单正则，防路径/文件名注入）
                     images = body.get("images") or []
                     if isinstance(images, str):
@@ -5781,6 +5773,11 @@ async function delNotify(id){
                     images = [i for i in images[:6]
                               if isinstance(i, str)
                               and re.fullmatch(r"cmt_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", i)]
+                    # 文字与图片至少有一项才能发布（支持纯图片评论）
+                    if not content and not images:
+                        c.close()
+                        self._err(400, "评论内容不能为空")
+                        return
                     images_json = json.dumps(images, ensure_ascii=False)
                     cid = uuid.uuid4().hex
                     c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created)
@@ -5790,21 +5787,22 @@ async function delNotify(id){
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "comment", 1.0,
                                "", _track_info(c, tid), time.time()))
-                    # 评论通知：给歌曲上传者（用户上传表 + 采集表都覆盖）
+                    # 评论通知：给歌曲上传者（用户上传表 + 采集表都覆盖）；纯图评论文案显示 [图片]
                     owner_id, owner_title = _track_owner(c, tid)
                     if owner_id and owner_id != uid:
                         notif_id = uuid.uuid4().hex
+                        preview = (content[:50] if content else "[图片]")
                         c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created, comment_id)
                                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                                   (notif_id, owner_id, "comment", "收到新评论",
-                                   f"{uname}评论了你的歌曲《{owner_title}》：{content[:50]}",
+                                   f"{uname}评论了你的歌曲《{owner_title}》：{preview}",
                                    uid, uname, tid, owner_title, 0, time.time(), cid))
                         # 实时推送（WebSocket）
                         ws_push(owner_id, {
                             "kind": "notification",
                             "notification": {"id": notif_id, "type": "comment",
                                              "title": "收到新评论",
-                                             "content": f"{uname}评论了你的歌曲《{owner_title}》：{content[:50]}",
+                                             "content": f"{uname}评论了你的歌曲《{owner_title}》：{preview}",
                                              "fromUserId": uid, "fromUser": uname,
                                              "commentId": cid,
                                              "trackId": tid, "trackTitle": owner_title,

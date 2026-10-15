@@ -407,6 +407,18 @@ def run_all(port, root, strict_port, strict_root):
     comments = json.loads(body)
     inject = [c for c in comments if c["content"] == "注入图片"]
     check("非法图片名未入库", bool(inject) and inject[0].get("images") == [], body[:200])
+    # 纯图片评论（无文字）允许发布
+    s, body, _ = req("POST", f"/api/comment/{tid}", {"userId": uid, "userName": "x",
+                                                     "content": "", "images": [cname]}, AUTH)
+    check("纯图片评论 200", s == 200, f"s={s}")
+    s, body, _ = req("GET", f"/api/comments/{tid}")
+    comments = json.loads(body)
+    pure = [c for c in comments if c.get("images") == [cname] and not c.get("content")]
+    check("纯图评论入库（文字为空）", bool(pure), body[:200])
+    # 文字和图片都没有 → 400
+    s, body, _ = req("POST", f"/api/comment/{tid}", {"userId": uid, "userName": "x",
+                                                     "content": "", "images": []}, AUTH)
+    check("空文字空图片评论 400", s == 400, f"s={s}")
 
     print("== 15. 严格模式（MUSIC_AUTH_STRICT=1）==")
     BASE_S = f"http://127.0.0.1:{strict_port}"
