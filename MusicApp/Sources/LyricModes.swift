@@ -590,7 +590,7 @@ private struct DioramaView {
     /// 行在走廊中的世界锚点（路径 + 摆位偏移）
     static func worldAnchor(_ i: Int, frames: [DioramaFrame], seed: Double) -> DVec3 {
         let f = frames[max(0, min(i, frames.count - 1))]
-        let pl = placement(i, seed, WEAVE)
+        let pl = placement(i, seed, weave: WEAVE)
         return DVec3(x: f.position.x + f.right.x * pl.offsetR + f.up.x * pl.offsetU,
                      y: f.position.y + f.right.y * pl.offsetR + f.up.y * pl.offsetU,
                      z: f.position.z + f.right.z * pl.offsetR + f.up.z * pl.offsetU)
@@ -843,7 +843,7 @@ struct DioramaLyricView: View {
             let now = display
 
             // 每帧驱动相机（Folia CameraRig 逻辑）
-            Self.driveCamera(cam: cam, lines: lines, frames: frames, c: idx, now: now, seed: seedD)
+            _ = Self.driveCamera(cam: cam, lines: lines, frames: frames, c: idx, now: now, seed: seedD)
 
             // 渲染挂载窗口 c-2..c+3
             ZStack {
@@ -872,13 +872,13 @@ struct DioramaLyricView: View {
 
     // MARK: 相机驱动（1:1 CameraRig：SmoothDamp 追踪 read-head + 镜头偏移 + 回正）
 
-    static func driveCamera(cam: DioramaCamState, lines: [KRCLine], frames: [DioramaFrame],
+    private static func driveCamera(cam: DioramaCamState, lines: [KRCLine], frames: [DioramaFrame],
                             c: Double, now: Double, seed: Double) {
         guard !lines.isEmpty, frames.count > 0 else { return }
         let idx = Int(c)
         let line = lines[idx]
         let frame = frames[idx]
-        let pl = DioramaView.placement(idx, seed, DioramaView.WEAVE)
+        let pl = DioramaView.placement(idx, seed, weave: DioramaView.WEAVE)
         let wp = DioramaView.wordProgress(line, now)
         let dur = max(line.end - line.start, 0.001)
         let pr = line.end > line.start ? dClamp01((now - line.start) / dur) : (now >= line.start ? 1 : 0)
@@ -936,7 +936,7 @@ struct DioramaLyricView: View {
         cam.roll += (alignTargetRoll - cam.roll) * (1 - exp(-DioramaView.ALIGN_RATE * dt))
     }
 
-    static func ensurePath(cache: PathCache, count: Int, seed: Double) {
+    private static func ensurePath(cache: PathCache, count: Int, seed: Double) {
         if cache.frames.isEmpty {
             cache.frames = DioramaView.buildFrames(count: count, seed: seed)
         }
@@ -945,11 +945,11 @@ struct DioramaLyricView: View {
     // MARK: 行渲染（世界→相机→屏幕投影 + 雾化 + 3D 倾斜）
 
     @ViewBuilder
-    static func rowView(i: Int, c: Int, lines: [KRCLine], frames: [DioramaFrame],
+    private static func rowView(i: Int, c: Int, lines: [KRCLine], frames: [DioramaFrame],
                         cam: DioramaCamState, seed: Double, now: Double, fontSize: CGFloat) -> some View {
         // 世界坐标
         let frame = frames[i]
-        let pl = DioramaView.placement(i, seed, DioramaView.WEAVE)
+        let pl = DioramaView.placement(i, seed, weave: DioramaView.WEAVE)
         let wx = frame.position.x + frame.right.x * pl.offsetR + frame.up.x * pl.offsetU
         let wy = frame.position.y + frame.right.y * pl.offsetR + frame.up.y * pl.offsetU
         let wz = frame.position.z + frame.right.z * pl.offsetR + frame.up.z * pl.offsetU
