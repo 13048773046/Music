@@ -155,15 +155,29 @@ struct MineView: View {
     private func userHeader(topInset: CGFloat) -> some View {
         let u = auth.currentUser
         return VStack(spacing: 0) {
-            // 头部背景区
+            // 头部背景区：渐变从上到下，底部与内容背景无缝衔接
             ZStack(alignment: .top) {
-                // 渐变背景
-                LinearGradient(
-                    colors: [Theme.accent.opacity(0.25), Theme.background],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 200 + topInset)
+                // 用户背景图（有图用图，无图用渐变）
+                Group {
+                    if let bgURL = u?.backgroundURL {
+                        CachedCoverImage(url: bgURL, title: u?.name ?? "",
+                                         placeholder: Rectangle().fill(Theme.card))
+                            .frame(height: 200 + topInset)
+                            .clipped()
+                    } else {
+                        // 无背景图：深绿渐变，底部完全透明融入背景
+                        LinearGradient(
+                            colors: [
+                                Theme.accent.opacity(0.2),
+                                Theme.accent.opacity(0.05),
+                                Theme.background
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 200 + topInset)
+                    }
+                }
 
                 VStack(spacing: 0) {
                     // 顶部按钮行
@@ -281,25 +295,31 @@ struct MineView: View {
             .padding(.horizontal, 16)
             .offset(y: -20)
 
-            // 快捷入口：播放历史 / 我的歌单
+            // 快捷入口：播放历史 / 我的歌单（跳转独立页面）
             HStack(spacing: 12) {
-                quickCard(
-                    icon: "clock.arrow.circlepath",
-                    title: "播放历史",
-                    subtitle: "最近听过的歌",
-                    color: Theme.accent
-                ) {
-                    selectedTab = 3
+                NavigationLink {
+                    HistoryView()
+                } label: {
+                    quickCardLabel(
+                        icon: "clock.arrow.circlepath",
+                        title: "播放历史",
+                        subtitle: "最近听过的歌",
+                        color: Theme.accent
+                    )
                 }
+                .buttonStyle(PressableButtonStyle())
 
-                quickCard(
-                    icon: "music.note.list",
-                    title: "我的歌单",
-                    subtitle: "收藏喜欢的歌曲",
-                    color: .purple
-                ) {
-                    selectedTab = 4
+                NavigationLink {
+                    PlaylistsView()
+                } label: {
+                    quickCardLabel(
+                        icon: "music.note.list",
+                        title: "我的歌单",
+                        subtitle: "收藏喜欢的歌曲",
+                        color: .purple
+                    )
                 }
+                .buttonStyle(PressableButtonStyle())
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
@@ -318,34 +338,31 @@ struct MineView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func quickCard(icon: String, title: String, subtitle: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(color.opacity(0.15))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: icon)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundColor(color)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.3))
+    private func quickCardLabel(icon: String, title: String, subtitle: String, color: Color) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(color.opacity(0.15))
+                    .frame(width: 40, height: 40)
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundColor(color)
             }
-            .padding(14)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.4))
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.3))
         }
-        .buttonStyle(PressableButtonStyle())
+        .padding(14)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - 内容 Tab 切换（作品 | 点赞 | 评论）
@@ -364,7 +381,9 @@ struct MineView: View {
     private func contentTabItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
-            switchTab(index)
+            withAnimation(.easeInOut(duration: 0.25)) {
+                switchTab(index)
+            }
         } label: {
             VStack(spacing: 6) {
                 HStack(spacing: 4) {
@@ -375,10 +394,10 @@ struct MineView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(selected ? Theme.accent : .white.opacity(0.3))
                 }
-                // 底部滑块
+                // 小滑块：宽度 20，高度 3，居中
                 Capsule()
                     .fill(selected ? Theme.accent : Color.clear)
-                    .frame(height: 3)
+                    .frame(width: 20, height: 3)
                     .matchedGeometryEffect(id: "content-tab-slider", in: sliderNS)
             }
             .frame(maxWidth: .infinity)
@@ -422,16 +441,8 @@ struct MineView: View {
                 likesList
                     .transition(.asymmetric(insertion: .move(edge: dir),
                                             removal: .move(edge: rev)))
-            } else if selectedTab == 2 {
-                commentsList
-                    .transition(.asymmetric(insertion: .move(edge: dir),
-                                            removal: .move(edge: rev)))
-            } else if selectedTab == 3 {
-                historyList
-                    .transition(.asymmetric(insertion: .move(edge: dir),
-                                            removal: .move(edge: rev)))
             } else {
-                playlistsList
+                commentsList
                     .transition(.asymmetric(insertion: .move(edge: dir),
                                             removal: .move(edge: rev)))
             }
