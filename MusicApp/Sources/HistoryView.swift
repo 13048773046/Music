@@ -3,6 +3,7 @@ import SwiftUI
 /// 播放历史页面
 struct HistoryView: View {
     @EnvironmentObject private var player: PlayerManager
+    @Environment(\.dismiss) private var dismiss
     @State private var items: [HistoryTrack] = []
     @State private var isLoading = false
     @State private var page = 1
@@ -41,6 +42,18 @@ struct HistoryView: View {
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("播放历史")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.primary)
+                }
+            }
+        }
         .onAppear { Task { await reload() } }
     }
 

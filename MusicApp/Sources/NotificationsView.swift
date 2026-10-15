@@ -51,6 +51,18 @@ struct NotificationsView: View {
         }
         .navigationTitle("消息通知")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.primary)
+                }
+            }
+        }
         .navigationDestination(isPresented: $showOfficialChat) {
             OfficialMessagesView()
                 .environmentObject(player)

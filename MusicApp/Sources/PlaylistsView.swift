@@ -170,71 +170,89 @@ struct PlaylistsView: View {
 struct PlaylistDetailView: View {
     let playlist: Playlist
     @EnvironmentObject private var player: PlayerManager
+    @Environment(\.dismiss) private var dismiss
     @State private var tracks: [HistoryTrack] = []
     @State private var isLoading = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // 头部：歌单封面 + 信息
-                VStack(spacing: 14) {
-                    if !playlist.cover.isEmpty, let url = URL(string: playlist.cover) {
-                        AsyncImage(url: url) { img in
-                            img.resizable().scaledToFill()
-                        } placeholder: {
-                            Rectangle().fill(Theme.card)
-                        }
-                        .frame(width: 140, height: 140)
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                        .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 6)
-                    } else {
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(Theme.card)
+        ZStack {
+            Theme.background.ignoresSafeArea()
+            
+            ScrollView {
+                VStack(spacing: 0) {
+                    // 头部：歌单封面 + 信息
+                    VStack(spacing: 14) {
+                        if !playlist.cover.isEmpty, let url = URL(string: playlist.cover) {
+                            AsyncImage(url: url) { img in
+                                img.resizable().scaledToFill()
+                            } placeholder: {
+                                Rectangle().fill(Theme.card)
+                            }
                             .frame(width: 140, height: 140)
-                            .overlay(
-                                Image(systemName: "music.note")
-                                    .font(.system(size: 50))
-                                    .foregroundColor(Theme.textTertiary)
-                            )
-                    }
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                            .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 6)
+                        } else {
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(Theme.card)
+                                .frame(width: 140, height: 140)
+                                .overlay(
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 50))
+                                        .foregroundColor(Theme.textTertiary)
+                                )
+                        }
 
-                    Text(playlist.name)
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(Theme.textPrimary)
+                        Text(playlist.name)
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(Theme.textPrimary)
 
-                    Text("\(playlist.trackCount) 首歌曲")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.textSecondary)
-                }
-                .padding(.vertical, 28)
-
-                // 歌曲列表
-                if tracks.isEmpty && isLoading {
-                    ProgressView().padding(.top, 40)
-                } else if tracks.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "music.note.badge.plus")
-                            .font(.system(size: 28))
-                            .foregroundColor(Theme.textTertiary)
-                        Text("歌单是空的")
-                            .font(.system(size: 14))
+                        Text("\(playlist.trackCount) 首歌曲")
+                            .font(.system(size: 13))
                             .foregroundColor(Theme.textSecondary)
-                        Text("去歌曲详情页添加喜欢的歌曲吧")
-                            .font(.system(size: 12))
-                            .foregroundColor(Theme.textTertiary)
                     }
-                    .padding(.top, 40)
-                } else {
-                    ForEach(tracks) { t in
-                        trackRow(t)
-                            .padding(.horizontal, 16)
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity)
+
+                    // 歌曲列表
+                    if tracks.isEmpty && isLoading {
+                        ProgressView().padding(.top, 40)
+                    } else if tracks.isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: "music.note.badge.plus")
+                                .font(.system(size: 28))
+                                .foregroundColor(Theme.textTertiary)
+                            Text("歌单是空的")
+                                .font(.system(size: 14))
+                                .foregroundColor(Theme.textSecondary)
+                            Text("去歌曲详情页添加喜欢的歌曲吧")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textTertiary)
+                        }
+                        .padding(.top, 40)
+                    } else {
+                        ForEach(tracks) { t in
+                            trackRow(t)
+                                .padding(.horizontal, 16)
+                        }
                     }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .navigationTitle(playlist.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.primary)
                 }
             }
         }
-        .background(Theme.background.ignoresSafeArea())
-        .navigationTitle(playlist.name)
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear { Task { await load() } }
     }
 
