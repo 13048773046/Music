@@ -358,9 +358,6 @@ struct MineView: View {
                     .foregroundColor(.white.opacity(0.4))
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.3))
         }
         .padding(14)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
@@ -369,10 +366,22 @@ struct MineView: View {
     // MARK: - 内容 Tab 切换（作品 | 点赞 | 评论）
 
     private var contentTabs: some View {
-        HStack(spacing: 0) {
-            contentTabItem(title: "作品", count: works.total, index: 0)
-            contentTabItem(title: "点赞", count: likes.total, index: 1)
-            contentTabItem(title: "评论", count: comments.total, index: 2)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                contentTabItem(title: "作品", count: works.total, index: 0)
+                contentTabItem(title: "点赞", count: likes.total, index: 1)
+                contentTabItem(title: "评论", count: comments.total, index: 2)
+            }
+            
+            // 滑块：单独一层，根据 selectedTab 移动
+            GeometryReader { geo in
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: 24, height: 3)
+                    .offset(x: geo.size.width / 3 * CGFloat(selectedTab) + geo.size.width / 6 - 12)
+                    .animation(.easeInOut(duration: 0.25), value: selectedTab)
+            }
+            .frame(height: 3)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -393,11 +402,8 @@ struct MineView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(selected ? Theme.accent : .white.opacity(0.3))
                 }
-                // 滑块：始终可见，选中绿色，未选中浅灰，用 matchedGeometryEffect 动画移动
-                Capsule()
-                    .fill(selected ? Theme.accent : Color.white.opacity(0.15))
-                    .frame(width: 24, height: 3)
-                    .matchedGeometryEffect(id: "slider", in: sliderNS)
+                // 占位，高度和滑块一致
+                Color.clear.frame(height: 3)
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
