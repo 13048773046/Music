@@ -569,7 +569,15 @@ struct PlayerCard: View {
             .presentationDetents([.height(320)])
             .presentationDragIndicator(.visible)
         }
-        .fullScreenCover(isPresented: $showFullScreen) {
+        // 全屏沉浸式歌词：onDismiss 兜底复位方向授权并强制转回竖屏。
+        // 主界面 OrientationVC 是 child controller，dismiss 后不会自动触发
+        // viewWillAppear，若不显式 setValue(.portrait) 设备会停在横屏。
+        .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
+            FullScreenOrientation.shared.isFullScreen = false
+            DispatchQueue.main.async {
+                UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+            }
+        }) {
             FullScreenLyricView(track: track, lines: lyricLines)
                 .environmentObject(player)
                 .landscapeFullScreen()

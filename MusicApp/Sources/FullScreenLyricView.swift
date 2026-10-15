@@ -60,6 +60,11 @@ struct FullScreenLyricView: View {
                     }
                     Spacer(minLength: 8)
                     Button {
+                        // 退出全屏：先复位全局方向授权 + 强制转回竖屏，再关闭。
+                        // 不能只靠 dismiss 后主界面 OrientationVC 的 viewWillAppear——
+                        // 它作为 child controller 不会被触发，设备会停在横屏。
+                        FullScreenOrientation.shared.isFullScreen = false
+                        UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
                         dismiss()
                     } label: {
                         Image(systemName: "xmark")
