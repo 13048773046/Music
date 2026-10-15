@@ -382,9 +382,7 @@ struct MineView: View {
     private func contentTabItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                switchTab(index)
-            }
+            switchTab(index)
         } label: {
             VStack(spacing: 6) {
                 HStack(spacing: 4) {
@@ -395,11 +393,11 @@ struct MineView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(selected ? Theme.accent : .white.opacity(0.3))
                 }
-                // 小滑块：宽度 20，高度 3，居中
+                // 滑块：始终可见，选中绿色，未选中浅灰，用 matchedGeometryEffect 动画移动
                 Capsule()
-                    .fill(selected ? Theme.accent : Color.clear)
-                    .frame(width: 20, height: 3)
-                    .matchedGeometryEffect(id: "content-tab-slider", in: sliderNS)
+                    .fill(selected ? Theme.accent : Color.white.opacity(0.15))
+                    .frame(width: 24, height: 3)
+                    .matchedGeometryEffect(id: "slider", in: sliderNS)
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
