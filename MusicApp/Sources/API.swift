@@ -765,7 +765,7 @@ enum API {
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         let (_, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-            throw APIError.invalidResponse
+            throw APIError.message("网络请求失败")
         }
     }
 
