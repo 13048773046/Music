@@ -78,7 +78,7 @@ struct MineView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         userHeader(topInset: Self.statusBarHeight)
-                        tabIndicator
+                        contentTabs
                         currentPage
                         bottomBar
                     }
@@ -150,291 +150,238 @@ struct MineView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: - 用户信息区（背景图横幅 + 头像压边 + 昵称 + 签名 + 听歌时长）
+    // MARK: - 用户信息区（全新设计）
 
     private func userHeader(topInset: CGFloat) -> some View {
         let u = auth.currentUser
         return VStack(spacing: 0) {
-            // 背景图延伸至状态栏（沉浸式），底部两角圆角；右上角按钮 + 头像行
-            ZStack(alignment: .topLeading) {
-                // 背景图（无图时深色占位）：高 160 + 顶部安全区
-                Group {
-                    if let bgURL = u?.backgroundURL {
-                        CachedCoverImage(url: bgURL, title: u?.name ?? "",
-                                         placeholder: Rectangle().fill(Theme.card))
-                            .frame(height: 160 + topInset)
-                            .clipped()
-                    } else {
-                        // 无背景图：深薄荷→暗紫渐变，和整体设计语言统一
-                        LinearGradient(
-                            colors: [Theme.accentSoft, Color(hex: 0x2A2440)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .frame(height: 160 + topInset)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .top)
-                .clipShape(BottomRoundedShape(radius: 24))
+            // 头部背景区
+            ZStack(alignment: .top) {
+                // 渐变背景
+                LinearGradient(
+                    colors: [Theme.accent.opacity(0.25), Theme.background],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 200 + topInset)
 
-                // 右上角：上传 + 消息 + 设置按钮（圆形半透明白底，和渐变背景融合）
-                HStack(spacing: 10) {
-                    Button {
-                        showImporter = true
-                    } label: {
-                        ZStack {
-                            Circle().fill(.white.opacity(0.18))
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.white)
+                VStack(spacing: 0) {
+                    // 顶部按钮行
+                    HStack(spacing: 12) {
+                        Spacer()
+                        // 上传
+                        Button { showImporter = true } label: {
+                            Circle()
+                                .fill(.white.opacity(0.12))
+                                .frame(width: 38, height: 38)
+                                .overlay(Image(systemName: "plus")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white))
                         }
-                        .frame(width: 38, height: 38)
-                    }
-                    .buttonStyle(PressableButtonStyle())
+                        .buttonStyle(PressableButtonStyle())
 
-                    // 消息通知入口
-                    Button {
-                        showNotifications = true
-                    } label: {
-                        ZStack {
-                            Circle().fill(.white.opacity(0.18))
-                            Image(systemName: "bell.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.white)
-                            // 未读红点
-                            if unreadNotifCount > 0 {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 16, height: 16)
-                                    .overlay(
-                                        Text("\(unreadNotifCount > 99 ? "99+" : "\(unreadNotifCount)")")
-                                            .font(.system(size: 9, weight: .bold))
+                        // 消息
+                        Button { showNotifications = true } label: {
+                            Circle()
+                                .fill(.white.opacity(0.12))
+                                .frame(width: 38, height: 38)
+                                .overlay(
+                                    ZStack {
+                                        Image(systemName: "bell.fill")
+                                            .font(.system(size: 15, weight: .semibold))
                                             .foregroundColor(.white)
-                                    )
-                                    .offset(x: 11, y: -11)
-                            }
+                                        if unreadNotifCount > 0 {
+                                            Circle()
+                                                .fill(Color.red)
+                                                .frame(width: 16, height: 16)
+                                                .overlay(
+                                                    Text("\(unreadNotifCount > 99 ? "99+" : "\(unreadNotifCount)")")
+                                                        .font(.system(size: 9, weight: .bold))
+                                                        .foregroundColor(.white)
+                                                )
+                                                .offset(x: 10, y: -10)
+                                        }
+                                    }
+                                )
                         }
-                        .frame(width: 38, height: 38)
-                    }
-                    .buttonStyle(PressableButtonStyle())
+                        .buttonStyle(PressableButtonStyle())
 
-                    // 设置入口：跳转设置页（修改信息/修改密码/缓存/更新/退出登录）
-                    Button {
-                        showSettings = true
-                    } label: {
-                        ZStack {
-                            Circle().fill(.white.opacity(0.18))
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.white)
+                        // 设置
+                        Button { showSettings = true } label: {
+                            Circle()
+                                .fill(.white.opacity(0.12))
+                                .frame(width: 38, height: 38)
+                                .overlay(Image(systemName: "gearshape")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.white))
                         }
-                        .frame(width: 38, height: 38)
+                        .buttonStyle(PressableButtonStyle())
                     }
-                    .buttonStyle(PressableButtonStyle())
-                }
-                .padding(.top, topInset + 8)
-                .padding(.trailing, 20)
-                .frame(maxWidth: .infinity, alignment: .topTrailing)
+                    .padding(.top, topInset + 8)
+                    .padding(.trailing, 20)
 
-                // 头像 + 昵称 + 账号（背景图下部左侧，头像压背景图下沿）
-                HStack(spacing: 16) {
-                    CachedCoverImage(
-                        url: u?.avatarURL ?? URL(string: "about:blank")!,
-                        title: u?.name ?? "",
-                        placeholder:
-                            Circle().fill(Theme.accentSoft)
+                    // 头像 + 基本信息
+                    HStack(spacing: 16) {
+                        CachedCoverImage(
+                            url: u?.avatarURL ?? URL(string: "about:blank")!,
+                            title: u?.name ?? "",
+                            placeholder: Circle().fill(Theme.accentSoft)
                                 .overlay(Image(systemName: "person.fill")
                                     .font(.system(size: 28))
                                     .foregroundColor(Theme.accent))
-                    )
-                    .frame(width: 76, height: 76)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 3))
+                        )
+                        .frame(width: 72, height: 72)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
 
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(u?.name ?? "未登录")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                        HStack(spacing: 6) {
-                            if let acc = u?.account, !acc.isEmpty {
-                                Text("ID \(acc)")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.9))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(Capsule().fill(.white.opacity(0.18)))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(u?.name ?? "未登录")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+
+                            HStack(spacing: 6) {
+                                if let acc = u?.account, !acc.isEmpty {
+                                    Text("ID \(acc)")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(.white.opacity(0.15)))
+                                }
                             }
-                            if let gender = u?.gender, !gender.isEmpty, gender != "保密" {
-                                tag(gender)
-                            }
-                            if let age = u?.age, age > 0 {
-                                tag("\(age)")
+
+                            if let sig = u?.signature, !sig.isEmpty {
+                                Text(sig)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
                             }
                         }
-                    }
 
-                    Spacer()
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
                 }
-                .padding(.leading, 20)
-                .padding(.trailing, 20)
-                .padding(.top, topInset + 160 - 38)   // 头像中心压在背景图下沿
             }
-            .frame(height: topInset + 160 + 36)       // 背景 + 头像露出下半部
 
-            // 签名 + 听歌时长（软卡片，和首页卡片风统一）
-            VStack(alignment: .leading, spacing: 12) {
-                if let sig = u?.signature, !sig.isEmpty {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "quote.bubble.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.textTertiary)
-                        Text(sig)
-                            .font(.system(size: 13))
-                            .foregroundColor(Theme.textSecondary)
-                            .lineLimit(2)
-                    }
-                }
-
-                // 听歌时长：软卡片数据行
-                HStack(spacing: 8) {
-                    ZStack {
-                        Circle().fill(Theme.accentSoft).frame(width: 30, height: 30)
-                        Image(systemName: "clock.fill")
-                            .font(.system(size: 13))
-                            .foregroundColor(Theme.accent)
-                    }
-                    Text("累计听歌")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.textSecondary)
-                    Spacer()
-                    Text(listenText)
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(Theme.accent)
-                }
-                .padding(12)
-                .softCard(radius: 14)
-
-                // 社交数据：粉丝 / 关注 / 互关
-                HStack(spacing: 0) {
-                    socialStatItem(value: "\(followerCount)", label: "粉丝")
-                    Divider().frame(height: 30)
-                    socialStatItem(value: "\(followingCount)", label: "关注")
-                    Divider().frame(height: 30)
-                    socialStatItem(value: "\(mutualCount)", label: "互关")
-                }
-                .padding(.vertical, 12)
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+            // 数据统计卡片
+            HStack(spacing: 0) {
+                statBlock(value: "\(works.total)", label: "作品")
+                Divider().frame(height: 32)
+                statBlock(value: "\(followerCount)", label: "粉丝")
+                Divider().frame(height: 32)
+                statBlock(value: "\(followingCount)", label: "关注")
+                Divider().frame(height: 32)
+                statBlock(value: "\(mutualCount)", label: "互关")
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 22)
-            .padding(.bottom, 14)
-        }
-    }
+            .padding(.vertical, 14)
+            .background(Theme.card)
+            .padding(.horizontal, 16)
+            .offset(y: -20)
 
-    // MARK: - 指示器（左对齐：作品 | 点赞 | 评论，选中项绿色加粗 + 滑块平滑过渡）
-
-    private var tabIndicator: some View {
-        VStack(spacing: 14) {
-            // 快捷入口卡片：播放历史 / 我的歌单（从底部移到这里）
+            // 快捷入口：播放历史 / 我的歌单
             HStack(spacing: 12) {
-                Button {
+                quickCard(
+                    icon: "clock.arrow.circlepath",
+                    title: "播放历史",
+                    subtitle: "最近听过的歌",
+                    color: Theme.accent
+                ) {
                     selectedTab = 3
-                } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Theme.accentSoft)
-                                .frame(width: 36, height: 36)
-                            Image(systemName: "clock.arrow.circlepath")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(Theme.accent)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("播放历史")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(Theme.textPrimary)
-                            Text("看看最近听过的歌")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.textTertiary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
                 }
-                .buttonStyle(PressableButtonStyle())
 
-                Button {
+                quickCard(
+                    icon: "music.note.list",
+                    title: "我的歌单",
+                    subtitle: "收藏喜欢的歌曲",
+                    color: .purple
+                ) {
                     selectedTab = 4
-                } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color.purple.opacity(0.15))
-                                .frame(width: 36, height: 36)
-                            Image(systemName: "music.note.list")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.purple)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("我的歌单")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(Theme.textPrimary)
-                            Text("收藏喜欢的歌曲")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.textTertiary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
                 }
-                .buttonStyle(PressableButtonStyle())
             }
-            .padding(.horizontal, 20)
-
-            // 指示器 tab（只显示作品/点赞/评论，历史和歌单通过上面的卡片入口进入）
-            HStack(spacing: 26) {
-                segItem(title: "作品", count: works.total, index: 0)
-                segItem(title: "点赞", count: likes.total, index: 1)
-                segItem(title: "评论", count: comments.total, index: 2)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
         }
-        .padding(.bottom, 8)
     }
 
-    private func segItem(title: String, count: Int, index: Int) -> some View {
+    private func statBlock(value: String, label: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.white)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func quickCard(icon: String, title: String, subtitle: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(color.opacity(0.15))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: icon)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundColor(color)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.3))
+            }
+            .padding(14)
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    // MARK: - 内容 Tab 切换（作品 | 点赞 | 评论）
+
+    private var contentTabs: some View {
+        HStack(spacing: 0) {
+            contentTabItem(title: "作品", count: works.total, index: 0)
+            contentTabItem(title: "点赞", count: likes.total, index: 1)
+            contentTabItem(title: "评论", count: comments.total, index: 2)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func contentTabItem(title: String, count: Int, index: Int) -> some View {
         let selected = selectedTab == index
         return Button {
             switchTab(index)
         } label: {
-            VStack(spacing: 5) {
+            VStack(spacing: 6) {
                 HStack(spacing: 4) {
                     Text(title)
-                        .font(.system(size: 13, weight: selected ? .bold : .medium))
-                        .foregroundColor(selected ? Theme.accent : Theme.textSecondary)
+                        .font(.system(size: 14, weight: selected ? .bold : .medium))
+                        .foregroundColor(selected ? .white : .white.opacity(0.5))
                     Text("\(count)")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(selected ? Theme.accent : Theme.textTertiary)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(selected ? Theme.accent : .white.opacity(0.3))
                 }
-                // 滑块：选中项显示，切换时平滑滑动到新位置（matchedGeometryEffect 过渡）
-                Group {
-                    if selected {
-                        Capsule()
-                            .fill(Theme.accent)
-                            .frame(width: 30, height: 3)
-                            .matchedGeometryEffect(id: "tab-slider", in: sliderNS)
-                    } else {
-                        Capsule()
-                            .fill(Color.clear)
-                            .frame(width: 30, height: 3)
-                    }
-                }
+                // 底部滑块
+                Capsule()
+                    .fill(selected ? Theme.accent : Color.clear)
+                    .frame(height: 3)
+                    .matchedGeometryEffect(id: "content-tab-slider", in: sliderNS)
             }
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
