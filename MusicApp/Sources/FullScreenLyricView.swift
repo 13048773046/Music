@@ -136,6 +136,10 @@ struct FullScreenLyricView: View {
                         case .cappella:
                             CappellaLyricView(lines: lines,
                                               progress: player.progress * player.duration)
+                        case .paper:
+                            PaperDioramaLyricView(lines: lines,
+                                                  progress: player.progress * player.duration,
+                                                  seed: track.id)
                         }
                     }
                 }
