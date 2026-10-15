@@ -26,6 +26,12 @@ struct MineView: View {
     @State private var followerCount: Int = 0
     @State private var followingCount: Int = 0
     @State private var mutualCount: Int = 0
+    // 历史和歌单总数
+    @State private var historyTotal: Int = 0
+    @State private var playlistTotal: Int = 0
+    // 历史和歌单数据
+    @State private var historyItems: [Track] = []
+    @State private var playlistItems: [Playlist] = []
 
     // 三个分页列表：我的作品 / 我的喜欢 / 我的评论
     @State private var works = MinePager<Track>()
@@ -329,13 +335,16 @@ struct MineView: View {
     // MARK: - 指示器（左对齐：作品 | 点赞 | 评论，选中项绿色加粗 + 滑块平滑过渡）
 
     private var tabIndicator: some View {
-        HStack(spacing: 26) {
-            segItem(title: "作品", count: works.total, index: 0)
-            segItem(title: "点赞", count: likes.total, index: 1)
-            segItem(title: "评论", count: comments.total, index: 2)
-            Spacer()
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 22) {
+                segItem(title: "作品", count: works.total, index: 0)
+                segItem(title: "点赞", count: likes.total, index: 1)
+                segItem(title: "评论", count: comments.total, index: 2)
+                segItem(title: "历史", count: historyTotal, index: 3)
+                segItem(title: "歌单", count: playlistTotal, index: 4)
+            }
+            .padding(.horizontal, 20)
         }
-        .padding(.horizontal, 20)
         .padding(.bottom, 8)
     }
 
@@ -377,7 +386,7 @@ struct MineView: View {
 
     /// 切换页：记录上一页用于过渡方向，并带动画切换（指示器滑块同步平滑移动）
     private func switchTab(_ new: Int) {
-        guard new >= 0, new <= 2, new != selectedTab else { return }
+        guard new >= 0, new <= 4, new != selectedTab else { return }
         lastTab = selectedTab
         withAnimation(.easeInOut(duration: 0.28)) { selectedTab = new }
     }
@@ -408,8 +417,16 @@ struct MineView: View {
                 likesList
                     .transition(.asymmetric(insertion: .move(edge: dir),
                                             removal: .move(edge: rev)))
-            } else {
+            } else if selectedTab == 2 {
                 commentsList
+                    .transition(.asymmetric(insertion: .move(edge: dir),
+                                            removal: .move(edge: rev)))
+            } else if selectedTab == 3 {
+                historyList
+                    .transition(.asymmetric(insertion: .move(edge: dir),
+                                            removal: .move(edge: rev)))
+            } else {
+                playlistsList
                     .transition(.asymmetric(insertion: .move(edge: dir),
                                             removal: .move(edge: rev)))
             }
@@ -476,6 +493,49 @@ struct MineView: View {
         .padding(.bottom, 16)
     }
 
+    // MARK: - 播放历史页
+
+    private var historyList: some View {
+        LazyVStack(spacing: 10) {
+            if historyItems.isEmpty {
+                emptyHint("还没有播放记录")
+            } else {
+                ForEach(historyItems, id: \.id) { t in
+                    trackRow(t, queue: historyItems, kind: .works)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+        .task { await loadHistory() }
+    }
+
+    // MARK: - 我的歌单页
+
+    private var playlistsList: some View {
+        LazyVStack(spacing: 12) {
+            if playlistItems.isEmpty {
+                emptyHint("还没有创建歌单")
+            } else {
+                ForEach(playlistItems) { pl in
+                    NavigationLink {
+                        PlaylistDetailView(playlist: pl)
+                            .environmentObject(player)
+                            .environmentObject(auth)
+                    } label: {
+                        playlistRow(pl)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+        .task { await loadPlaylists() }
+    }
+
     // MARK: - 底部（关于 + 退出登录）
 
     // MARK: - 功能入口卡片（播放历史 / 我的歌单）
@@ -490,6 +550,35 @@ struct MineView: View {
                 .foregroundColor(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func playlistRow(_ pl: Playlist) -> some View {
+        HStack(spacing: 12) {
+            // 歌单封面
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Theme.accentSoft)
+                .frame(width: 52, height: 52)
+                .overlay(
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 20))
+                        .foregroundColor(Theme.accent)
+                )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pl.name)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                Text("\(pl.trackCount) 首歌曲")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .padding(12)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var bottomBar: some View {
@@ -830,6 +919,24 @@ struct MineView: View {
                 mutualCount = p.mutualCount
             }
         }
+    }
+
+    @MainActor
+    private func loadHistory() async {
+        do {
+            let list = try await API.fetchHistory(page: 1, pageSize: 50)
+            historyItems = list
+            historyTotal = list.count
+        } catch {}
+    }
+
+    @MainActor
+    private func loadPlaylists() async {
+        do {
+            let list = try await API.fetchPlaylists()
+            playlistItems = list
+            playlistTotal = list.count
+        } catch {}
     }
 
     @MainActor

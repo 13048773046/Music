@@ -9,142 +9,166 @@ struct UserProfileView: View {
     @State private var userTracks: [Track] = []
     @State private var isLoading = true
     @State private var isFollowing = false
+    @State private var page = 1
+    @State private var hasMore = true
 
     var body: some View {
         NavigationStack {
-            ZStack {
+            ZStack(alignment: .top) {
                 Theme.background.ignoresSafeArea()
 
-                if isLoading {
-                    ProgressView().tint(Theme.accent)
-                } else if let p = profile {
-                    ScrollView {
-                        VStack(spacing: 20) {
-                            // 头部：头像 + 基本信息
-                            VStack(spacing: 12) {
-                                // 头像
-                                if !p.avatar.isEmpty {
-                                    AsyncImage(url: API.avatarURL(p.userId)) { img in
-                                        img.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Circle().fill(Theme.accentSoft).overlay(
-                                            Image(systemName: "person.fill")
-                                                .foregroundColor(Theme.accent)
-                                        )
-                                    }
-                                    .frame(width: 80, height: 80)
-                                    .clipShape(Circle())
-                                } else {
-                                    Circle()
-                                        .fill(Theme.accentSoft)
-                                        .frame(width: 80, height: 80)
-                                        .overlay(
-                                            Image(systemName: "person.fill")
-                                                .font(.system(size: 32))
-                                                .foregroundColor(Theme.accent)
-                                        )
-                                }
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // 背景图区域
+                        headerBackground
+                            .frame(height: 220)
 
-                                Text(p.name.isEmpty ? "用户" : p.name)
-                                    .font(.system(size: 20, weight: .bold))
-                                    .foregroundColor(Theme.textPrimary)
+                        // 头像和基本信息（向上重叠）
+                        profileInfoSection
+                            .offset(y: -50)
+                            .padding(.bottom, -50)
 
-                                Text("账号：\(p.account)")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(Theme.textSecondary)
-
-                                if !p.signature.isEmpty {
-                                    Text(p.signature)
-                                        .font(.system(size: 14))
-                                        .foregroundColor(Theme.textSecondary)
-                                        .multilineTextAlignment(.center)
-                                        .padding(.horizontal, 32)
-                                }
-                            }
-                            .padding(.top, 20)
-
-                            // 关注按钮（不是自己才显示）
-                            if p.userId != AuthManager.shared.currentUser?.id {
-                                Button {
-                                    Task { await toggleFollow() }
-                                } label: {
-                                    Text(isFollowing ? "已关注" : "关注")
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundColor(isFollowing ? Theme.textSecondary : .white)
-                                        .frame(width: 120, height: 38)
-                                        .background(isFollowing ? Theme.card : Theme.accent, in: Capsule())
-                                }
-                                .buttonStyle(PressableButtonStyle())
-                            }
-
-                            // 数据统计卡片
-                            HStack(spacing: 0) {
-                                statItem(value: "\(p.trackCount)", label: "上传歌曲")
-                                Divider().frame(height: 40)
-                                statItem(value: "\(p.followerCount)", label: "粉丝")
-                                Divider().frame(height: 40)
-                                statItem(value: "\(p.followingCount)", label: "关注")
-                            }
-                            .padding(16)
-                            .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-                            .padding(.horizontal, 16)
-
-                            // 用户上传的歌曲
-                            if !userTracks.isEmpty {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Text("TA 上传的歌曲")
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundColor(Theme.textPrimary)
-                                        .padding(.horizontal, 16)
-
-                                    ForEach(userTracks) { t in
-                                        Button {
-                                            player.play(t, in: userTracks)
-                                        } label: {
-                                            HStack(spacing: 12) {
-                                                AlbumArt(size: 44, title: t.title, coverURL: t.coverURL, radius: 9)
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text(t.title)
-                                                        .font(.system(size: 14, weight: .medium))
-                                                        .foregroundColor(Theme.textPrimary)
-                                                        .lineLimit(1)
-                                                    Text(t.artist ?? "")
-                                                        .font(.system(size: 12))
-                                                        .foregroundColor(Theme.textSecondary)
-                                                        .lineLimit(1)
-                                                }
-                                                Spacer()
-                                                Image(systemName: "play.fill")
-                                                    .font(.system(size: 13))
-                                                    .foregroundColor(Theme.textTertiary)
-                                            }
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 6)
-                                        }
-                                        .buttonStyle(PressableButtonStyle())
-                                    }
-                                }
-                                .padding(.top, 8)
-                            }
+                        // 关注按钮
+                        if let p = profile, p.userId != AuthManager.shared.currentUser?.id {
+                            followButton
+                                .padding(.top, 16)
+                                .padding(.bottom, 20)
                         }
+
+                        // 数据统计卡片
+                        if let p = profile {
+                            statsCard(p: p)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 20)
+                        }
+
+                        // 歌曲列表
+                        tracksSection
+                            .padding(.bottom, 100)
                     }
                 }
             }
-            .navigationTitle("用户主页")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { dismiss() }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
                 }
             }
+            .toolbarBackground(.hidden, for: .navigationBar)
         }
         .task { await load() }
     }
 
+    // MARK: - 背景图
+
+    private var headerBackground: some View {
+        ZStack(alignment: .bottomLeading) {
+            // 渐变背景（模拟用户背景图）
+            LinearGradient(
+                gradient: Gradient(colors: [Theme.accent.opacity(0.4), Theme.background]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            // 暗色遮罩
+            LinearGradient(
+                gradient: Gradient(colors: [.clear, .black.opacity(0.3)]),
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - 个人信息
+
+    private var profileInfoSection: some View {
+        HStack(spacing: 16) {
+            // 头像
+            if let p = profile, !p.avatar.isEmpty {
+                AsyncImage(url: API.avatarURL(p.userId)) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Circle().fill(Theme.accentSoft).overlay(
+                        Image(systemName: "person.fill").foregroundColor(Theme.accent)
+                    )
+                }
+                .frame(width: 88, height: 88)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Theme.background, lineWidth: 4))
+            } else {
+                Circle()
+                    .fill(Theme.accentSoft)
+                    .frame(width: 88, height: 88)
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 36))
+                            .foregroundColor(Theme.accent)
+                    )
+                    .overlay(Circle().stroke(Theme.background, lineWidth: 4))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(profile?.name.isEmpty ?? true ? "用户" : profile!.name)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+
+                Text("账号：\(profile?.account ?? "")")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.textSecondary)
+
+                if let sig = profile?.signature, !sig.isEmpty {
+                    Text(sig)
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - 关注按钮
+
+    private var followButton: some View {
+        Button {
+            Task { await toggleFollow() }
+        } label: {
+            Text(isFollowing ? "已关注" : "关注")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(isFollowing ? Theme.textSecondary : .white)
+                .frame(width: 120, height: 38)
+                .background(
+                    Capsule()
+                        .fill(isFollowing ? Theme.card : Theme.accent)
+                )
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    // MARK: - 统计卡片
+
+    private func statsCard(p: UserProfile) -> some View {
+        HStack(spacing: 0) {
+            statItem(value: "\(p.trackCount)", label: "歌曲")
+            Divider().frame(height: 30)
+            statItem(value: "\(p.followerCount)", label: "粉丝")
+            Divider().frame(height: 30)
+            statItem(value: "\(p.followingCount)", label: "关注")
+        }
+        .padding(.vertical, 14)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+    }
+
     private func statItem(value: String, label: String) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Text(value)
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 18, weight: .bold))
                 .foregroundColor(Theme.textPrimary)
             Text(label)
                 .font(.system(size: 12))
@@ -153,6 +177,77 @@ struct UserProfileView: View {
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: - 歌曲列表
+
+    private var tracksSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("TA 的歌曲")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+                .padding(.horizontal, 20)
+
+            if userTracks.isEmpty && isLoading {
+                ProgressView()
+                    .tint(Theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+            } else if userTracks.isEmpty {
+                Text("还没有上传歌曲")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.textTertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+            } else {
+                ForEach(userTracks) { t in
+                    Button {
+                        player.play(t, in: userTracks)
+                    } label: {
+                        trackRow(t)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
+
+                // 加载更多
+                if hasMore {
+                    Button {
+                        Task { await loadMoreTracks() }
+                    } label: {
+                        Text("加载更多")
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                }
+            }
+        }
+    }
+
+    private func trackRow(_ t: Track) -> some View {
+        HStack(spacing: 12) {
+            AlbumArt(size: 48, title: t.title, coverURL: t.coverURL, radius: 8)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(t.title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(t.artist ?? "")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "play.fill")
+                .font(.system(size: 14))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - 数据加载
+
     private func load() async {
         isLoading = true
         defer { isLoading = false }
@@ -160,9 +255,21 @@ struct UserProfileView: View {
             let p = try await API.fetchUserProfile(userId)
             profile = p
             isFollowing = p.isFollowing
-            userTracks = try await API.fetchUserTracks(userId)
+            page = 1
+            let tracks = try await API.fetchUserTracks(userId)
+            userTracks = tracks
+            hasMore = tracks.count >= 20
+        } catch {}
+    }
+
+    private func loadMoreTracks() async {
+        do {
+            page += 1
+            let tracks = try await API.fetchUserTracks(userId)
+            userTracks.append(contentsOf: tracks)
+            hasMore = tracks.count >= 20
         } catch {
-            // 加载失败
+            page -= 1
         }
     }
 
@@ -170,7 +277,6 @@ struct UserProfileView: View {
         do {
             let newState = try await API.toggleFollow(userId)
             isFollowing = newState
-            // 刷新数据
             if let p = profile {
                 profile = UserProfile(
                     userId: p.userId, account: p.account, name: p.name, avatar: p.avatar,
@@ -185,7 +291,6 @@ struct UserProfileView: View {
     }
 }
 
-// String 作为 sheet item 需要 Identifiable 扩展
 extension String: Identifiable {
     public var id: String { self }
 }
