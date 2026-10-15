@@ -335,13 +335,71 @@ struct MineView: View {
     // MARK: - 指示器（左对齐：作品 | 点赞 | 评论，选中项绿色加粗 + 滑块平滑过渡）
 
     private var tabIndicator: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 22) {
+        VStack(spacing: 14) {
+            // 快捷入口卡片：播放历史 / 我的歌单（从底部移到这里）
+            HStack(spacing: 12) {
+                Button {
+                    selectedTab = 3
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Theme.accentSoft)
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(Theme.accent)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("播放历史")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                            Text("看看最近听过的歌")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textTertiary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(PressableButtonStyle())
+
+                Button {
+                    selectedTab = 4
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.purple.opacity(0.15))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.purple)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("我的歌单")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                            Text("收藏喜欢的歌曲")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textTertiary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(PressableButtonStyle())
+            }
+            .padding(.horizontal, 20)
+
+            // 指示器 tab
+            HStack(spacing: 26) {
                 segItem(title: "作品", count: works.total, index: 0)
                 segItem(title: "点赞", count: likes.total, index: 1)
                 segItem(title: "评论", count: comments.total, index: 2)
-                segItem(title: "历史", count: historyTotal, index: 3)
-                segItem(title: "歌单", count: playlistTotal, index: 4)
+                Spacer()
             }
             .padding(.horizontal, 20)
         }
@@ -623,65 +681,6 @@ struct MineView: View {
     private var bottomBar: some View {
         VStack(spacing: 0) {
             Divider().background(Theme.cardBorder)
-
-            // 功能入口卡片：播放历史 / 我的歌单
-            HStack(spacing: 12) {
-                NavigationLink {
-                    HistoryView()
-                } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Theme.accentSoft)
-                                .frame(width: 36, height: 36)
-                            Image(systemName: "clock.arrow.circlepath")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(Theme.accent)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("播放历史")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(Theme.textPrimary)
-                            Text("看看最近听过的歌")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.textTertiary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(PressableButtonStyle())
-
-                NavigationLink {
-                    PlaylistsView()
-                } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(Color.purple.opacity(0.15))
-                                .frame(width: 36, height: 36)
-                            Image(systemName: "music.note.list")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.purple)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("我的歌单")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(Theme.textPrimary)
-                            Text("收藏喜欢的歌曲")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.textTertiary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(PressableButtonStyle())
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
 
             HStack {
                 Text("流萤音乐 v\(appVersion)")
