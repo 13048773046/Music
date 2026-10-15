@@ -173,6 +173,7 @@ struct PlaylistDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tracks: [HistoryTrack] = []
     @State private var isLoading = false
+    @State private var errorText = ""
 
     var body: some View {
         ZStack {
@@ -214,7 +215,17 @@ struct PlaylistDetailView: View {
                     .frame(maxWidth: .infinity)
 
                     // 歌曲列表
-                    if tracks.isEmpty && isLoading {
+                    if !errorText.isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(.red)
+                            Text(errorText)
+                                .font(.system(size: 14))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 40)
+                    } else if tracks.isEmpty && isLoading {
                         ProgressView().padding(.top, 40)
                     } else if tracks.isEmpty {
                         VStack(spacing: 10) {
@@ -299,11 +310,14 @@ struct PlaylistDetailView: View {
 
     private func load() async {
         isLoading = true
+        errorText = ""
         defer { isLoading = false }
         do {
             let (_, list) = try await API.fetchPlaylistTracks(playlist.id)
             tracks = list
-        } catch {}
+        } catch {
+            errorText = "加载失败: \(error.localizedDescription)"
+        }
     }
 
     private func removeTrack(_ t: HistoryTrack) async {

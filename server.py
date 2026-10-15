@@ -2123,7 +2123,7 @@ async function delNotify(id){
                     self._err(404, "playlist not found"); return
                 rows = c.execute("SELECT track_id, track_title, track_artist, track_cover, source, created FROM playlist_tracks WHERE playlist_id=? ORDER BY sort DESC, created DESC", (pid,)).fetchall()
                 c.close()
-                lst = [{"trackId": r[0], "title": r[1], "artist": r[2], "cover": r[3], "source": r[4], "created": r[5]} for r in rows]
+                lst = [{"id": r[0], "trackId": r[0], "title": r[1], "artist": r[2], "cover": r[3], "source": r[4], "created": r[5]} for r in rows]
                 self._json(200, {"playlist": {"id": pl[0], "name": pl[1], "cover": pl[2] or "", "description": pl[3] or "", "trackCount": pl[4] or 0}, "list": lst})
                 return
 
@@ -4499,7 +4499,7 @@ async function delNotify(id){
                 tid = (data.get("trackId") or "").strip()
                 if tid:
                     # 检查是否已存在
-                    existing = c.execute("SELECT id FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid)).fetchone()
+                    existing = c.execute("SELECT 1 FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid)).fetchone()
                     if not existing:
                         cover = data.get("cover") or ""
                         c.execute("""INSERT INTO playlist_tracks(playlist_id, track_id, track_title, track_artist, track_cover, source, created)
