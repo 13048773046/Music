@@ -186,7 +186,7 @@ struct CommentSheet: View {
     private func toggleLike(_ c: API.Comment) async {
         do {
             let result = try await API.toggleCommentLike(c.id)
-            likeState[c.id] = (liked: result.liked, count: result.likeCount)
+            likeState[c.id] = (liked: result.liked, count: result.count)
         } catch {}
     }
 }

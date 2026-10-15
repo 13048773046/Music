@@ -3,6 +3,7 @@ import SwiftUI
 /// 我的歌单列表页
 struct PlaylistsView: View {
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var player: PlayerManager
     @State private var playlists: [Playlist] = []
     @State private var isLoading = false
     @State private var showCreateSheet = false
