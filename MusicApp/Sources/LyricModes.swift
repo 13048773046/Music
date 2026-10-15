@@ -88,11 +88,9 @@ struct ClassicLyricView: View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
             let c = lyricCurrentIndex(display, lines: lines)
-            if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-            let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-            if tRaw > tracker.maxT { tracker.maxT = tRaw }
-            let t = max(c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1,
-                        tracker.maxT)
+            // 滚动推进：切句瞬间归零，之后只增不减（防 TimeLineView 乱序回跳）
+            let raw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
+            let t = advance(raw, c)
             let eased = 1 - (1 - t) * (1 - t) * (1 - t)
             let base = (c > 0 && t < 1) ? c - 1 : c
             let offsetY = (c > 0 && t < 1) ? -step * eased : 0
@@ -123,6 +121,14 @@ struct ClassicLyricView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
+
+    /// 滚动推进跟踪：切句归零、单调递增。放在方法里（TimelineView 闭包是 ViewBuilder，
+    /// 不能直接写赋值 if）。
+    private func advance(_ raw: Double, _ c: Int) -> Double {
+        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
+        tracker.maxT = max(tracker.maxT, raw)
+        return tracker.maxT
+    }
 }
 
 // MARK: - 流光：逐字白→金渐变
@@ -141,9 +147,8 @@ struct LumiereLyricView: View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
             let c = lyricCurrentIndex(display, lines: lines)
-            if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-            let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-            if tRaw > tracker.maxT { tracker.maxT = tRaw }
+            let raw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
+            let t = advance(raw, c)
             let eased = 1 - (1 - t) * (1 - t) * (1 - t)
             let base = (c > 0 && t < 1) ? c - 1 : c
             let offsetY = (c > 0 && t < 1) ? -fontSize * 1.8 * eased : 0
@@ -158,6 +163,12 @@ struct LumiereLyricView: View {
             .offset(y: offsetY)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func advance(_ raw: Double, _ c: Int) -> Double {
+        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
+        tracker.maxT = max(tracker.maxT, raw)
+        return tracker.maxT
     }
 
     @ViewBuilder
@@ -270,11 +281,8 @@ struct PartitaLyricView: View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
             let c = lyricCurrentIndex(display, lines: lines)
-            if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-            let tRaw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
-            if tRaw > tracker.maxT { tracker.maxT = tRaw }
-            let t = max(c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1,
-                        tracker.maxT)
+            let raw = c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1
+            let t = advance(raw, c)
             let eased = 1 - (1 - t) * (1 - t) * (1 - t)
             let base = (c > 0 && t < 1) ? c - 1 : c
             let offsetY = (c > 0 && t < 1) ? -rowHeight * eased : 0
@@ -302,6 +310,12 @@ struct PartitaLyricView: View {
             .offset(y: offsetY)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func advance(_ raw: Double, _ c: Int) -> Double {
+        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
+        tracker.maxT = max(tracker.maxT, raw)
+        return tracker.maxT
     }
 }
 
@@ -367,9 +381,9 @@ struct PendoloLyricView: View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
             let c = lyricCurrentIndex(display, lines: lines)
-            if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-            let tRaw = c > 0 ? min(max((display - lines[c].start) / 0.25, 0), 1) : 1
-            if tRaw > tracker.maxT { tracker.maxT = tRaw }
+            // 切句归零（tracker 重置），返回单调推进值（本模式仅用于防回跳）
+            let raw = c > 0 ? min(max((display - lines[c].start) / 0.25, 0), 1) : 1
+            let _ = advance(raw, c)
 
             ZStack(alignment: .center) {
                 if c >= 0 && c < lines.count {
@@ -406,6 +420,12 @@ struct PendoloLyricView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func advance(_ raw: Double, _ c: Int) -> Double {
+        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
+        tracker.maxT = max(tracker.maxT, raw)
+        return tracker.maxT
     }
 
     private func filledWidth(_ line: KRCLine, _ display: Double) -> CGFloat {

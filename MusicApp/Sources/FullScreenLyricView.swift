@@ -336,19 +336,28 @@ struct FullScreen3DLyricView: View {
     }
 }
 
-// MARK: - 相机运动：整个歌词场景缓慢视角转动
+// MARK: - 相机运动：整个歌词场景缓慢视角转动 + 镜头推拉平移
 
-/// 随时间做 Y/X 轴双频正弦微旋转（perspective 透视），模拟镜头缓移；
-/// 主频大弧度 + 次频小抖动，运动更自然、幅度更明显（±3.2°/±2.0°）。
+/// 模拟"运镜对准歌词"：Y/X 双频正弦微旋转（扫视）+ 镜头推拉呼吸（接近/退后）
+/// + 横向纵向游移（平移），三种运动叠加出相机缓缓运动过去、最终正对当前句的沉浸感。
+/// 幅度克制，不干扰阅读。
 private struct CameraMotion: ViewModifier {
     func body(content: Content) -> some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
+            // 扫视（旋转）：主频大弧度 + 次频小抖动
             let camY = sin(t * 0.11) * 3.2 + sin(t * 0.23 + 1.7) * 0.8   // 左右缓转 + 微抖
             let camX = sin(t * 0.083 + 1.3) * 2.0 + sin(t * 0.17) * 0.5  // 俯仰缓转 + 微抖
+            // 推拉（zoom 呼吸）：镜头缓慢接近再退回，当前句始终正对屏幕
+            let zoom = 1.0 + 0.015 * sin(t * 0.13 + 0.6)
+            // 平移（游移）：横向纵向轻微位移，镜头"走过去"的体感
+            let panX = sin(t * 0.09 + 2.1) * 10.0
+            let panY = sin(t * 0.07 + 0.4) * 6.0
             content
+                .scaleEffect(zoom)
                 .rotation3DEffect(.degrees(camY), axis: (x: 0, y: 1, z: 0), perspective: 0.5)
                 .rotation3DEffect(.degrees(camX), axis: (x: 1, y: 0, z: 0), perspective: 0.5)
+                .offset(x: panX, y: panY)
         }
     }
 }
