@@ -31,13 +31,28 @@ struct OrientationLock: UIViewControllerRepresentable {
 
         override var supportedInterfaceOrientations: UIInterfaceOrientationMask { mask }
 
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            forceOrientation()
+        }
+
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            if let force {
-                // KVC 强制旋转（仅个人分发包使用；App Store 需改用 supportedInterfaceOrientations 方案）
+            forceOrientation()
+        }
+
+        /// 强制旋转：呈现动画前后各触发一次 + 延迟再触发一次，规避系统方向重算时机问题；
+        /// 配合 supportedInterfaceOrientations，dismiss 后由下层竖屏控制器自动转回。
+        private func forceOrientation() {
+            guard let force else { return }
+            setNeedsUpdateOfSupportedInterfaceOrientations()
+            DispatchQueue.main.async {
                 UIDevice.current.setValue(force.rawValue, forKey: "orientation")
             }
-            setNeedsUpdateOfSupportedInterfaceOrientations()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                UIDevice.current.setValue(force.rawValue, forKey: "orientation")
+                self.setNeedsUpdateOfSupportedInterfaceOrientations()
+            }
         }
     }
 }

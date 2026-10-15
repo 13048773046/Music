@@ -420,8 +420,10 @@ struct PlayerCard: View {
 
                 VStack(spacing: 0) {
                     // 顶部标题栏已移到 MainTabView 全局层级（与底部 TabBar 平级），
-                    // 这里直接从封面开始（顶部留白由全局 TopBar 占位）
-                    Spacer(minLength: 6 + topInset + 50)
+                    // 这里直接从封面开始（顶部留白由全局 TopBar 占位）。
+                    // topInset 为 keyWindow 状态栏真实高度；兜底 50pt 防注入时机/刘海机读数
+                    // 异常为 0 时封面/歌名被状态栏或 TopBar 遮挡。
+                    Spacer(minLength: 6 + max(topInset, 50) + 50)
 
                     // 封面区域（1:1 正方形，小圆角，居中）
                     AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
@@ -445,7 +447,7 @@ struct PlayerCard: View {
                         }
                         .layoutPriority(1)
 
-                        // 更多按钮：竖排三点，打开歌曲信息菜单（音效 / 全屏播放等）
+                        // 更多按钮：竖排三点，打开歌曲信息菜单（无背景，仅图标）
                         Button {
                             showMenu = true
                         } label: {
@@ -453,12 +455,8 @@ struct PlayerCard: View {
                                 .font(.system(size: 19, weight: .semibold))
                                 .rotationEffect(.degrees(90))
                                 .foregroundColor(textPrimary(onLight: onLight))
-                                .frame(width: 38, height: 38)
-                                .background(
-                                    (onLight ? Color.black.opacity(0.06) : Color.white.opacity(0.14)),
-                                    in: Circle()
-                                )
-                                .contentShape(Circle())
+                                .frame(width: 34, height: 34)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .fixedSize()

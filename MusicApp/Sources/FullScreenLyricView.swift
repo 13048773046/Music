@@ -18,6 +18,8 @@ struct FullScreenLyricView: View {
 
     @EnvironmentObject private var player: PlayerManager
     @Environment(\.dismiss) private var dismiss
+    /// 横屏安全区：刘海在左右两侧，顶部/底部为 0；所有控件避开刘海
+    @Environment(\.safeAreaInsets) private var safeArea
 
     /// 背景：封面主色压暗（横屏深底白字沉浸）
     private var baseColor: Color {
@@ -59,8 +61,9 @@ struct FullScreenLyricView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 8)
+                .padding(.leading, max(safeArea.leading, 0) + 24)
+                .padding(.trailing, max(safeArea.trailing, 0) + 20)
+                .padding(.top, safeArea.top + 8)
 
                 Spacer(minLength: 6)
 
@@ -77,10 +80,11 @@ struct FullScreenLyricView: View {
                         }
                     } else {
                         FullScreen3DLyricView(lines: lines, fontSize: 32)
-                            .padding(.horizontal, 20)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.leading, max(safeArea.leading, 0) + 12)
+                .padding(.trailing, max(safeArea.trailing, 0) + 12)
                 .modifier(CameraMotion())   // 视角转动（相机缓移）
 
                 // 底部：时间 + 进度
@@ -106,8 +110,9 @@ struct FullScreenLyricView: View {
                     }
                     .frame(height: 3)
                 }
-                .padding(.horizontal, 26)
-                .padding(.bottom, 24)
+                .padding(.leading, max(safeArea.leading, 0) + 26)
+                .padding(.trailing, max(safeArea.trailing, 0) + 26)
+                .padding(.bottom, max(safeArea.bottom, 0) + 16)
             }
         }
         .statusBarHidden(true)

@@ -3,9 +3,12 @@ import SwiftUI
 struct DiscoverView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var library: Library
+    @Environment(\.scenePhase) private var scenePhase
     @State private var state: LoadState = .loading
     @State private var latest: [Track] = []
     @State private var recommended: [Track] = []
+    /// 切前台刷新节流：距上次刷新 ≥ 5 分钟才重拉（后端 3 小时去重保证不重复）
+    @State private var lastRecommendAt: Date = .distantPast
 
     var body: some View {
         NavigationStack {
@@ -65,6 +68,15 @@ struct DiscoverView: View {
             default:
                 break
             }
+        }
+        // 切前台（App 从后台回前台）且距上次刷新 ≥5 分钟：重拉个性化推荐。
+        // 之前"第二次打开还是同一批"的根因之一：切回前台不刷新，展示/播放的仍是旧推荐；
+        // 后端 3 小时去重保证重拉拿到新一批（不重复推同一首）。
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active else { return }
+            guard Date().timeIntervalSince(lastRecommendAt) >= 300 else { return }
+            lastRecommendAt = Date()
+            Task { await loadRecommended() }
         }
         .tint(Theme.accent)
     }
