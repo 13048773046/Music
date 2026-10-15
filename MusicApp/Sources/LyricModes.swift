@@ -1070,55 +1070,65 @@ struct CappellaLyricView: View {
 }
 
 // ============================================================
-// 模式选择面板（顶栏按钮弹出，网格 2 列）
+// 模式选择浮层（顶栏按钮弹出，网格 2 列；页面内 overlay，不依赖 sheet——
+// 避免横屏 fullScreenCover 下 sheet 在部分 iOS 16 机型弹不出的兼容问题）
 // ============================================================
 
-struct LyricModePickerSheet: View {
+struct LyricModePickerOverlay: View {
     @Binding var selection: LyricDisplayMode
-    @Environment(\.dismiss) private var dismiss
+    @Binding var isPresented: Bool
 
     private let columns = [GridItem(.flexible(), spacing: 14),
                            GridItem(.flexible(), spacing: 14)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("歌词展示")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundColor(Theme.textPrimary)
+        ZStack {
+            // 半透明遮罩：点空白处关闭
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+                .onTapGesture { isPresented = false }
 
-            LazyVGrid(columns: columns, spacing: 14) {
-                ForEach(LyricDisplayMode.allCases) { mode in
-                    Button {
-                        selection = mode
-                        LyricModeStore.current = mode
-                        dismiss()
-                    } label: {
-                        VStack(spacing: 8) {
-                            Image(systemName: mode.icon)
-                                .font(.system(size: 20))
-                                .foregroundColor(selection == mode ? Theme.accent : Theme.textSecondary)
-                            Text(mode.rawValue)
-                                .font(.system(size: 13, weight: selection == mode ? .semibold : .medium))
-                                .foregroundColor(selection == mode ? Theme.accent : Theme.textSecondary)
+            VStack(alignment: .leading, spacing: 18) {
+                Text("歌词展示")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundColor(.white)
+
+                LazyVGrid(columns: columns, spacing: 14) {
+                    ForEach(LyricDisplayMode.allCases) { mode in
+                        Button {
+                            selection = mode
+                            LyricModeStore.current = mode
+                            isPresented = false
+                        } label: {
+                            VStack(spacing: 8) {
+                                Image(systemName: mode.icon)
+                                    .font(.system(size: 20))
+                                    .foregroundColor(selection == mode ? .white : .white.opacity(0.62))
+                                Text(mode.rawValue)
+                                    .font(.system(size: 13, weight: selection == mode ? .semibold : .medium))
+                                    .foregroundColor(selection == mode ? .white : .white.opacity(0.62))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                (selection == mode ? Color.white.opacity(0.18) : Color.white.opacity(0.08)),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(selection == mode ? Color.white.opacity(0.5) : .clear, lineWidth: 1)
+                            )
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(
-                            (selection == mode ? Theme.accent.opacity(0.14) : Theme.card.opacity(0.6)),
-                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(selection == mode ? Theme.accent.opacity(0.6) : .clear, lineWidth: 1)
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            Spacer(minLength: 0)
+            .padding(20)
+            .frame(maxWidth: 420)
+            .background(Color(hex: 0x1e1e21), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(28)
         }
-        .padding(20)
-        .presentationDetents([.height(340)])
-        .presentationDragIndicator(.visible)
+        .transition(.opacity)
+        .zIndex(50)
     }
 }

@@ -66,7 +66,7 @@ struct FullScreenLyricView: View {
                     Spacer(minLength: 8)
                     // 歌词展示模式切换（Folia 多模式）
                     Button {
-                        showModePicker = true
+                        withAnimation(.easeOut(duration: 0.18)) { showModePicker = true }
                     } label: {
                         Image(systemName: "square.grid.2x2")
                             .font(.system(size: 15, weight: .semibold))
@@ -76,11 +76,9 @@ struct FullScreenLyricView: View {
                     }
                     .buttonStyle(.plain)
                     Button {
-                        // 退出全屏：先复位全局方向授权 + 强制转回竖屏，再关闭。
-                        // 不能只靠 dismiss 后主界面 OrientationVC 的 viewWillAppear——
-                        // 它作为 child controller 不会被触发，设备会停在横屏。
+                        // 退出全屏：只复位方向授权并关闭；竖屏转回由 fullScreenCover
+                        // onDismiss 兜底执行（避免 setValue 与 dismiss 同帧竞态导致按钮无响应）。
                         FullScreenOrientation.shared.isFullScreen = false
-                        UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
                         dismiss()
                     } label: {
                         Image(systemName: "xmark")
@@ -94,6 +92,9 @@ struct FullScreenLyricView: View {
                 .padding(.leading, max(safeArea.leading, 0) + 24)
                 .padding(.trailing, max(safeArea.trailing, 0) + 20)
                 .padding(.top, safeArea.top + 8)
+                // 确保顶栏永远在最上层、按钮命中区域明确
+                .zIndex(10)
+                .allowsHitTesting(true)
 
                 Spacer(minLength: 6)
 
@@ -175,10 +176,13 @@ struct FullScreenLyricView: View {
         // 沿用播放页的沉浸式状态栏方式：不隐藏状态栏，背景铺满、内容在安全区内
         .preferredColorScheme(.dark)
         .background(Color.black)
-        // 歌词展示模式切换面板
-        .sheet(isPresented: $showModePicker) {
-            LyricModePickerSheet(selection: $selectedMode)
+        // 歌词展示模式切换浮层（页面内 overlay，不依赖 sheet）
+        .overlay {
+            if showModePicker {
+                LyricModePickerOverlay(selection: $selectedMode, isPresented: $showModePicker)
+            }
         }
+        .animation(.easeOut(duration: 0.18), value: showModePicker)
         // 兜底：无论以何种方式退出全屏，都复位全局横屏授权（AppDelegate 恢复竖屏）
         .onDisappear {
             FullScreenOrientation.shared.isFullScreen = false
