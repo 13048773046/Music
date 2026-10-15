@@ -151,6 +151,22 @@ struct FitWidth: ViewModifier {
     }
 }
 
+/// 防溢出（双向）：内容超高/超宽时按可用尺寸等比缩放，保证完整显示在容器内
+struct FitFrame: ViewModifier {
+    let estWidth: CGFloat
+    let estHeight: CGFloat
+    func body(content: Content) -> some View {
+        GeometryReader { g in
+            content
+                .scaleEffect(min(1,
+                                 g.size.width / max(estWidth, 1),
+                                 g.size.height / max(estHeight, 1)),
+                             anchor: .center)
+                .frame(width: g.size.width, height: g.size.height, alignment: .center)
+        }
+    }
+}
+
 // ============================================================
 // 浮名 Tilt：大字排版 + 随机斜体行 + 字符上下交错 + 逐字脉冲
 // ============================================================
@@ -164,6 +180,11 @@ struct TiltLyricView: View {
     private static let enterDuration: Double = 0.55
     private final class Tracker { var lastC: Int = -2 }
     @State private var tracker = Tracker()
+
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
 
     var body: some View {
         TimelineView(.animation) { _ in
@@ -194,6 +215,9 @@ struct TiltLyricView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 双向防溢出：拆行排版超高/超宽时整体等比缩放，完整显示
+            .modifier(FitFrame(estWidth: 14 * fontSize * 1.05,
+                               estHeight: fontSize * 8.9))
         }
     }
 
@@ -396,6 +420,11 @@ struct DioramaLyricView: View {
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
@@ -418,6 +447,9 @@ struct DioramaLyricView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // 相机运镜（Folia diorama 的镜头缓移：扫视 + 推拉 + 游移）
             .modifier(CameraMotion())
+            // 双向防溢出：走廊纵深超高时整体等比缩放，完整显示
+            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
+                               estHeight: fontSize * 11.2))
         }
     }
 
@@ -477,6 +509,11 @@ struct PartitaLyricView: View {
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
@@ -507,6 +544,9 @@ struct PartitaLyricView: View {
             }
             .offset(y: offsetY)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 双向防溢出：分栏超高/超宽时整体等比缩放
+            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
+                               estHeight: fontSize * 4.6))
         }
     }
 
@@ -573,6 +613,11 @@ struct LumiereLyricView: View {
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { ctx in
             let display = lyricDisplayTime(progress)
@@ -600,6 +645,9 @@ struct LumiereLyricView: View {
                 .offset(y: offsetY)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 双向防溢出：逐字长行超高/超宽时整体等比缩放
+            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
+                               estHeight: fontSize * 6.1))
         }
     }
 
@@ -667,6 +715,11 @@ struct PendoloLyricView: View {
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { ctx in
             let display = lyricDisplayTime(progress)
@@ -700,6 +753,9 @@ struct PendoloLyricView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 双向防溢出：钟摆+表盘超高时整体等比缩放
+                .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
+                                   estHeight: fontSize * 8.7))
             }
         }
     }
@@ -782,6 +838,11 @@ struct CadenzaLyricView: View {
     private final class Tracker { var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { ctx in
             let display = lyricDisplayTime(progress)
@@ -819,6 +880,9 @@ struct CadenzaLyricView: View {
                 .offset(y: floatY)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 双向防溢出：光束+大字超高时整体等比缩放
+            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
+                               estHeight: fontSize * 4.2 + 10))
         }
     }
 
@@ -864,6 +928,11 @@ struct MonetLyricView: View {
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { ctx in
             let display = lyricDisplayTime(progress)
@@ -905,6 +974,9 @@ struct MonetLyricView: View {
                 .offset(y: offsetY)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 双向防溢出：歌词栏超高/超宽时整体等比缩放
+            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 1.05,
+                               estHeight: fontSize * 4.2))
         }
     }
 
@@ -929,6 +1001,11 @@ struct CappellaLyricView: View {
     private final class Tracker { var lastC: Int = -2 }
     @State private var tracker = Tracker()
 
+    /// 最长歌词行字符数（用于溢出自适应缩放估算）
+    private var maxChars: Int {
+        (lines.map { $0.text.filter { !$0.isWhitespace }.count }.max() ?? 1)
+    }
+
     var body: some View {
         TimelineView(.animation) { _ in
             let display = lyricDisplayTime(progress)
@@ -945,6 +1022,9 @@ struct CappellaLyricView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.vertical, fontSize)
+            // 双向防溢出：气泡队列超高时整体等比缩放，完整显示
+            .modifier(FitFrame(estWidth: CGFloat(maxChars) * fontSize * 0.78 * 1.05,
+                               estHeight: fontSize * 10.9))
         }
     }
 
