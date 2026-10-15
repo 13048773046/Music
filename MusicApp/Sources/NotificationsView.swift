@@ -349,7 +349,11 @@ struct NotificationsView: View {
             unreadCount = r.unread
             // 同步全局未读数（TabBar/铃铛红点）
             NotificationBus.shared.setUnread(r.unread)
-            Task { await API.markNotificationsRead() }
+            Task {
+                await API.markNotificationsRead()
+                // 已读标记完成后立即清除全局红点：看过通知返回首页，红点马上消失
+                NotificationBus.shared.setUnread(0)
+            }
         } catch {
             loadFailed = true
         }
