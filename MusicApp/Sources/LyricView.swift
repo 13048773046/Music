@@ -250,6 +250,8 @@ struct LyricRowView: View, Equatable {
     let tint: Color
     /// 歌词字号（与 LyricPreview.fontSize 保持一致；字宽测量用同款字号）
     var fontSize: CGFloat = 20
+    /// 字重（全屏 3D 歌词用 .semibold 更清晰；竖屏预览默认 .medium）
+    var fontWeight: Font.Weight = .medium
 
     /// 逐字渲染宽度缓存（onAppear 一次性测量）
     @State private var charWidths: [CGFloat] = []
@@ -262,7 +264,8 @@ struct LyricRowView: View, Equatable {
         lhs.scale == rhs.scale &&
         lhs.opacity == rhs.opacity &&
         lhs.tint == rhs.tint &&
-        lhs.fontSize == rhs.fontSize
+        lhs.fontSize == rhs.fontSize &&
+        lhs.fontWeight == rhs.fontWeight
     }
 
     /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
@@ -300,7 +303,7 @@ struct LyricRowView: View, Equatable {
                     }
             }
         }
-        .font(.system(size: fontSize, weight: .medium))
+        .font(.system(size: fontSize, weight: fontWeight))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .scaleEffect(CGFloat(scale), anchor: .leading)
@@ -318,9 +321,20 @@ struct LyricRowView: View, Equatable {
 
     /// 用与 SwiftUI 同款字体一次性测量每个字的渲染宽度
     private func measure() {
-        let font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
+        let font = UIFont.systemFont(ofSize: fontSize, weight: uiWeight(fontWeight))
         charWidths = line.words.map { w in
             (w.text as NSString).size(withAttributes: [.font: font]).width
+        }
+    }
+
+    /// Font.Weight → UIFont.Weight（measure 与渲染必须同款字体，否则 mask 宽度错位）
+    private func uiWeight(_ w: Font.Weight) -> UIFont.Weight {
+        switch w {
+        case .bold: return .bold
+        case .semibold: return .semibold
+        case .regular: return .regular
+        case .light: return .light
+        default: return .medium
         }
     }
 }
