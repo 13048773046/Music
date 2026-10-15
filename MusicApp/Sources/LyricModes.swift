@@ -133,6 +133,24 @@ func lyricFillWidth(_ line: KRCLine, at now: Double, fontSize: CGFloat, weight: 
     return w
 }
 
+/// 文本估算宽度（中文字符宽≈字号，安全系数 1.05；用于溢出自适应缩放）
+func lyricEstWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
+    let chars = text.filter { !$0.isWhitespace }.count
+    return CGFloat(chars) * fontSize * 1.05
+}
+
+/// 防溢出：内容超宽时按可用宽度等比缩放（任何模式都不会跑出屏幕外）
+struct FitWidth: ViewModifier {
+    let estWidth: CGFloat
+    func body(content: Content) -> some View {
+        GeometryReader { g in
+            content
+                .scaleEffect(min(1, g.size.width / max(estWidth, 1)), anchor: .center)
+                .frame(width: g.size.width, height: g.size.height, alignment: .center)
+        }
+    }
+}
+
 // ============================================================
 // 浮名 Tilt：大字排版 + 随机斜体行 + 字符上下交错 + 逐字脉冲
 // ============================================================
@@ -140,7 +158,7 @@ func lyricFillWidth(_ line: KRCLine, at now: Double, fontSize: CGFloat, weight: 
 struct TiltLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 42
+    var fontSize: CGFloat = 34
 
     // 切句淡入时长
     private static let enterDuration: Double = 0.55
@@ -332,6 +350,8 @@ private struct TiltGlyphLine: View {
         }
         .frame(width: totalWidth + letterSpacing * CGFloat(max(nonSpaceCount - 1, 0)),
                height: fontSize * 1.4)
+        // 防溢出：超过可用宽度自动等比缩小
+        .modifier(FitWidth(estWidth: totalWidth + letterSpacing * CGFloat(max(nonSpaceCount - 1, 0))))
     }
 }
 
@@ -362,7 +382,7 @@ private struct TiltSegmentRow: View {
 struct DioramaLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 32
+    var fontSize: CGFloat = 30
 
     private var rowGap: CGFloat { fontSize * 1.6 }
     private static let scrollDuration: Double = 0.32
@@ -451,7 +471,7 @@ struct DioramaLyricView: View {
 struct PartitaLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 30
+    var fontSize: CGFloat = 26
 
     private static let scrollDuration: Double = 0.26
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
@@ -533,6 +553,8 @@ struct PartitaLyricView: View {
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
+        // 防溢出：长句自动等比缩小
+        .modifier(FitWidth(estWidth: lyricEstWidth(words.map { $0.text }.joined(), fontSize: fontSize)))
     }
 }
 
@@ -545,7 +567,7 @@ struct PartitaLyricView: View {
 struct LumiereLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 34
+    var fontSize: CGFloat = 28
 
     private static let scrollDuration: Double = 0.26
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
@@ -626,6 +648,8 @@ struct LumiereLyricView: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .opacity(isCurrent ? 1.0 : (isOld ? 0.5 : 0.35))
         .scaleEffect(isCurrent ? 1 : 0.7, anchor: .center)
+        // 防溢出：长句自动等比缩小
+        .modifier(FitWidth(estWidth: lyricEstWidth(line.text, fontSize: fontSize)))
     }
 }
 
@@ -638,7 +662,7 @@ struct LumiereLyricView: View {
 struct PendoloLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 32
+    var fontSize: CGFloat = 28
 
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
     @State private var tracker = Tracker()
@@ -753,7 +777,7 @@ private struct PendoloDial: View {
 struct CadenzaLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 38
+    var fontSize: CGFloat = 32
 
     private final class Tracker { var lastC: Int = -2 }
     @State private var tracker = Tracker()
@@ -820,6 +844,8 @@ struct CadenzaLyricView: View {
         }
         .lineLimit(1)
         .minimumScaleFactor(0.55)
+        // 防溢出：长句自动等比缩小
+        .modifier(FitWidth(estWidth: lyricEstWidth(line.text, fontSize: fontSize)))
     }
 }
 
@@ -832,7 +858,7 @@ struct CadenzaLyricView: View {
 struct MonetLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 32
+    var fontSize: CGFloat = 28
 
     private static let scrollDuration: Double = 0.3
     private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
@@ -898,7 +924,7 @@ struct MonetLyricView: View {
 struct CappellaLyricView: View {
     let lines: [KRCLine]
     let progress: Double
-    var fontSize: CGFloat = 26
+    var fontSize: CGFloat = 22
 
     private final class Tracker { var lastC: Int = -2 }
     @State private var tracker = Tracker()

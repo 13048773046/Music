@@ -138,8 +138,10 @@ struct FullScreenLyricView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.leading, max(safeArea.leading, 0) + 12)
-                .padding(.trailing, max(safeArea.trailing, 0) + 12)
+                .padding(.leading, max(safeArea.leading, 0) + 20)
+                .padding(.trailing, max(safeArea.trailing, 0) + 20)
+                // 裁剪保护：任何模式下歌词都不会溢出屏幕外
+                .clipped()
                 // 相机运镜仅由镜台（Diorama）模式内部承载，其余模式保持平正排版
 
                 // 底部：时间 + 进度
@@ -170,7 +172,7 @@ struct FullScreenLyricView: View {
                 .padding(.bottom, max(safeArea.bottom, 0) + 16)
             }
         }
-        .statusBarHidden(true)
+        // 沿用播放页的沉浸式状态栏方式：不隐藏状态栏，背景铺满、内容在安全区内
         .preferredColorScheme(.dark)
         .background(Color.black)
         // 歌词展示模式切换面板
