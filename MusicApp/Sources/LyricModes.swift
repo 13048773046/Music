@@ -1746,7 +1746,8 @@ struct PaperDioramaLyricView: View {
                     ForEach((c - 2)...(c + 3), id: \.self) { li in
                         if lines.indices.contains(li) {
                             let line = lines[li]
-                            ForEach(Array(line.words.enumerated()), id: \.offset) { wk, word in
+                            let vw = Self.visualWords(line)
+                            ForEach(Array(vw.enumerated()), id: \.offset) { wk, word in
                                 let slot = Self.slot(li: li, wk: wk, line: line, word: word,
                                                      c: c, tSung: tSung, now: now, seed: seedD)
                                 PaperWordCard(word: word, line: line, li: li, wk: wk,
@@ -1814,6 +1815,53 @@ struct PaperDioramaLyricView: View {
         let blur = max(0, (d - PaperProps.FOG_NEAR) / (PaperProps.FOG_FAR - PaperProps.FOG_NEAR)) * 3
         return PaperWordSlot(x: sx, y: sy, scale: scale, opacity: opacity, blur: blur,
                              rollDeg: roll * 57.2958, yawDeg: yaw * 57.2958)
+    }
+
+    /// 视觉词：KRC 用真实逐字词；LRC 整句按语义/字数切成 2-3 字词（句内均匀时间），
+    /// 以便素笺在 LRC 下仍有"词级随机摆位"，且整句在前 72% 时间内快速唱完（不假拖长）。
+    private static func visualWords(_ line: KRCLine) -> [KRWord] {
+        if line.words.count > 1 { return line.words }
+        let groups = splitPaperGroups(line.text)
+        guard groups.count > 1 else { return line.words }
+        let total = groups.map(\.count).reduce(0, +)
+        let span = max((line.end - line.start) * 0.72, Double(groups.count) * 0.32)
+        let t0 = line.start
+        var acc = 0
+        var words: [KRWord] = []
+        for g in groups {
+            let w = max(g.count, 1)
+            let ws = t0 + span * Double(acc) / Double(total)
+            let we = t0 + span * Double(acc + w) / Double(total)
+            words.append(KRWord(text: g, start: ws, end: max(we, ws + 0.3)))
+            acc += w
+        }
+        return words
+    }
+
+    private static func splitPaperGroups(_ s: String) -> [String] {
+        let separators = Set("，。！？、,.!?;：:~～()（）【】[] ")
+        var groups: [String] = []
+        var current = ""
+        for ch in s {
+            if separators.contains(ch) {
+                if !current.isEmpty { groups += chunkPaper(current); current = "" }
+            } else { current.append(ch) }
+        }
+        if !current.isEmpty { groups += chunkPaper(current) }
+        return groups
+    }
+
+    private static func chunkPaper(_ s: String) -> [String] {
+        let chars = Array(s)
+        var out: [String] = []
+        var i = 0
+        while i < chars.count {
+            let rem = chars.count - i
+            let take = rem > 3 && rem % 3 != 0 ? 2 : min(3, rem)
+            out.append(String(chars[i..<i + take]))
+            i += take
+        }
+        return out
     }
 
     private static func ensureDeco(_ cache: DecoCache, seed: Double) {
