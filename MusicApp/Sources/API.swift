@@ -312,6 +312,8 @@ enum API {
         let userName: String
         let content: String
         let created: Double
+        /// 评论图片（服务端文件名，经 /api/comment-image/{name} 访问；旧评论无图时为 nil）
+        let images: [String]?
     }
 
     static func fetchComments(trackId: String) async throws -> [Comment] {
@@ -320,12 +322,13 @@ enum API {
         return try JSONDecoder().decode([Comment].self, from: data)
     }
 
-    static func postComment(trackId: String, userId: String, userName: String, content: String) async throws {
+    static func postComment(trackId: String, userId: String, userName: String, content: String,
+                            images: [String] = []) async throws {
         var req = URLRequest(url: base.appendingPathComponent("comment").appendingPathComponent(trackId))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "userId": userId, "userName": userName, "content": content
+            "userId": userId, "userName": userName, "content": content, "images": images
         ])
         applyAuth(&req)
         let (_, resp) = try await URLSession.shared.data(for: req)
@@ -333,6 +336,32 @@ enum API {
         guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
+    }
+
+    /// 上传评论图片（multipart，服务端校验图片格式/大小），返回服务端文件名
+    static func uploadCommentImage(_ imageData: Data) async throws -> String {
+        var body = MultipartBody()
+        body.file("image", fileName: "comment.jpg", contentType: "image/jpeg", fileData: imageData)
+        body.finish()
+        var req = URLRequest(url: base.appendingPathComponent("upload-comment-image"))
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body.data
+        req.timeoutInterval = 30
+        applyAuth(&req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try checkAuth(resp)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = obj["name"] as? String, !name.isEmpty else {
+            throw URLError(.badServerResponse)
+        }
+        return name
+    }
+
+    /// 评论图片访问 URL
+    static func commentImageURL(_ name: String) -> URL {
+        base.appendingPathComponent("comment-image").appendingPathComponent(name)
     }
 
     static func coverURL(_ id: String) -> URL {

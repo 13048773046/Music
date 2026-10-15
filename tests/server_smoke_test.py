@@ -375,6 +375,39 @@ def run_all(port, root, strict_port, strict_root):
                                                      "content": "hi\x00\x01world"}, AUTH)
     check("控制字符评论 200", s == 200, body[:100])
 
+    print("== 14.6 评论图片上传与发布 ==")
+    # 1x1 透明 PNG（满足魔数校验）
+    tiny_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    body, ct = multipart({}, {"image": ("c.png", tiny_png, "image/png")})
+    s, body, _ = req("POST", "/api/upload-comment-image", body, {"Content-Type": ct, **AUTH})
+    img = json.loads(body)
+    check("评论图片上传 200 返回 name",
+          s == 200 and re.fullmatch(r"cmt_[0-9a-f]{32}\.png", img.get("name", "")), body[:100])
+    cname = img.get("name", "")
+    s, body, _ = req("GET", f"/api/comment-image/{cname}")
+    check("评论图片访问 200 内容一致", s == 200 and body == tiny_png, f"s={s}")
+    s, body, _ = req("GET", "/api/comment-image/..%2F..%2Fetc%2Fpasswd")
+    check("评论图片路径穿越 404", s == 404, f"s={s}")
+    body, ct = multipart({}, {"image": ("b.png", b"NOTPNGDATA", "image/png")})
+    s, body, _ = req("POST", "/api/upload-comment-image", body, {"Content-Type": ct, **AUTH})
+    check("非法图片上传 400", s == 400, f"s={s}")
+    s, body, _ = req("POST", f"/api/comment/{tid}", {"userId": uid, "userName": "测试用户",
+                                                     "content": "带图评论", "images": [cname]}, AUTH)
+    check("带图评论 200", s == 200, body[:100])
+    s, body, _ = req("GET", f"/api/comments/{tid}")
+    comments = json.loads(body)
+    check("评论列表返回 images",
+          any(c["content"] == "带图评论" and c["images"] == [cname] for c in comments), body[:200])
+    # 非法文件名注入被过滤（不入库）
+    s, body, _ = req("POST", f"/api/comment/{tid}", {"userId": uid, "userName": "x",
+                                                     "content": "注入图片", "images": ["../evil.png"]}, AUTH)
+    check("非法图片名评论 200(被过滤)", s == 200, body[:100])
+    s, body, _ = req("GET", f"/api/comments/{tid}")
+    comments = json.loads(body)
+    inject = [c for c in comments if c["content"] == "注入图片"]
+    check("非法图片名未入库", bool(inject) and inject[0].get("images") == [], body[:200])
+
     print("== 15. 严格模式（MUSIC_AUTH_STRICT=1）==")
     BASE_S = f"http://127.0.0.1:{strict_port}"
     req_s = make_req(BASE_S)

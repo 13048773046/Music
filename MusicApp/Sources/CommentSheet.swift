@@ -14,6 +14,12 @@ struct CommentSheet: View {
     @State private var sending = false
     /// 评论点赞状态：commentId -> (liked: Bool, count: Int)
     @State private var likeState: [String: (liked: Bool, count: Int)] = [:]
+    /// 已上传待发布的评论图片（服务端文件名，最多 6 张）
+    @State private var pendingImages: [String] = []
+    @State private var uploadingImages = false
+    @State private var showImagePicker = false
+    /// 大图预览中的图片文件名
+    @State private var previewImage: String?
 
     var body: some View {
         ZStack {
@@ -71,6 +77,24 @@ struct CommentSheet: View {
                                             Text(c.content)
                                                 .font(.system(size: 14))
                                                 .foregroundColor(Theme.textPrimary)
+                                            // 评论图片：横向缩略图，点击放大预览
+                                            if let imgs = c.images, !imgs.isEmpty {
+                                                HStack(spacing: 6) {
+                                                    ForEach(imgs, id: \.self) { name in
+                                                        CachedCoverImage(
+                                                            url: API.commentImageURL(name),
+                                                            title: "",
+                                                            placeholder: RoundedRectangle(cornerRadius: 10)
+                                                                .fill(Theme.card)
+                                                        )
+                                                        .frame(width: 76, height: 76)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                                        .contentShape(Rectangle())
+                                                        .onTapGesture { previewImage = name }
+                                                    }
+                                                }
+                                                .padding(.top, 6)
+                                            }
                                         }
 
                                         Spacer()
@@ -116,8 +140,55 @@ struct CommentSheet: View {
                     }
                 }
 
+                // 待发布图片缩略图（横向滚动，可删除单张）
+                if !pendingImages.isEmpty || uploadingImages {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(pendingImages, id: \.self) { name in
+                                CachedCoverImage(
+                                    url: API.commentImageURL(name),
+                                    title: "",
+                                    placeholder: RoundedRectangle(cornerRadius: 8).fill(Theme.card)
+                                )
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(alignment: .topTrailing) {
+                                    Button {
+                                        pendingImages.removeAll { $0 == name }
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 16))
+                                            .foregroundColor(.white)
+                                            .background(Circle().fill(Color.black.opacity(0.6)))
+                                    }
+                                    .padding(2)
+                                }
+                            }
+                            if uploadingImages {
+                                ProgressView()
+                                    .tint(Theme.accent)
+                                    .frame(width: 56, height: 56)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                    }
+                }
+
                 // 输入栏
                 HStack(spacing: 10) {
+                    // 图片按钮：选择相册图片发布到评论（最多 6 张）
+                    Button {
+                        showImagePicker = true
+                    } label: {
+                        Image(systemName: "photo")
+                            .font(.system(size: 17))
+                            .foregroundColor(Theme.textSecondary)
+                            .frame(width: 38, height: 38)
+                            .background(Theme.card, in: RoundedRectangle(cornerRadius: 18))
+                    }
+                    .disabled(pendingImages.count >= 6 || uploadingImages)
+
                     TextField("发条友善的评论…", text: $text)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -135,7 +206,8 @@ struct CommentSheet: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .background(Theme.accent, in: Capsule())
-                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty || sending)
+                    .disabled((text.trimmingCharacters(in: .whitespaces).isEmpty && pendingImages.isEmpty)
+                              || sending || uploadingImages)
                 }
                 .padding(16)
                 .background(Theme.background)
@@ -148,6 +220,41 @@ struct CommentSheet: View {
                 await API.reportBehavior([ev])
             }
             await load()
+        }
+        // 图片选择器：选图后逐张上传，上传完显示待发缩略图
+        .sheet(isPresented: $showImagePicker) {
+            MultiImagePicker { datas in
+                Task { await uploadImages(datas) }
+            }
+        }
+        // 评论图片大图预览（点击缩略图打开）
+        .sheet(isPresented: Binding(
+            get: { previewImage != nil },
+            set: { if !$0 { previewImage = nil } }
+        )) {
+            if let name = previewImage {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    AsyncImage(url: API.commentImageURL(name)) { img in
+                        img.resizable().scaledToFit()
+                    } placeholder: {
+                        ProgressView().tint(.white)
+                    }
+                    .padding(24)
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button { previewImage = nil } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 26))
+                                    .foregroundColor(.white.opacity(0.85))
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(16)
+                }
+            }
         }
     }
 
@@ -163,8 +270,10 @@ struct CommentSheet: View {
         do {
             try await API.postComment(trackId: track.id,
                                       userId: u.id, userName: u.name,
-                                      content: text.trimmingCharacters(in: .whitespaces))
+                                      content: text.trimmingCharacters(in: .whitespaces),
+                                      images: pendingImages)
             text = ""
+            pendingImages = []
             await load()
             // 行为上报：发表评论
             let ev = API.BehaviorEvent(trackId: track.id, event: "comment", value: 1)
@@ -172,6 +281,19 @@ struct CommentSheet: View {
         } catch {
         }
         sending = false
+    }
+
+    /// 逐张上传评论图片，成功后加入待发布列表
+    private func uploadImages(_ datas: [Data]) async {
+        uploadingImages = true
+        var ok: [String] = []
+        for d in datas {
+            if let name = try? await API.uploadCommentImage(d) {
+                ok.append(name)
+            }
+        }
+        pendingImages.append(contentsOf: ok)
+        uploadingImages = false
     }
 
     // MARK: - 评论点赞

@@ -31,6 +31,7 @@ import uuid
 import hashlib
 import hmac
 import mimetypes
+import re
 import secrets
 import logging
 import socket
@@ -54,6 +55,7 @@ PORT = int(os.environ.get("MUSIC_PORT", "8788"))
 MAX_UPLOAD = 100 * 1024 * 1024        # 单曲音频上限 100MB
 MAX_PROFILE = 8 * 1024 * 1024         # 注册/改资料请求上限 8MB
 MAX_COMMENT = 200                     # 评论最大字符
+MAX_COMMENT_IMAGE = 8 * 1024 * 1024   # 单张评论图片上限 8MB
 MAX_NAME = 40                         # 昵称/歌手/标题最大长度
 TOKEN_TTL = 30 * 24 * 3600            # token 有效期 30 天
 PBKDF2_ITER = 210000                  # 新密码哈希迭代次数
@@ -388,6 +390,7 @@ RATE_LIMITS = {
     "play":      (120, 60),   # 播放上报 120 次/分（切歌频繁）
     "like":      (60, 60),
     "comment":   (30, 60),
+    "comment_image": (30, 3600),  # 评论图片上传 30 次/小时（与歌曲上传同频）
     "share":     (30, 60),
     "login":     (10, 60),
     "register":  (5, 60),
@@ -859,6 +862,40 @@ def safe_file_path(fname):
     if not os.path.exists(p):
         return None
     return p
+
+
+def _collect_comment_images(c, track_id=None, comment_id=None):
+    """收集评论关联的图片文件名（删除歌曲/评论时同步清理文件用）"""
+    names = set()
+    if track_id:
+        rows = c.execute("SELECT images FROM comments WHERE track_id=?", (track_id,)).fetchall()
+    elif comment_id:
+        rows = c.execute("SELECT images FROM comments WHERE id=?", (comment_id,)).fetchall()
+    else:
+        return []
+    for (raw,) in rows:
+        if not raw:
+            continue
+        try:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                for n in v:
+                    if isinstance(n, str) and re.fullmatch(r"cmt_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", n):
+                        names.add(n)
+        except Exception:
+            pass
+    return list(names)
+
+
+def _remove_comment_image_files(names):
+    """删除评论图片文件（静默失败，文件不存在不影响主流程）"""
+    for n in names:
+        fp = safe_file_path(n)
+        if fp and os.path.exists(fp):
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
 
 
 # ---------------- 汽水音乐分享链接解析（H5 采集：封面原图/歌词/音乐标签） ----------------
@@ -3255,7 +3292,8 @@ async function loadComments(page){
   let h='<div class="tablewrap"><table><tr><th>评论者</th><th>评论内容</th><th>所属歌曲</th><th>时间</th><th>操作</th></tr>';
   if(!d.list.length)h+='<tr><td colspan="5" class="empty">无评论</td></tr>';
   d.list.forEach(c=>{
-    h+='<tr><td>'+esc(c.user)+'</td><td style="white-space:normal;max-width:260px">'+esc(c.content)+'</td><td>'+esc(c.track_title)+'</td><td style="font-size:11px;color:#888">'+fmtTime(c.created)+'</td><td class="act"><button onclick="delComment('+c.id+')">删除</button></td></tr>';
+    const imgs=(c.images||[]).map(i=>'<img src="'+location.origin+'/music/api/comment-image/'+encodeURIComponent(i)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;margin:4px 4px 0 0;cursor:zoom-in" onclick="window.open(this.src)" onerror="this.style.display=\\'none\\'">').join('');
+    h+='<tr><td>'+esc(c.user)+'</td><td style="white-space:normal;max-width:260px">'+esc(c.content)+imgs+'</td><td>'+esc(c.track_title)+'</td><td style="font-size:11px;color:#888">'+fmtTime(c.created)+'</td><td class="act"><button onclick="delComment('+c.id+')">删除</button></td></tr>';
   });
   h+='</table></div>';
   h+=pager(curPage.comments,d.total,'loadComments');
@@ -3530,14 +3568,23 @@ async function delNotify(id){
                 if tid:
                     where = " WHERE cm.track_id=?"; args.append(tid)
                 total = c.execute("SELECT COUNT(*) FROM comments cm" + where, args).fetchone()[0]
-                rows = c.execute("""SELECT cm.id,cm.track_id,cm.user_name,cm.content,cm.created,
+                rows = c.execute("""SELECT cm.id,cm.track_id,cm.user_name,cm.content,cm.images,cm.created,
                                     COALESCE(t.title,'(已删除)')
                                     FROM comments cm LEFT JOIN tracks t ON t.id=cm.track_id
                                     """ + where + " ORDER BY cm.created DESC LIMIT ? OFFSET ?",
                                     tuple(args + [size, (page-1)*size])).fetchall()
                 c.close()
+                def _parse_imgs(raw):
+                    if not raw:
+                        return []
+                    try:
+                        v = json.loads(raw)
+                        return v if isinstance(v, list) else []
+                    except Exception:
+                        return []
                 self._json(200, {"ok":True,"total":total,"page":page,"size":size,
-                    "list":[{"id":r[0],"track_id":r[1],"user":r[2] or "","content":r[3] or "","created":r[4] or 0,"track_title":r[5]} for r in rows]});return
+                    "list":[{"id":r[0],"track_id":r[1],"user":r[2] or "","content":r[3] or "",
+                             "images":_parse_imgs(r[4]),"created":r[5] or 0,"track_title":r[6]} for r in rows]});return
 
             if u.path == "/api/tracks":
                 if not rate_limit(self, "tracks"):
@@ -4076,15 +4123,37 @@ async function delNotify(id){
                 self._serve_file(fp)
                 return
 
+            if u.path.startswith("/api/comment-image/"):
+                name = u.path.rsplit("/", 1)[-1]
+                # 白名单：只允许本服务评论图片上传接口生成的文件名（防目录穿越/任意文件读取）
+                if not re.fullmatch(r"cmt_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", name):
+                    self._err(404, "no image")
+                    return
+                fp = safe_file_path(name)
+                if not fp or not os.path.exists(fp):
+                    self._err(404, "no image")
+                    return
+                self._serve_file(fp)
+                return
+
             if u.path.startswith("/api/comments/"):
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
-                rows = c.execute("""SELECT id,user_id,user_name,content,created
+                rows = c.execute("""SELECT id,user_id,user_name,content,images,created
                                     FROM comments WHERE track_id=? ORDER BY created DESC LIMIT 200""",
                                  (tid,)).fetchall()
                 c.close()
+                def _parse_images(raw):
+                    if not raw:
+                        return []
+                    try:
+                        v = json.loads(raw)
+                        return v if isinstance(v, list) else []
+                    except Exception:
+                        return []
                 self._json(200, [{"id": r[0], "userId": r[1], "userName": r[2],
-                                  "content": r[3], "created": r[4]} for r in rows])
+                                  "content": r[3], "images": _parse_images(r[4]),
+                                  "created": r[5]} for r in rows])
                 return
 
             # 流签名签发：GET /api/stream-url/{id} → {"sig","exp"}，前端拼接到流 URL
@@ -4773,10 +4842,12 @@ async function delNotify(id){
                 try:
                     if typ == "track":
                         row = c.execute("SELECT fname FROM tracks WHERE id=?", (tid,)).fetchone()
+                        cmt_imgs = _collect_comment_images(c, track_id=tid)
                         c.execute("DELETE FROM tracks WHERE id=?", (tid,))
                         c.execute("DELETE FROM likes WHERE track_id=?", (tid,))
                         c.execute("DELETE FROM comments WHERE track_id=?", (tid,))
                         c.commit()
+                        _remove_comment_image_files(cmt_imgs)
                         if row and row[0]:
                             fp = safe_file_path(row[0])
                             if fp and os.path.exists(fp):
@@ -4799,8 +4870,10 @@ async function delNotify(id){
                         c.execute("DELETE FROM users WHERE id=?", (tid,))
                         c.commit()
                     elif typ == "comment":
+                        cmt_imgs = _collect_comment_images(c, comment_id=tid)
                         c.execute("DELETE FROM comments WHERE id=?", (tid,))
                         c.commit()
+                        _remove_comment_image_files(cmt_imgs)
                     else:
                         self._err(400, "bad type"); return
                 finally:
@@ -5620,6 +5693,56 @@ async function delNotify(id){
                     self._internal_error(e)
                 return
 
+            # ---------- 评论图片上传 ----------
+            if u.path == "/api/upload-comment-image":
+                if not rate_limit(self, "comment_image"):
+                    self._err(429, "上传过于频繁，请稍后再试")
+                    return
+                try:
+                    if length <= 0:
+                        self._err(400, "empty body")
+                        return
+                    if length > MAX_COMMENT_IMAGE + 1024 * 1024:
+                        self._err(413, "too large")
+                        return
+                    fields, files = self._parse_multipart(length)
+                    if fields is None:
+                        self._err(400, "need multipart")
+                        return
+                    c = db()
+                    uid, via_token = self.auth_user(c, fields)
+                    if not uid:
+                        c.close()
+                        self._err(401, "未登录或登录已过期")
+                        return
+                    img = files.get("image")
+                    if not img or not img[0]:
+                        c.close()
+                        self._err(400, "no image")
+                        return
+                    fname, fdata = img
+                    if len(fdata) > MAX_COMMENT_IMAGE:
+                        c.close()
+                        self._err(413, "too large")
+                        return
+                    cext = os.path.splitext(fname)[1].lower()
+                    if cext not in (".jpg", ".jpeg", ".png", ".webp"):
+                        c.close()
+                        self._err(400, "unsupported image type")
+                        return
+                    if not image_magic_ok(fdata, cext):
+                        c.close()
+                        self._err(400, "图片文件格式校验失败")
+                        return
+                    stored = "cmt_" + uuid.uuid4().hex + cext
+                    with open(os.path.join(FILES, stored), "wb") as f:
+                        f.write(fdata)
+                    c.close()
+                    self._json(200, {"name": stored})
+                except Exception as e:
+                    self._internal_error(e)
+                return
+
             # ---------- 发表评论 ----------
             if u.path.startswith("/api/comment/"):
                 if not rate_limit(self, "comment"):
@@ -5649,10 +5772,20 @@ async function delNotify(id){
                         c.close()
                         self._err(400, "评论内容不能为空")
                         return
+                    # 评论图片：仅接受本服务上传接口生成的 cmt_ 文件（白名单正则，防路径/文件名注入）
+                    images = body.get("images") or []
+                    if isinstance(images, str):
+                        images = [i.strip() for i in images.split(",") if i.strip()]
+                    if not isinstance(images, list):
+                        images = []
+                    images = [i for i in images[:6]
+                              if isinstance(i, str)
+                              and re.fullmatch(r"cmt_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", i)]
+                    images_json = json.dumps(images, ensure_ascii=False)
                     cid = uuid.uuid4().hex
-                    c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,created)
-                                 VALUES(?,?,?,?,?,?)""",
-                              (cid, tid, uid, uname, content, time.time()))
+                    c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created)
+                                 VALUES(?,?,?,?,?,?,?)""",
+                              (cid, tid, uid, uname, content, images_json, time.time()))
                     c.execute("""INSERT INTO behavior_events(id,user_id,track_id,event,value,meta,track_info,created)
                                  VALUES(?,?,?,?,?,?,?,?)""",
                               (uuid.uuid4().hex, uid, tid, "comment", 1.0,
