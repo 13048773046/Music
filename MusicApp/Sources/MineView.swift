@@ -30,7 +30,7 @@ struct MineView: View {
     @State private var historyTotal: Int = 0
     @State private var playlistTotal: Int = 0
     // 历史和歌单数据
-    @State private var historyItems: [Track] = []
+    @State private var historyItems: [HistoryTrack] = []
     @State private var playlistItems: [Playlist] = []
 
     // 三个分页列表：我的作品 / 我的喜欢 / 我的评论
@@ -500,8 +500,8 @@ struct MineView: View {
             if historyItems.isEmpty {
                 emptyHint("还没有播放记录")
             } else {
-                ForEach(historyItems, id: \.id) { t in
-                    trackRow(t, queue: historyItems, kind: .works)
+                ForEach(historyItems) { h in
+                    historyRow(h)
                 }
             }
         }
@@ -509,6 +509,45 @@ struct MineView: View {
         .padding(.top, 4)
         .padding(.bottom, 16)
         .task { await loadHistory() }
+    }
+
+    private func historyRow(_ h: HistoryTrack) -> some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Theme.accentSoft)
+                .frame(width: 44, height: 44)
+                .overlay(
+                    Image(systemName: "clock.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(Theme.accent)
+                )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(h.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(h.artist)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(timeAgo(h.created))
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func timeAgo(_ ts: Double) -> String {
+        let interval = Date().timeIntervalSince1970 - ts
+        if interval < 3600 {
+            return "\(Int(interval / 60))分钟前"
+        } else if interval < 86400 {
+            return "\(Int(interval / 3600))小时前"
+        } else {
+            return "\(Int(interval / 86400))天前"
+        }
     }
 
     // MARK: - 我的歌单页
