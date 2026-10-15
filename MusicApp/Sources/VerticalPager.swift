@@ -382,8 +382,11 @@ struct PlayerCard: View {
     /// 菜单内等待执行的后续动作：菜单 sheet dismiss 完成后触发，避免弹窗切换竞态
     @State private var pendingEQ = false
     @State private var pendingFullScreen = false
+    @State private var pendingAddToPlaylist = false
     /// 全屏沉浸式歌词
     @State private var showFullScreen = false
+    /// 添加到歌单弹窗
+    @State private var showPlaylistPicker = false
 
     init(track: Track, index: Int,
          topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
@@ -567,14 +570,16 @@ struct PlayerCard: View {
         .sheet(isPresented: $showMenu, onDismiss: {
             if pendingEQ { pendingEQ = false; showEQ = true }
             if pendingFullScreen { pendingFullScreen = false; showFullScreen = true }
+            if pendingAddToPlaylist { pendingAddToPlaylist = false; showPlaylistPicker = true }
         }) {
             TrackMenuSheet(
                 track: track,
                 eqName: player.selectedEQ,
                 onEQ: { pendingEQ = true; showMenu = false },
-                onFullScreen: { pendingFullScreen = true; showMenu = false }
+                onFullScreen: { pendingFullScreen = true; showMenu = false },
+                onAddToPlaylist: { pendingAddToPlaylist = true; showMenu = false }
             )
-            .presentationDetents([.height(320)])
+            .presentationDetents([.height(400)])
             .presentationDragIndicator(.visible)
         }
         // 用户主页弹窗
@@ -595,6 +600,11 @@ struct PlayerCard: View {
             FullScreenLyricView(track: track, lines: lyricLines)
                 .environmentObject(player)
                 .landscapeFullScreen()
+        }
+        // 添加到歌单弹窗
+        .sheet(isPresented: $showPlaylistPicker) {
+            AddToPlaylistSheet(track: track)
+                .environmentObject(auth)
         }
         // 音效切换统一走 EQBSheet 的 player.applyEQ（引擎同类切换不重载、进度连续），
         // 不再监听 selectedEQ 变化重载整曲。
@@ -720,6 +730,7 @@ private struct TrackMenuSheet: View {
     let eqName: String
     var onEQ: () -> Void
     var onFullScreen: () -> Void
+    var onAddToPlaylist: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -751,6 +762,30 @@ private struct TrackMenuSheet: View {
             .padding(.bottom, 18)
 
             Divider().padding(.horizontal, 20)
+
+            // 添加到歌单：关闭本弹窗，随后（onDismiss）打开歌单选择弹窗
+            Button {
+                dismiss()
+                onAddToPlaylist()
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 18))
+                        .foregroundColor(.primary)
+                        .frame(width: 26)
+                    Text("添加到歌单")
+                        .font(.system(size: 16))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
             // 音效：关闭本弹窗，随后（onDismiss）打开音效选择弹窗
             Button {
@@ -1010,5 +1045,220 @@ private struct RealProgressView: View {
             .font(.system(size: 12, weight: .medium).monospacedDigit())
             .foregroundColor(secondaryTint)
         }
+    }
+}
+
+// MARK: - 添加到歌单弹窗
+
+private struct AddToPlaylistSheet: View {
+    let track: Track
+    @EnvironmentObject private var auth: AuthManager
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var playlists: [Playlist] = []
+    @State private var isLoading = true
+    @State private var showCreate = false
+    @State private var newPlaylistName = ""
+    @State private var isCreating = false
+    @State private var showSuccess = false
+    @State private var successText = ""
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if playlists.isEmpty {
+                    // 没有歌单，显示去创建
+                    VStack(spacing: 20) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("还没有歌单")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Button {
+                            showCreate = true
+                        } label: {
+                            Text("去创建歌单")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 10)
+                                .background(Capsule().fill(Theme.accent))
+                        }
+                    }
+                } else {
+                    // 歌单列表
+                    List {
+                        ForEach(playlists) { pl in
+                            Button {
+                                addToPlaylist(pl)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    CachedCoverImage(
+                                        url: URL(string: pl.cover) ?? URL(string: "about:blank")!,
+                                        title: pl.name,
+                                        placeholder: RoundedRectangle(cornerRadius: 8).fill(Theme.accentSoft)
+                                            .overlay(Image(systemName: "music.note").foregroundColor(Theme.accent))
+                                    )
+                                    .frame(width: 48, height: 48)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(pl.name)
+                                            .font(.system(size: 15, weight: .medium))
+                                            .foregroundColor(.primary)
+                                        Text("\(pl.trackCount) 首歌曲")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                        }
+
+                        // 创建新歌单按钮
+                        Button {
+                            showCreate = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Theme.accent.opacity(0.15))
+                                        .frame(width: 48, height: 48)
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .foregroundColor(Theme.accent)
+                                }
+                                Text("创建新歌单")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundColor(Theme.accent)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("添加到歌单")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $showCreate) {
+                createSheet
+            }
+            .overlay {
+                if showSuccess {
+                    successView
+                }
+            }
+        }
+        .task { await loadPlaylists() }
+    }
+
+    private var createSheet: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                TextField("歌单名称", text: $newPlaylistName)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+
+                Button {
+                    Task { await createAndAdd() }
+                } label: {
+                    if isCreating {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Text("创建并添加")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Capsule().fill(Theme.accent))
+                .padding(.horizontal, 20)
+                .disabled(newPlaylistName.isEmpty || isCreating)
+
+                Spacer()
+            }
+            .navigationTitle("创建新歌单")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("取消") { showCreate = false }
+                }
+            }
+        }
+    }
+
+    private var successView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 48))
+                .foregroundColor(Theme.accent)
+            Text(successText)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.primary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.3))
+    }
+
+    private func loadPlaylists() async {
+        do {
+            let list = try await API.fetchPlaylists()
+            playlists = list
+        } catch {
+            print("加载歌单失败: \(error)")
+        }
+        isLoading = false
+    }
+
+    private func addToPlaylist(_ pl: Playlist) {
+        Task {
+            await API.addToPlaylist(
+                playlistId: pl.id,
+                trackId: track.id,
+                title: track.title,
+                artist: track.artist ?? "未知歌手",
+                cover: track.coverURL?.absoluteString ?? ""
+            )
+            successText = "已添加到 \(pl.name)"
+            showSuccess = true
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            dismiss()
+        }
+    }
+
+    private func createAndAdd() async {
+        isCreating = true
+        do {
+            let pid = try await API.createPlaylist(name: newPlaylistName)
+            await API.addToPlaylist(
+                playlistId: pid,
+                trackId: track.id,
+                title: track.title,
+                artist: track.artist ?? "未知歌手",
+                cover: track.coverURL?.absoluteString ?? ""
+            )
+            showCreate = false
+            successText = "已创建并添加"
+            showSuccess = true
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            dismiss()
+        } catch {
+            print("创建歌单失败: \(error)")
+        }
+        isCreating = false
     }
 }
