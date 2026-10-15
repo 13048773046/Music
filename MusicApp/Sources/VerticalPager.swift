@@ -378,6 +378,7 @@ struct PlayerCard: View {
     @State private var showEQ = false
     /// 歌曲信息菜单（竖排三点按钮打开）
     @State private var showMenu = false
+    @State private var showUserProfile: String?
     /// 菜单内等待执行的后续动作：菜单 sheet dismiss 完成后触发，避免弹窗切换竞态
     @State private var pendingEQ = false
     @State private var pendingFullScreen = false
@@ -441,10 +442,22 @@ struct PlayerCard: View {
                                 active: isCurrent
                             )
 
-                            Text(track.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "未知歌手")
-                                .font(.system(size: 15))
-                                .foregroundColor(textSecondary(onLight: onLight))
-                                .lineLimit(1)
+                            // 发布者名称（点击跳转用户主页）
+                            Button {
+                                if let uid = track.userId, !uid.isEmpty {
+                                    showUserProfile = uid
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(track.userName.flatMap { $0.isEmpty ? nil : $0 } ?? "未知用户")
+                                        .font(.system(size: 15))
+                                        .foregroundColor(textSecondary(onLight: onLight))
+                                        .lineLimit(1)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(textSecondary(onLight: onLight).opacity(0.6))
+                                }
+                            }
                         }
                         .layoutPriority(1)
 
@@ -568,6 +581,12 @@ struct PlayerCard: View {
             )
             .presentationDetents([.height(320)])
             .presentationDragIndicator(.visible)
+        }
+        // 用户主页弹窗
+        .sheet(item: $showUserProfile) { uid in
+            UserProfileView(userId: uid)
+                .environmentObject(player)
+                .environmentObject(auth)
         }
         // 全屏沉浸式歌词：onDismiss 兜底复位方向授权并强制转回竖屏。
         // 主界面 OrientationVC 是 child controller，dismiss 后不会自动触发
