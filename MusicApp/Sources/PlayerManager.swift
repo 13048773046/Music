@@ -110,6 +110,11 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 已做过「自动重试一次」的歌曲 id：防止同一首歌无限自动重试；
     /// 切到新歌时重置。手动重试按钮不受影响。
     private var autoRetriedTrackId: String?
+    /// 连续播放失败计数：失败自动切下一首时累加，切到新歌或手动播放时重置；
+    /// 达到上限（3 首）则停止自动切歌，避免无限循环。
+    private var consecutiveFailCount: Int = 0
+    /// 连续失败自动切歌上限
+    private let maxConsecutiveFails = 3
     /// 缓冲卡死检测：连续缓冲超过阈值且播放点无进展 → 判定加载失败走自愈
     private var bufferingStallStart: Date?
     private var stallProgressAtStart: Double = 0
@@ -199,6 +204,10 @@ final class PlayerManager: NSObject, ObservableObject {
             }
             // 缓冲状态：播放点数据未到达时（卡顿/加载中）显示加载动画
             self.isBuffering = (self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+            // 播放正常（非缓冲且在播放）：重置连续失败计数
+            if !self.isBuffering && self.isPlaying {
+                self.consecutiveFailCount = 0
+            }
             // 已缓冲进度：当前已加载区间的终点 / 总时长
             if let item = self.player.currentItem, self.duration > 0,
                let range = item.loadedTimeRanges.first?.timeRangeValue {
@@ -602,6 +611,7 @@ final class PlayerManager: NSObject, ObservableObject {
 
     func play(_ track: Track, in tracks: [Track]) {
         guard !tracks.isEmpty else { return }   // 空队列不进入播放
+        consecutiveFailCount = 0   // 用户手动播放新歌：重置连续失败计数
         if queue != tracks {
             queue = tracks
         }
@@ -616,22 +626,27 @@ final class PlayerManager: NSObject, ObservableObject {
     }
 
     /// 播放失败统一自愈入口（原音 AVPlayer 失败通知 / item status failed / 缓冲卡死 / 3D 引擎加载失败共用）。
-    /// 行为：置失败状态供 UI 展示重试，并对当前歌做一次有限自动重试（网络瞬时抖动自愈）。
+    /// 行为：失败后自动切下一首；连续失败超过上限则停止，避免无限循环切歌。
     private func handlePlaybackFailure() {
-        guard !loadFailed else { return }   // 已在失败状态，避免重复触发自动重试
+        guard !loadFailed else { return }   // 已在失败状态，避免重复触发
         loadFailed = true
         isBuffering = false
-        isPlaying = false   // 实际已无声：锁屏/UI 同步为暂停态，避免「显示播放中但无声音」
+        isPlaying = false
         bufferingStallStart = nil
+        consecutiveFailCount += 1
         updateNowPlaying(force: true)
-        guard let trackId = current?.id, autoRetriedTrackId != trackId else { return }
-        autoRetriedTrackId = trackId
-        // 延迟 2s 自动重试一次；期间用户手动切歌/重试成功则取消
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+
+        // 连续失败超过上限：停止自动切歌，停在当前状态让用户手动处理
+        guard consecutiveFailCount <= maxConsecutiveFails else {
+            return
+        }
+        // 延迟 1.5s 自动切下一首；期间用户手动操作则取消
+        let failIdx = currentIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self,
-                  self.current?.id == trackId,   // 仍是同一首歌（未手动切走）
-                  self.loadFailed else { return } // 期间未恢复（手动重试成功则跳过）
-            self.playCurrent(flushReason: .heartbeat)
+                  self.loadFailed,
+                  self.currentIndex == failIdx else { return } // 用户已手动切走
+            self.next()
         }
     }
 
