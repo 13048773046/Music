@@ -152,6 +152,7 @@ struct VerticalPager: UIViewControllerRepresentable {
                                      topInset: top, bottomInset: bottom)
                     .environmentObject(PlayerManager.shared)
                     .environmentObject(AuthManager.shared)
+                    .environmentObject(AppRouter.shared)
             )
             // 透明背景：页面主色背景可延伸覆盖全屏（状态栏 / 底部小白条）
             hosting.view.backgroundColor = .clear
@@ -356,6 +357,7 @@ private struct EQBSheet: View {
 struct PlayerCard: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var router: AppRouter
     let track: Track
     let index: Int
     /// 真实安全区高度（由 Coordinator 从 keyWindow 注入，不依赖桥接层）
@@ -378,7 +380,6 @@ struct PlayerCard: View {
     @State private var showEQ = false
     /// 歌曲信息菜单（竖排三点按钮打开）
     @State private var showMenu = false
-    @State private var showUserProfile: String?
     /// 菜单内等待执行的后续动作：菜单 sheet dismiss 完成后触发，避免弹窗切换竞态
     @State private var pendingEQ = false
     @State private var pendingFullScreen = false
@@ -445,10 +446,10 @@ struct PlayerCard: View {
                                 active: isCurrent
                             )
 
-                            // 发布者名称（点击跳转用户主页）
+                            // 发布者名称（点击跳转用户主页：独立页面 push，非弹窗）
                             Button {
                                 if let uid = track.userId, !uid.isEmpty {
-                                    showUserProfile = uid
+                                    router.openUserProfile(uid)
                                 }
                             } label: {
                                 Text(track.userName.flatMap { $0.isEmpty ? nil : $0 } ?? "未知用户")
@@ -582,12 +583,8 @@ struct PlayerCard: View {
             .presentationDetents([.height(400)])
             .presentationDragIndicator(.visible)
         }
-        // 用户主页弹窗
-        .sheet(item: $showUserProfile) { uid in
-            UserProfileView(userId: uid)
-                .environmentObject(player)
-                .environmentObject(auth)
-        }
+        // 用户主页已改为独立页面 push（AppRouter.openUserProfile → MainTabView 外层
+        // NavigationStack navigationDestination 承接），不再用弹窗。
         // 全屏沉浸式歌词：onDismiss 兜底复位方向授权并强制转回竖屏。
         // 主界面 OrientationVC 是 child controller，dismiss 后不会自动触发
         // viewWillAppear，若不显式 setValue(.portrait) 设备会停在横屏。

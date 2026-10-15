@@ -13,7 +13,18 @@ final class AppRouter: ObservableObject {
     @Published var highlightCommentId: String?
     @Published var showCommentSheet = false
 
+    /// 待打开的用户主页（独立页面 push，非弹窗）
+    @Published var pendingUserProfileId: String?
+    /// 搜索页（独立页面 push，首页顶栏触发）
+    @Published var showSearchPage = false
+
     private init() {}
+
+    /// 打开用户主页（独立页面 push）：通知头像 / 播放页发布者名称点击走这里
+    func openUserProfile(_ uid: String) {
+        guard !uid.isEmpty else { return }
+        pendingUserProfileId = uid
+    }
 
     /// 从通知跳转：回首页 + 播放歌曲；评论类通知打开评论弹窗（可选定位到该评论）
     func jumpToHome(play track: Track, openComment: Bool = false, commentId: String? = nil) {
@@ -109,12 +120,24 @@ final class NotificationBus: ObservableObject {
             guard let self, !self.manualStop, self.task == nil,
                   let token = AuthManager.shared.authToken, !token.isEmpty else { return }
             self.startIfNeeded()
+            // 回前台同步一次最新未读数（不打开通知页也能刷新红点）
+            Task { await self.refreshUnread() }
         }
     }
 
     /// 设置未读数（列表接口返回时同步）
     func setUnread(_ n: Int) {
         unreadCount = n
+    }
+
+    /// 主动拉取最新未读数（App 启动 / 登录后 / 回前台时调用）。
+    /// 修复：不打开消息通知页就看不到红点的问题——红点不再依赖通知页首次加载，
+    /// 首页（播放页）直接实时显示。
+    func refreshUnread() async {
+        guard let token = AuthManager.shared.authToken, !token.isEmpty else { return }
+        if let r = try? await API.notifications() {
+            unreadCount = r.unread
+        }
     }
 
     /// 通过 WebSocket 实时上报行为事件（即时通讯通道）：行为数据实时入库并触发

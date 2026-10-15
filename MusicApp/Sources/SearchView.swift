@@ -19,95 +19,95 @@ struct SearchView: View {
     @State private var searchHistory: [SearchHistoryItem] = []
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
+        ZStack {
+            Theme.background.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    searchBar
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
+            VStack(spacing: 0) {
+                searchBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
 
-                    if searching {
-                        ProgressView()
-                            .tint(.white)
-                            .frame(maxHeight: .infinity)
-                    } else if results.isEmpty && hasSearched {
-                        emptyState
-                            .frame(maxHeight: .infinity)
-                    } else if results.isEmpty {
-                        // 初始状态：显示搜索历史
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text("搜索历史")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.7))
-                                    Spacer()
-                                    if !searchHistory.isEmpty {
-                                        Button {
-                                            Task {
-                                                await API.clearSearchHistory()
-                                                searchHistory = []
-                                            }
-                                        } label: {
-                                            Image(systemName: "trash")
-                                                .font(.system(size: 13))
-                                                .foregroundColor(.white.opacity(0.5))
+                if searching {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(maxHeight: .infinity)
+                } else if results.isEmpty && hasSearched {
+                    emptyState
+                        .frame(maxHeight: .infinity)
+                } else if results.isEmpty {
+                    // 初始状态：显示搜索历史
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("搜索历史")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.7))
+                                Spacer()
+                                if !searchHistory.isEmpty {
+                                    Button {
+                                        Task {
+                                            await API.clearSearchHistory()
+                                            searchHistory = []
                                         }
-                                    }
-                                }
-                                if searchHistory.isEmpty {
-                                    VStack(spacing: 12) {
-                                        Image(systemName: "magnifyingglass")
-                                            .font(.system(size: 40))
-                                            .foregroundColor(.white.opacity(0.3))
-                                        Text("搜索歌曲、歌手")
-                                            .font(.system(size: 15))
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 13))
                                             .foregroundColor(.white.opacity(0.5))
                                     }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.top, 40)
-                                } else {
-                                    ForEach(searchHistory) { item in
-                                        Button {
-                                            keyword = item.keyword
-                                            doSearch()
-                                        } label: {
-                                            Text(item.keyword)
-                                                .font(.system(size: 14))
-                                                .foregroundColor(.white.opacity(0.8))
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .padding(.vertical, 8)
-                                        }
+                                }
+                            }
+                            if searchHistory.isEmpty {
+                                VStack(spacing: 12) {
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.system(size: 40))
+                                        .foregroundColor(.white.opacity(0.3))
+                                    Text("搜索歌曲、歌手")
+                                        .font(.system(size: 15))
+                                        .foregroundColor(.white.opacity(0.5))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 40)
+                            } else {
+                                ForEach(searchHistory) { item in
+                                    Button {
+                                        keyword = item.keyword
+                                        doSearch()
+                                    } label: {
+                                        Text(item.keyword)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(.white.opacity(0.8))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.vertical, 8)
                                     }
                                 }
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 16)
                         }
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 10) {
-                                ForEach(results) { track in
-                                    SearchRow(track: track) {
-                                        play(track: track)
-                                    }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                    }
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(results) { track in
+                                SearchRow(track: track) {
+                                    play(track: track)
                                 }
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 16)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
                     }
                 }
             }
-            .navigationTitle("搜索")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .onAppear {
-                Task {
-                    searchHistory = (try? await API.fetchSearchHistory()) ?? []
-                }
+        }
+        // 搜索页作为独立页面 push 时，明确显示导航栏（含返回按钮）
+        .navigationTitle("搜索")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .onAppear {
+            Task {
+                searchHistory = (try? await API.fetchSearchHistory()) ?? []
             }
         }
     }

@@ -68,11 +68,16 @@ struct NotificationsView: View {
                 .environmentObject(player)
                 .environmentObject(auth)
         }
-        // 用户主页弹窗
-        .sheet(item: $showUserProfile) { uid in
-            UserProfileView(userId: uid)
-                .environmentObject(player)
-                .environmentObject(auth)
+        // 用户主页：独立页面 push（非弹窗）——点击通知头像跳转用户主页
+        .navigationDestination(isPresented: Binding(
+            get: { showUserProfile != nil },
+            set: { if !$0 { showUserProfile = nil } }
+        )) {
+            if let uid = showUserProfile {
+                UserProfileView(userId: uid)
+                    .environmentObject(player)
+                    .environmentObject(auth)
+            }
         }
         // WebSocket 实时推送：收到新通知自动刷新列表与红点
         .onReceive(NotificationBus.shared.$lastEvent) { _ in
@@ -164,11 +169,10 @@ struct NotificationsView: View {
             }
             .buttonStyle(.plain)
 
-            // 文字内容：点击跳转用户主页
+            // 文字内容（主体）：点击跳转该歌曲，与原来一致——
+            // 评论类通知回首页播放并打开评论弹窗定位到那条评论，其余直接播放该歌曲
             Button {
-                if let uid = n.fromUserId, !uid.isEmpty {
-                    showUserProfile = uid
-                }
+                Task { await handleTap(n) }
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -209,7 +213,13 @@ struct NotificationsView: View {
                 }
                 .buttonStyle(PressableButtonStyle())
             } else {
-                albumCover(for: n)
+                // 歌曲封面：点击同样跳转该歌曲
+                Button {
+                    Task { await handleTap(n) }
+                } label: {
+                    albumCover(for: n)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.vertical, 12)

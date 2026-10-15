@@ -13,53 +13,53 @@ struct UserProfileView: View {
     @State private var hasMore = true
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                Theme.background.ignoresSafeArea()
+        ZStack(alignment: .top) {
+            Theme.background.ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // 背景图区域
-                        headerBackground
-                            .frame(height: 220)
+            ScrollView {
+                VStack(spacing: 0) {
+                    // 背景图区域
+                    headerBackground
+                        .frame(height: 220)
 
-                        // 头像和基本信息（向上重叠）
-                        profileInfoSection
-                            .offset(y: -50)
-                            .padding(.bottom, -50)
+                    // 头像和基本信息（向上重叠）
+                    profileInfoSection
+                        .offset(y: -50)
+                        .padding(.bottom, -50)
 
-                        // 关注按钮
-                        if let p = profile, p.userId != AuthManager.shared.currentUser?.id {
-                            followButton
-                                .padding(.top, 16)
-                                .padding(.bottom, 20)
-                        }
-
-                        // 数据统计卡片
-                        if let p = profile {
-                            statsCard(p: p)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 20)
-                        }
-
-                        // 歌曲列表
-                        tracksSection
-                            .padding(.bottom, 100)
+                    // 关注按钮
+                    if let p = profile, p.userId != AuthManager.shared.currentUser?.id {
+                        followButton
+                            .padding(.top, 16)
+                            .padding(.bottom, 20)
                     }
+
+                    // 数据统计卡片
+                    if let p = profile {
+                        statsCard(p: p)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 20)
+                    }
+
+                    // 歌曲列表
+                    tracksSection
+                        .padding(.bottom, 100)
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
-                }
-            }
-            .toolbarBackground(.hidden, for: .navigationBar)
         }
+        // 用户主页作为独立页面 push（非弹窗）时，明确显示导航栏（含返回按钮）
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+            }
+        }
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task { await load() }
     }
 

@@ -58,6 +58,8 @@ struct MusicApp: App {
                 if auth.currentUser != nil {
                     NotificationBus.shared.startIfNeeded()
                 }
+                // 启动即拉取未读数：首页（播放页）直接显示红点，无需先打开通知页
+                Task { await NotificationBus.shared.refreshUnread() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     withAnimation(.easeInOut(duration: 0.45)) {
                         showSplash = false
@@ -68,6 +70,8 @@ struct MusicApp: App {
             .onChange(of: auth.currentUser != nil) { loggedIn in
                 if loggedIn {
                     NotificationBus.shared.resetAndReconnect()
+                    // 登录后同步一次未读数（红点立即可见）
+                    Task { await NotificationBus.shared.refreshUnread() }
                 } else {
                     NotificationBus.shared.stop()
                 }
@@ -275,7 +279,24 @@ struct MainTabView: View {
         _drawer = StateObject(wrappedValue: SidebarDrawerController(width: width))
     }
 
+    /// 搜索页 push 绑定（首页顶栏放大镜触发，独立页面非弹窗）
+    private var searchPageBinding: Binding<Bool> {
+        Binding(
+            get: { router.showSearchPage },
+            set: { if !$0 { router.showSearchPage = false } }
+        )
+    }
+
+    /// 用户主页 push 绑定（通知头像 / 播放页发布者名称触发，独立页面非弹窗）
+    private var userProfileBinding: Binding<Bool> {
+        Binding(
+            get: { router.pendingUserProfileId != nil },
+            set: { if !$0 { router.pendingUserProfileId = nil } }
+        )
+    }
+
     var body: some View {
+        NavigationStack {
         ZStack {
             // 侧边栏：常驻渲染，offset 跟随抽屉进度实时滑动（关闭时完全移出屏幕左侧）
             SidebarView(
@@ -314,6 +335,7 @@ struct MainTabView: View {
                 // portraitLocked 已保持安全区完整（不再清空），顶栏自然落在状态栏下方
                 if router.selectedTab == 1 {
                     GlobalTopBar(onOpenSidebar: handlers.onOpen)
+                        .environmentObject(router)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.top, 8)
@@ -362,6 +384,23 @@ struct MainTabView: View {
             handlers.onClose = { drawer.animate(to: 0) }
             handlers.onOpen = { drawer.animate(to: 1) }
         }
+        // 搜索页：独立页面 push（非弹窗），首页顶栏放大镜触发
+        .navigationDestination(isPresented: searchPageBinding) {
+            SearchView()
+                .environmentObject(player)
+                .environmentObject(Library.shared)
+                .environmentObject(AuthManager.shared)
+        }
+        // 用户主页：独立页面 push（非弹窗），通知头像 / 播放页发布者名称触发
+        .navigationDestination(isPresented: userProfileBinding) {
+            if let uid = router.pendingUserProfileId {
+                UserProfileView(userId: uid)
+                    .environmentObject(player)
+                    .environmentObject(AuthManager.shared)
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        }
     }
 
     /// 跟手拖拽手势：onChanged 实时更新抽屉进度；onEnded 交给官方
@@ -393,9 +432,9 @@ struct MainTabView: View {
 struct GlobalTopBar: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var library: Library
+    @EnvironmentObject private var router: AppRouter
     /// 点击汉堡菜单打开侧边栏（统一走 MainTabView 的动画开合入口）
     let onOpenSidebar: () -> Void
-    @State private var showSearch = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -417,7 +456,8 @@ struct GlobalTopBar: View {
             Spacer()
 
             Button {
-                showSearch = true
+                // 搜索页：独立页面 push（非弹窗），由 MainTabView 外层 NavigationStack 承接
+                router.showSearchPage = true
             } label: {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 18, weight: .semibold))
@@ -425,12 +465,6 @@ struct GlobalTopBar: View {
                     .padding(10)
             }
             .buttonStyle(.plain)
-        }
-        .sheet(isPresented: $showSearch) {
-            SearchView()
-                .environmentObject(player)
-                .environmentObject(library)
-                .environmentObject(AuthManager.shared)
         }
     }
 
@@ -446,6 +480,8 @@ struct GlobalTopBar: View {
 /// 悬浮 TabBar：播放控制居中（首页时显示播放/暂停按钮，其他页面显示当前歌曲封面，点击回首页）
 struct AppTabBar: View {
     @EnvironmentObject private var player: PlayerManager
+    /// 订阅通知总线：未读数变化（启动拉取 / WebSocket 实时推送）立即驱动红点刷新
+    @ObservedObject private var notifBus = NotificationBus.shared
     @Binding var selection: Int
 
     var body: some View {
@@ -494,7 +530,7 @@ struct AppTabBar: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: icon)
                         .font(.system(size: 21))
-                    if index == 2 && NotificationBus.shared.unreadCount > 0 {
+                    if index == 2 && notifBus.unreadCount > 0 {
                         Circle()
                             .fill(Color.red)
                             .frame(width: 9, height: 9)
