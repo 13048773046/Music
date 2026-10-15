@@ -967,24 +967,38 @@ struct DioramaLyricView: View {
         let factor = isBehind ? 1.0 : DioramaView.PX / z2
         let sx = x1 * factor
         let sy = y2 * factor
-        let sc = isBehind ? 0.001 : DioramaView.HERO / z2 * pl.scale * DioramaView.fitScale(lines[i])
+        // 当前句的"主程度"：按行时间窗平滑淡入淡出（Folia readNeed 曲线）
+        // 切句时新句不是硬切满透明，而是从邻行透明度 0.34 平滑升到 1.0、尺寸渐增——
+        // 相机这 0.42s 沿走廊飞过去，新句从远处雾中拉近到眼前，形成"飞去找歌词"的连续过程
+        let line = lines[i]
+        let dom = (i == c) ? DioramaView.readNeed(line, now, ceiling: 1.0) : 0
+        let baseOp: Double
+        let scaleGain: Double
+        if i == c {
+            baseOp = 0.34 + 0.66 * dom
+            scaleGain = 0.72 + 0.28 * dom
+        } else {
+            baseOp = DioramaView.neighborOpacity(i - c)
+            scaleGain = 0.75
+        }
+        let sc = isBehind ? 0.001 : DioramaView.HERO / z2 * pl.scale * DioramaView.fitScale(line) * scaleGain
         let fog = isBehind ? 0 : dClamp01((DioramaView.FOG_FAR - z2) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR))
-        let baseOp = i == c ? 1.0 : DioramaView.neighborOpacity(i - c)
         let op = isBehind ? 0 : baseOp * fog
         // 3D 倾斜：当前行随回正抵消滚转（正对），邻行保持摆位滚转/偏航
         let rollDeg = i == c ? (pl.roll - cam.roll) * 57.2958 : pl.roll * 57.2958
         let yawDeg = i == c ? pl.yaw * 57.2958 * 0.4 : pl.yaw * 57.2958
-        // 深度雾化模糊（远行轻微虚化）
-        let blurR = isBehind ? 0 : max(0, (DioramaView.FOG_FAR - z2) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR) - 0.55) * 6
+        // 雾化模糊：只有 z2 > FOG_NEAR(12) 的远景走廊才轻微虚化；
+        // 当前句 z2≈5.2 在近景，depthFactor=0 → 完全锐利清晰
+        let depthFactor = dClamp01((z2 - DioramaView.FOG_NEAR) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR))
+        let blurR = isBehind ? 0 : depthFactor * 2.5
         // zIndex：近的在上
         let zI = isBehind ? -999 : -z2
 
-        let line = lines[i]
         if i == c {
-            // 当前行：逐字卡拉OK + 辉光
+            // 当前行：逐字卡拉OK + 轻辉光（不再大半径光晕，避免糊边）
             LyricRowView(line: line, currentTime: now, scale: 1.0, opacity: 1.0,
                          tint: .white, fontSize: fontSize, fontWeight: .semibold)
-                .shadow(color: .white.opacity(0.30), radius: 20)
+                .shadow(color: .white.opacity(0.20), radius: 8)
                 .offset(x: CGFloat(sx), y: CGFloat(sy))
                 .scaleEffect(CGFloat(sc))
                 .rotation3DEffect(.degrees(rollDeg), axis: (x: 0, y: 0, z: 1), perspective: 0.55)
