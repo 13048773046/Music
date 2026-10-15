@@ -198,6 +198,19 @@ def db():
     c.execute("""CREATE TABLE IF NOT EXISTS official_messages(
         id TEXT PRIMARY KEY, content TEXT DEFAULT '', created REAL,
         sender_name TEXT DEFAULT '流萤音乐官方')""")
+    # ===== 性能优化：补缺失索引 =====
+    # 通知列表按用户+时间倒序查询
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notif_unread ON notifications(user_id, is_read)")
+    # 评论按歌曲+时间倒序查询
+    c.execute("CREATE INDEX IF NOT EXISTS idx_comment_track ON comments(track_id, created DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_comment_user ON comments(user_id, created DESC)")
+    # 用户上传歌曲按时间倒序
+    c.execute("CREATE INDEX IF NOT EXISTS idx_tracks_user ON tracks(user_id, created DESC)")
+    # 采集歌曲按用户+时间
+    c.execute("CREATE INDEX IF NOT EXISTS idx_collected_user ON collected_tracks(user_id, created DESC)")
+    # 点赞列表按用户+时间
+    c.execute("CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id, created DESC)")
     c.commit()
     return c
 
@@ -3680,12 +3693,20 @@ async function delNotify(id){
                 tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if not tok_uid:
                     c.close()
-                    self._json(200, {"list": [], "unread": 0})
+                    self._json(200, {"list": [], "unread": 0, "hasMore": False})
                     return
-                rows = c.execute("SELECT id, type, title, content, from_user_id, from_user_name, track_id, track_title, comment_id, is_read, created FROM notifications WHERE user_id=? ORDER BY created DESC LIMIT 100", (tok_uid,)).fetchall()
+                # 分页支持：page（从1开始）、size（默认20，最大50）
+                qs = urllib.parse.parse_qs(u.query)
+                page = max(1, int(qs.get("page", ["1"])[0] or "1"))
+                size = min(50, max(1, int(qs.get("size", ["20"])[0] or "20")))
+                offset = (page - 1) * size
+                rows = c.execute("SELECT id, type, title, content, from_user_id, from_user_name, track_id, track_title, comment_id, is_read, created FROM notifications WHERE user_id=? ORDER BY created DESC LIMIT ? OFFSET ?",
+                                (tok_uid, size, offset)).fetchall()
                 unread = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0", (tok_uid,)).fetchone()[0]
+                total = c.execute("SELECT COUNT(*) FROM notifications WHERE user_id=?", (tok_uid,)).fetchone()[0]
+                has_more = (offset + len(rows)) < total
                 c.close()
-                self._json(200, {"list": [{"id": r[0], "type": r[1], "title": r[2], "content": r[3], "fromUserId": r[4], "fromUser": r[5], "trackId": r[6], "trackTitle": r[7], "commentId": r[8], "isRead": r[9], "created": r[10]} for r in rows], "unread": unread})
+                self._json(200, {"list": [{"id": r[0], "type": r[1], "title": r[2], "content": r[3], "fromUserId": r[4], "fromUser": r[5], "trackId": r[6], "trackTitle": r[7], "commentId": r[8], "isRead": r[9], "created": r[10]} for r in rows], "unread": unread, "hasMore": has_more, "total": total})
                 return
 
             # 后台：官方通知列表
@@ -4542,14 +4563,24 @@ async function delNotify(id){
                 self._json(200, {"ok": True, "id": msg_id})
                 return
 
-            # 标记通知已读
+            # 标记通知已读（支持按类型：all全部 / interactive互动 / official官方）
             if u.path == "/api/notifications/read":
                 c = db()
                 tok_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 if not tok_uid:
                     c.close()
                     self._err(401, "unauthorized"); return
-                c.execute("UPDATE notifications SET is_read=1 WHERE user_id=?", (tok_uid,))
+                qs = urllib.parse.parse_qs(u.query)
+                ntype = (qs.get("type", ["all"])[0] or "all").strip()
+                if ntype == "interactive":
+                    # 互动通知：点赞/评论/分享类
+                    c.execute("UPDATE notifications SET is_read=1 WHERE user_id=? AND type IN ('like','comment','share')", (tok_uid,))
+                elif ntype == "official":
+                    # 官方通知：系统公告类
+                    c.execute("UPDATE notifications SET is_read=1 WHERE user_id=? AND type NOT IN ('like','comment','share')", (tok_uid,))
+                else:
+                    # 默认全部已读
+                    c.execute("UPDATE notifications SET is_read=1 WHERE user_id=?", (tok_uid,))
                 c.commit()
                 c.close()
                 self._json(200, {"ok": True})
@@ -5100,14 +5131,30 @@ async function delNotify(id){
                     if liked:
                         owner_id, owner_title = _track_owner(c, tid)
                         if owner_id and owner_id != uid:
-                            notif_id = uuid.uuid4().hex
                             from_user_name = c.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
                             uname = from_user_name[0] if from_user_name else "有人"
-                            c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
-                                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                                      (notif_id, owner_id, "like", "收到新点赞",
-                                       f"{uname}赞了你的歌曲《{owner_title}》",
-                                       uid, uname, tid, owner_title, 0, time.time()))
+                            # 去重：10分钟内同一用户对同一首歌的未读点赞通知，不重复插入
+                            ten_min_ago = time.time() - 600
+                            existing = c.execute("""SELECT id FROM notifications
+                                                   WHERE user_id=? AND from_user_id=? AND track_id=?
+                                                   AND type='like' AND is_read=0 AND created > ?
+                                                   ORDER BY created DESC LIMIT 1""",
+                                                (owner_id, uid, tid, ten_min_ago)).fetchone()
+                            if existing:
+                                # 更新已有通知的时间和内容（聚合为"又赞了"）
+                                notif_id = existing[0]
+                                c.execute("""UPDATE notifications SET created=?, content=?, title=?
+                                             WHERE id=?""",
+                                          (time.time(), f"{uname}赞了你的歌曲《{owner_title}》",
+                                           "收到新点赞", notif_id))
+                            else:
+                                # 首次点赞，插入新通知
+                                notif_id = uuid.uuid4().hex
+                                c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
+                                             VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                                          (notif_id, owner_id, "like", "收到新点赞",
+                                           f"{uname}赞了你的歌曲《{owner_title}》",
+                                           uid, uname, tid, owner_title, 0, time.time()))
                             # 实时推送（WebSocket）
                             ws_push(owner_id, {
                                 "kind": "notification",
