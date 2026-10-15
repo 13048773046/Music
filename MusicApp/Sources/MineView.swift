@@ -78,6 +78,36 @@ struct MineView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         userHeader(topInset: Self.statusBarHeight)
+                        
+                        // 快捷入口：播放历史 / 我的歌单
+                        HStack(spacing: 12) {
+                            NavigationLink {
+                                HistoryView()
+                            } label: {
+                                quickCardLabel(
+                                    icon: "clock.arrow.circlepath",
+                                    title: "播放历史",
+                                    subtitle: "最近听过的歌",
+                                    color: Theme.accent
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
+
+                            NavigationLink {
+                                PlaylistsView()
+                            } label: {
+                                quickCardLabel(
+                                    icon: "music.note.list",
+                                    title: "我的歌单",
+                                    subtitle: "收藏喜欢的歌曲",
+                                    color: .purple
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        
                         contentTabs
                         currentPage
                         bottomBar
@@ -154,182 +184,153 @@ struct MineView: View {
 
     private func userHeader(topInset: CGFloat) -> some View {
         let u = auth.currentUser
-        return VStack(spacing: 0) {
-            // 头部背景区：渐变从上到下，底部与内容背景无缝衔接
+        return ZStack(alignment: .bottom) {
+            // 背景图区域
             ZStack(alignment: .top) {
                 // 用户背景图（有图用图，无图用渐变）
                 Group {
                     if let bgURL = u?.backgroundURL {
                         CachedCoverImage(url: bgURL, title: u?.name ?? "",
                                          placeholder: Rectangle().fill(Theme.card))
-                            .frame(height: 200 + topInset)
+                            .frame(height: 260 + topInset)
                             .clipped()
                     } else {
-                        // 无背景图：深绿渐变，底部完全透明融入背景
+                        // 无背景图：深绿渐变
                         LinearGradient(
-                            colors: [
-                                Theme.accent.opacity(0.2),
-                                Theme.accent.opacity(0.05),
-                                Theme.background
-                            ],
+                            colors: [Theme.accent.opacity(0.2), Theme.accent.opacity(0.05)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
-                        .frame(height: 200 + topInset)
+                        .frame(height: 260 + topInset)
                     }
                 }
 
-                VStack(spacing: 0) {
-                    // 顶部按钮行
-                    HStack(spacing: 12) {
-                        Spacer()
-                        // 上传
-                        Button { showImporter = true } label: {
-                            Circle()
-                                .fill(.white.opacity(0.12))
-                                .frame(width: 38, height: 38)
-                                .overlay(Image(systemName: "plus")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white))
-                        }
-                        .buttonStyle(PressableButtonStyle())
+                // 底部渐变遮罩：让背景图和下面的内容自然融合
+                LinearGradient(
+                    colors: [Color.clear, Theme.background],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 120)
+                .offset(y: 140 + topInset)
 
-                        // 消息
-                        Button { showNotifications = true } label: {
-                            Circle()
-                                .fill(.white.opacity(0.12))
-                                .frame(width: 38, height: 38)
-                                .overlay(
-                                    ZStack {
-                                        Image(systemName: "bell.fill")
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundColor(.white)
-                                        if unreadNotifCount > 0 {
-                                            Circle()
-                                                .fill(Color.red)
-                                                .frame(width: 16, height: 16)
-                                                .overlay(
-                                                    Text("\(unreadNotifCount > 99 ? "99+" : "\(unreadNotifCount)")")
-                                                        .font(.system(size: 9, weight: .bold))
-                                                        .foregroundColor(.white)
-                                                )
-                                                .offset(x: 10, y: -10)
-                                        }
+                // 顶部按钮行
+                HStack(spacing: 12) {
+                    Spacer()
+                    Button { showImporter = true } label: {
+                        Circle()
+                            .fill(.white.opacity(0.12))
+                            .frame(width: 38, height: 38)
+                            .overlay(Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+
+                    Button { showNotifications = true } label: {
+                        Circle()
+                            .fill(.white.opacity(0.12))
+                            .frame(width: 38, height: 38)
+                            .overlay(
+                                ZStack {
+                                    Image(systemName: "bell.fill")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.white)
+                                    if unreadNotifCount > 0 {
+                                        Circle()
+                                            .fill(Color.red)
+                                            .frame(width: 16, height: 16)
+                                            .overlay(
+                                                Text("\(unreadNotifCount > 99 ? "99+" : "\(unreadNotifCount)")")
+                                                    .font(.system(size: 9, weight: .bold))
+                                                    .foregroundColor(.white)
+                                            )
+                                            .offset(x: 10, y: -10)
                                     }
-                                )
-                        }
-                        .buttonStyle(PressableButtonStyle())
-
-                        // 设置
-                        Button { showSettings = true } label: {
-                            Circle()
-                                .fill(.white.opacity(0.12))
-                                .frame(width: 38, height: 38)
-                                .overlay(Image(systemName: "gearshape")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(.white))
-                        }
-                        .buttonStyle(PressableButtonStyle())
-                    }
-                    .padding(.top, topInset + 8)
-                    .padding(.trailing, 20)
-
-                    // 头像 + 基本信息
-                    HStack(spacing: 16) {
-                        CachedCoverImage(
-                            url: u?.avatarURL ?? URL(string: "about:blank")!,
-                            title: u?.name ?? "",
-                            placeholder: Circle().fill(Theme.accentSoft)
-                                .overlay(Image(systemName: "person.fill")
-                                    .font(.system(size: 28))
-                                    .foregroundColor(Theme.accent))
-                        )
-                        .frame(width: 72, height: 72)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(u?.name ?? "未登录")
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-
-                            HStack(spacing: 6) {
-                                if let acc = u?.account, !acc.isEmpty {
-                                    Text("ID \(acc)")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(Capsule().fill(.white.opacity(0.15)))
                                 }
-                            }
+                            )
+                    }
+                    .buttonStyle(PressableButtonStyle())
 
-                            if let sig = u?.signature, !sig.isEmpty {
-                                Text(sig)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
+                    Button { showSettings = true } label: {
+                        Circle()
+                            .fill(.white.opacity(0.12))
+                            .frame(width: 38, height: 38)
+                            .overlay(Image(systemName: "gearshape")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
+                .padding(.top, topInset + 8)
+                .padding(.trailing, 20)
+            }
+
+            // 底部内容：头像 + 基本信息 + 统计数据（都在背景区域底部）
+            VStack(spacing: 16) {
+                // 头像 + 基本信息
+                HStack(spacing: 16) {
+                    CachedCoverImage(
+                        url: u?.avatarURL ?? URL(string: "about:blank")!,
+                        title: u?.name ?? "",
+                        placeholder: Circle().fill(Theme.accentSoft)
+                            .overlay(Image(systemName: "person.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(Theme.accent))
+                    )
+                    .frame(width: 72, height: 72)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(u?.name ?? "未登录")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+
+                        HStack(spacing: 6) {
+                            if let acc = u?.account, !acc.isEmpty {
+                                Text("ID \(acc)")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(.white.opacity(0.15)))
                             }
                         }
 
-                        Spacer()
+                        if let sig = u?.signature, !sig.isEmpty {
+                            Text(sig)
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
+
+                    Spacer()
+                }
+
+                // 统计数据（直接放在背景区域里，不用卡片）
+                HStack(spacing: 0) {
+                    statInline(value: "\(works.total)", label: "作品")
+                    Divider().frame(height: 20)
+                    statInline(value: "\(followerCount)", label: "粉丝")
+                    Divider().frame(height: 20)
+                    statInline(value: "\(followingCount)", label: "关注")
+                    Divider().frame(height: 20)
+                    statInline(value: "\(mutualCount)", label: "互关")
                 }
             }
-
-            // 数据统计卡片
-            HStack(spacing: 0) {
-                statBlock(value: "\(works.total)", label: "作品")
-                Divider().frame(height: 32)
-                statBlock(value: "\(followerCount)", label: "粉丝")
-                Divider().frame(height: 32)
-                statBlock(value: "\(followingCount)", label: "关注")
-                Divider().frame(height: 32)
-                statBlock(value: "\(mutualCount)", label: "互关")
-            }
-            .padding(.vertical, 14)
-            .background(Theme.card)
-            .padding(.horizontal, 16)
-            .offset(y: -20)
-
-            // 快捷入口：播放历史 / 我的歌单（跳转独立页面）
-            HStack(spacing: 12) {
-                NavigationLink {
-                    HistoryView()
-                } label: {
-                    quickCardLabel(
-                        icon: "clock.arrow.circlepath",
-                        title: "播放历史",
-                        subtitle: "最近听过的歌",
-                        color: Theme.accent
-                    )
-                }
-                .buttonStyle(PressableButtonStyle())
-
-                NavigationLink {
-                    PlaylistsView()
-                } label: {
-                    quickCardLabel(
-                        icon: "music.note.list",
-                        title: "我的歌单",
-                        subtitle: "收藏喜欢的歌曲",
-                        color: .purple
-                    )
-                }
-                .buttonStyle(PressableButtonStyle())
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
         }
+        .frame(height: 260 + topInset)
     }
 
-    private func statBlock(value: String, label: String) -> some View {
+    private func statInline(value: String, label: String) -> some View {
         VStack(spacing: 4) {
             Text(value)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: 17, weight: .bold))
                 .foregroundColor(.white)
             Text(label)
                 .font(.system(size: 11))
