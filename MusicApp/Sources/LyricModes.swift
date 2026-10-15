@@ -972,15 +972,8 @@ struct DioramaLyricView: View {
         // 相机这 0.42s 沿走廊飞过去，新句从远处雾中拉近到眼前，形成"飞去找歌词"的连续过程
         let line = lines[i]
         let dom = (i == c) ? DioramaView.readNeed(line, now, ceiling: 1.0) : 0
-        let baseOp: Double
-        let scaleGain: Double
-        if i == c {
-            baseOp = 0.34 + 0.66 * dom
-            scaleGain = 0.72 + 0.28 * dom
-        } else {
-            baseOp = DioramaView.neighborOpacity(i - c)
-            scaleGain = 0.75
-        }
+        let baseOp = (i == c) ? (0.34 + 0.66 * dom) : DioramaView.neighborOpacity(i - c)
+        let scaleGain = (i == c) ? (0.72 + 0.28 * dom) : 0.75
         let sc = isBehind ? 0.001 : DioramaView.HERO / z2 * pl.scale * DioramaView.fitScale(line) * scaleGain
         let fog = isBehind ? 0 : dClamp01((DioramaView.FOG_FAR - z2) / (DioramaView.FOG_FAR - DioramaView.FOG_NEAR))
         let op = isBehind ? 0 : baseOp * fog
