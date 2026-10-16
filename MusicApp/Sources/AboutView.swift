@@ -97,6 +97,7 @@ struct AboutView: View {
                 .padding(20)
                 .padding(.bottom, 30)
             }
+            .appBottomTabSpacing()
         }
         .navigationBarHidden(true)
         .onAppear { NavBack.enableSwipeBack() }

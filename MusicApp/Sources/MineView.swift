@@ -109,6 +109,7 @@ struct MineView: View {
                     }
                 }
                 .ignoresSafeArea(edges: .top)
+                .appBottomTabSpacing()
                 .refreshable { await refreshAll() }
                 .simultaneousGesture(horizontalSwipe)
             }

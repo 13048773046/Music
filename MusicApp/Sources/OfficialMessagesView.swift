@@ -47,6 +47,7 @@ struct OfficialMessagesView: View {
             }
             .padding(.horizontal, 16)
         }
+        .appBottomTabSpacing()
         .refreshable { await loadMessages() }
         .task { await loadMessages() }
     }

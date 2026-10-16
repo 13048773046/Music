@@ -478,6 +478,38 @@ struct GlobalTopBar: View {
 }
 
 /// 悬浮 TabBar：播放控制居中（首页时显示播放/暂停按钮，其他页面显示当前歌曲封面，点击回首页）
+// MARK: - 底部安全区统一度量
+
+/// 底部安全区度量：动态计算「App 内部底部导航栏高度 + 系统底部安全区」，
+/// 让所有页面内容不被悬浮的底部导航栏遮挡（不同机型 Home 指示条高度不同，动态取值）。
+enum TabBarMetrics {
+    /// App 内部底部导航栏内容高度（图标 + 文字 + 上下内边距，不含系统安全区）
+    static let contentHeight: CGFloat = 64
+
+    /// 当前设备系统底部安全区高度（Home 指示条，因机型动态变化）
+    static var systemBottomInset: CGFloat {
+        (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?
+            .windows.first(where: { $0.isKeyWindow })?
+            .safeAreaInsets.bottom ?? 0
+    }
+
+    /// 完整安全区 = App 内部 TabBar 高度 + 系统底部安全区
+    static var total: CGFloat { contentHeight + systemBottomInset }
+}
+
+/// 为普通滚动页面补上底部导航栏安全区：
+/// 系统底部安全区由 ScrollView 自带（未 ignoresSafeArea 时），这里只补 App 内部 TabBar 高度；
+/// 全屏沉浸页面（播放页等）请用 `TabBarMetrics.total` 手动计算。
+extension View {
+    func appBottomTabSpacing() -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: TabBarMetrics.contentHeight)
+        }
+    }
+}
+
+// MARK: - 底部导航栏
+
 struct AppTabBar: View {
     @EnvironmentObject private var player: PlayerManager
     /// 订阅通知总线：未读数变化（启动拉取 / WebSocket 实时推送）立即驱动红点刷新

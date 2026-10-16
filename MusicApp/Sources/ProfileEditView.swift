@@ -49,6 +49,7 @@ struct ProfileEditView: View {
                     }
                     .padding(20)
                 }
+                .appBottomTabSpacing()
             }
         }
         .navigationBarHidden(true)

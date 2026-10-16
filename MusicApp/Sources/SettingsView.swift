@@ -105,6 +105,7 @@ struct SettingsView: View {
                 .padding(20)
                 .padding(.bottom, 30)
             }
+            .appBottomTabSpacing()
         }
         .navigationBarHidden(true)
         .onAppear { NavBack.enableSwipeBack() }
@@ -319,6 +320,7 @@ struct ChangePasswordView: View {
                     }
                     .padding(20)
                 }
+                .appBottomTabSpacing()
             }
         }
         .navigationBarHidden(true)

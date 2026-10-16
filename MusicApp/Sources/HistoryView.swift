@@ -39,6 +39,7 @@ struct HistoryView: View {
                 }
             }
         }
+        .appBottomTabSpacing()
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("播放历史")
         .navigationBarTitleDisplayMode(.inline)

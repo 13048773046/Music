@@ -144,7 +144,8 @@ struct DiscoverView: View {
                 .padding(.horizontal, 20)
             }
             .padding(.top, 12)
-            .padding(.bottom, 120)
+            // 底部留白：动态 = 系统底部安全区 + App 内部 TabBar 高度 + 呼吸余量
+            .padding(.bottom, TabBarMetrics.total + 24)
         }
         .refreshable {
             // 下拉刷新：重拉曲库（新上传的歌立即可见）+ 同步刷新个性化推荐（多路召回含随机探索，结果会变化）

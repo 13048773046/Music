@@ -47,6 +47,7 @@ struct NotificationsView: View {
                 }
                 .padding(.horizontal, 20)
             }
+            .appBottomTabSpacing()
             .refreshable { await loadAll() }
         }
         .navigationTitle("消息通知")

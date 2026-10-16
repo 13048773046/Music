@@ -33,6 +33,7 @@ struct PlaylistsView: View {
             .padding(.horizontal, 16)
             .padding(.top, 16)
         }
+        .appBottomTabSpacing()
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("我的歌单")
         .navigationBarTitleDisplayMode(.inline)
@@ -250,6 +251,7 @@ struct PlaylistDetailView: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        .appBottomTabSpacing()
         .navigationTitle(playlist.name)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

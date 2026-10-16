@@ -406,7 +406,7 @@ struct PlayerCard: View {
             // hosting.safeAreaRegions=[]：这里 geo.safeAreaInsets 恒为 0，
             // 顶部栏/底部控件的安全区一律用外部注入的真实值，
             // 从根上避免 UIKit↔SwiftUI 桥接把安全区吞掉导致偏移失效。
-            let tabBarSpace = 70 + bottomInset
+            let tabBarSpace = TabBarMetrics.contentHeight + bottomInset
             // 封面加大约40%：几乎满宽，左外距很小
             let coverSize = max(geo.size.width - 28, 260)
             // 封面居中后的左外距（歌名/作者与之对齐）
