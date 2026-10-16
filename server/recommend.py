@@ -181,6 +181,20 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
         "SELECT id FROM tracks WHERE user_id=?", (viewer_id or "",)).fetchall()}
     if exclude:
         exclude_self |= set(exclude)
+    # 长期收听黑名单：用户最近 REC_REPLAY_DAYS 天内听完成分 ≥ REC_REPLAY_FRACTION_MIN 的歌，
+    # 视为"已经听过"，长期不再重复推荐。解决实际使用中"听来听去都是那几首"的重复问题：
+    # 不再依赖前端内存态 exclude（重开 App 即清空）和 3 小时推送窗口，由后端行为记录持久兜底。
+    if viewer_id:
+        try:
+            _hist = c.execute(
+                "SELECT DISTINCT track_id FROM behavior_events"
+                " WHERE user_id=? AND event='listen'"
+                " AND CAST(json_extract(meta,'$.fraction') AS REAL) >= ?"
+                " AND created >= ?",
+                (viewer_id, REC_REPLAY_FRACTION_MIN, now - REC_REPLAY_DAYS * 86400.0)).fetchall()
+            exclude_self |= {r[0] for r in _hist if r[0]}
+        except Exception:
+            pass
 
     # 候选池：tid -> {score, sources, artist, album, title, genre}
     cand = {}

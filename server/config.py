@@ -230,3 +230,7 @@ REC_WEIGHTS = {
 }
 REC_HOT_TOP = 60
 REC_PUSH_WINDOW = 3 * 3600
+# 长期去重：解决"听来听去都是那几首"——
+# 用户最近 N 天内听完成分 ≥ 阈值的歌，视为"已听过"，长期不再重复推荐（只推没听过的新内容）
+REC_REPLAY_DAYS = int(os.environ.get("MUSIC_REC_REPLAY_DAYS", "30"))
+REC_REPLAY_FRACTION_MIN = float(os.environ.get("MUSIC_REC_REPLAY_FRAC", "0.5"))
