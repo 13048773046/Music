@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var showNoUpdate = false
     @State private var showUpdateSheet = false
     @State private var showLogoutConfirm = false
+    @State private var showSwitchAccountConfirm = false
     @State private var checkBusy = false
     @State private var updateCheck: API.UpdateCheck?
 
@@ -77,6 +78,26 @@ struct SettingsView: View {
                         }
                     }
 
+                    // 切换账号
+                    Button {
+                        showSwitchAccountConfirm = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.left.arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("切换账号")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .foregroundColor(Theme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.cardBorder, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+
                     // 退出登录
                     Button {
                         showLogoutConfirm = true
@@ -111,6 +132,14 @@ struct SettingsView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("当前已是最新版本 v\(appVersion)。")
+        }
+        .alert("确认切换账号？", isPresented: $showSwitchAccountConfirm) {
+            Button("取消", role: .cancel) {}
+            Button("切换") {
+                auth.logout()
+            }
+        } message: {
+            Text("将退出当前账号并跳转登录页，可登录其他账号。")
         }
         .alert("确认退出登录？", isPresented: $showLogoutConfirm) {
             Button("取消", role: .cancel) {}
