@@ -78,44 +78,29 @@ struct SettingsView: View {
                         }
                     }
 
-                    // 切换账号
-                    Button {
-                        showSwitchAccountSheet = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.left.arrow.right")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("切换账号")
-                                .font(.system(size: 15, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 10) {
+                        groupTitle("登录")
+                        sectionCard {
+                            // 切换账号
+                            Button {
+                                showSwitchAccountSheet = true
+                            } label: {
+                                row(icon: "arrow.left.arrow.right", tint: Theme.accent,
+                                    title: "切换账号", showChevron: false)
+                            }
+                            .buttonStyle(.plain)
+                            divider
+                            // 退出登录
+                            Button {
+                                showLogoutConfirm = true
+                            } label: {
+                                row(icon: "rectangle.portrait.and.arrow.right",
+                                    tint: Color(hex: 0xFF6B6B),
+                                    title: "退出登录", showChevron: false)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .foregroundColor(Theme.textPrimary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Theme.cardBorder, lineWidth: 1))
                     }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 10)
-
-                    // 退出登录
-                    Button {
-                        showLogoutConfirm = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("退出登录")
-                                .font(.system(size: 15, weight: .semibold))
-                        }
-                        .foregroundColor(Color(hex: 0xFF6B6B))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color(hex: 0xFF6B6B).opacity(0.3), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
                 }
                 .padding(20)
                 .padding(.bottom, 30)
