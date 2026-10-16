@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>流萤音乐 · 采集控制台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0f0f10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:640px;margin:0 auto;padding:24px 18px}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+.sub{color:#888;font-size:13px;margin-bottom:20px}
+.btn{display:block;width:100%;padding:15px;border-radius:14px;border:0;font-size:16px;font-weight:600;cursor:pointer}
+.btn:active{opacity:.8}
+.btn.start{background:#2a2a2e;color:#fff}
+.btn.stop{background:#c0392b;color:#fff}
+.row2{display:flex;gap:10px;margin-bottom:12px}
+.tgtrow{flex:1;display:flex;align-items:center;gap:10px;background:#1a1a1c;border-radius:14px;padding:10px 14px}
+.tgtrow input{flex:1;min-width:0;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:10px;font-size:15px;outline:none}
+.tgtrow input:disabled{opacity:.4}
+.tgtlbl{font-size:12px;color:#888;flex-shrink:0}
+.sec{margin:18px 0 8px;font-size:13px;color:#888}
+.sec b{color:#eee}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.chip{background:#1a1a1c;color:#aaa;border:1px solid #2a2a2e;padding:8px 13px;border-radius:20px;font-size:13px;cursor:pointer;user-select:none}
+.chip.on{background:#1e3a2a;color:#5cd68a;border-color:#2d5a3e}
+.chip:disabled{opacity:.35;cursor:not-allowed}
+.searchbox{display:flex;gap:8px;background:#1a1a1c;border-radius:14px;padding:8px;margin:10px 0 12px}
+.searchbox input{flex:1;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:11px 12px;font-size:15px;outline:none;min-width:0}
+.searchbox button{background:#2a6df4;color:#fff;border:0;border-radius:10px;padding:0 18px;font-size:14px;font-weight:600;cursor:pointer}
+.runbox{background:#1a1a1c;border-radius:14px;padding:18px 16px;margin:16px 0;text-align:center}
+.runbox .num{font-size:42px;font-weight:800;color:#5cd68a;line-height:1.1}
+.runbox .lbl{font-size:13px;color:#888;margin-top:6px}
+.runbox .st{font-size:11px;color:#555;margin-top:6px}
+.list{background:#1a1a1c;border-radius:14px;overflow:hidden}
+.row{padding:11px 14px;border-bottom:1px solid #262629;font-size:13px;display:flex;align-items:center;gap:8px}
+.row:last-child{border-bottom:0}
+.row .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .a{color:#777;font-size:11px;flex-shrink:0;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .dur{color:#555;font-size:11px;flex-shrink:0}
+.row .collectbtn{background:#1e3a2a;color:#5cd68a;border:0;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0}
+.row .collectbtn:disabled{opacity:.5}
+.empty{padding:24px;text-align:center;color:#555;font-size:13px}
+.tag{display:inline-block;background:#2a2a2e;color:#aaa;font-size:10px;padding:2px 7px;border-radius:5px;margin-left:6px}
+.tag.on{background:#1e4d2b;color:#5cd68a}
+.tag.no{background:#3a2a2a;color:#c9866e}
+.tag.wy{background:#1e3a5f;color:#6fb1ff}
+.tag.kw{background:#3a2a1e;color:#ffb36b}
+.tag.kg{background:#3a1e3a;color:#d68fd6}
+.tag.tx{background:#1e3a3a;color:#6fd6c8}
+.custom-kw{display:flex;gap:8px;margin-top:8px}
+.custom-kw input{flex:1;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:10px 12px;font-size:14px;outline:none;min-width:0}
+.custom-kw button{background:#2a6df4;color:#fff;border:0;border-radius:10px;padding:0 16px;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0}
+</style></head><body><div class="wrap">
+<h1>流萤音乐 · 采集控制台</h1>
+<div class="sub">选择平台与方式，自动入库；也可搜歌名单点采集</div>
+
+<div class="row2">
+  <div class="tgtrow"><input id="tgt" type="number" min="1" inputmode="numeric" placeholder="目标数量"><span class="tgtlbl">目标</span></div>
+</div>
+
+<div class="sec"><b>采集平台</b>（多选；默认勾选的可直接采集，G 后缀=聚合源，抖音BGM=抖音官方音乐榜热门配乐，网易云热歌/QQ热歌=全网热歌榜）</div>
+<div class="chips" id="platChips">
+  <div class="chip on" data-v="dy">抖音BGM</div>
+  <div class="chip on" data-v="wy_hot">网易云热歌</div>
+  <div class="chip on" data-v="qq_hot">QQ热歌</div>
+  <div class="chip on" data-v="gd">网易云G</div>
+  <div class="chip on" data-v="soda">汽水Soda</div>
+  <div class="chip" data-v="gm_migu">咪咕G*</div>
+  <div class="chip" data-v="gm_kugou">酷狗G*</div>
+  <div class="chip" data-v="gm_kuwo">酷我G*</div>
+  <div class="chip" data-v="gm_qq">QQG*</div>
+  <div class="chip" data-v="qs">汽水登录版</div>
+  <div class="chip" data-v="kw">酷我</div>
+  <div class="chip" data-v="wy">网易云</div>
+  <div class="chip" data-v="kg">酷狗</div>
+  <div class="chip" data-v="tx">腾讯</div>
+</div>
+<div style="color:#666;font-size:11px;margin:4px 0 0 2px">* 标星 G 源搜索可用、取流需在 music-dl 设置页扫码登录对应平台 Cookie 后解锁</div>
+
+<div class="sec"><b>采集方式</b></div>
+<div class="chips" id="modeChips">
+  <div class="chip on" data-v="search">关键词搜索</div>
+  <div class="chip" data-v="hot">热门榜单</div>
+</div>
+
+<div class="sec" id="kwSec"><b>关键词</b>（多选，可自定义添加）</div>
+<div class="chips" id="kwChips"></div>
+<div class="custom-kw">
+  <input id="customKwInput" placeholder="输入自定义关键词，回车添加" />
+  <button id="addKwBtn">添加</button>
+</div>
+
+<button id="btn" class="btn start">开始采集</button>
+
+<div class="runbox">
+  <div class="num" id="runCount">0</div>
+  <div class="lbl" id="runLbl">已完成 / 未设置目标</div>
+  <div class="st" id="runState">尚未开始</div>
+</div>
+
+<div class="sec"><b>汽水音乐</b> <span id="qsState" class="tag no">未登录</span> <button id="qsBtn" style="margin-left:8px;padding:3px 10px;border:0;border-radius:6px;background:#1e3a2a;color:#5cd68a;cursor:pointer">扫码登录</button><span style="color:#555;font-size:11px;margin-left:8px">「汽水Soda」免登录即可搜索采集；登录版用于个人歌单/高音质</span></div>
+
+<div class="sec"><b>搜索歌名，点采集入库</b></div>
+<div class="searchbox">
+  <input id="kwInput" placeholder="输入歌名 / 歌手" />
+  <button id="searchBtn">搜索</button>
+</div>
+<div class="list" id="searchList"><div class="empty">输入歌名搜索，再点右侧「采集」</div></div>
+
+<div class="sec"><b>本次采集歌曲</b> <span id="runNum" style="color:#555;font-weight:400"></span></div>
+<div class="list" id="list"><div class="empty">点击开始采集或搜索歌名</div></div>
+<div class="sec">库内共 <b id="total">0</b> 首 <span id="runstate" class="tag">空闲</span></div>
+</div>
+<script>
+const KW_LIST=["抖音热歌","华语流行","热门新歌","2024流行","2025流行","2023热门","华语金曲","伤感流行","民谣","抖音神曲","网络热歌","粤语经典"];
+const btn=document.getElementById('btn');
+const list=document.getElementById('list');
+const total=document.getElementById('total');
+const runstate=document.getElementById('runstate');
+const runCount=document.getElementById('runCount');
+const runState=document.getElementById('runState');
+const runNum=document.getElementById('runNum');
+const runLbl=document.getElementById('runLbl');
+const tgtInp=document.getElementById('tgt');
+const platChips=document.getElementById('platChips');
+const modeChips=document.getElementById('modeChips');
+const kwChips=document.getElementById('kwChips');
+const kwSec=document.getElementById('kwSec');
+const kwInput=document.getElementById('kwInput');
+const searchBtn=document.getElementById('searchBtn');
+const searchList=document.getElementById('searchList');
+const qsState=document.getElementById('qsState');
+const qsBtn=document.getElementById('qsBtn');
+let running=false, mode='search';
+
+// 初始化关键词 chips（预设 + 从 localStorage 恢复的自定义）
+const STORAGE_KEY='custom_keywords';
+// 读取已保存的自定义关键词
+let savedKws=[];
+try{savedKws=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');}catch(e){savedKws=[];}
+// 预设关键词
+KW_LIST.forEach(k=>{
+  const d=document.createElement('div');
+  d.className='chip on';d.textContent=k;d.dataset.v=k;
+  kwChips.appendChild(d);
+});
+// 恢复自定义关键词
+savedKws.forEach(k=>{
+  const d=document.createElement('div');
+  d.className='chip on';d.textContent=k;d.dataset.v=k;
+  kwChips.appendChild(d);
+});
+
+// 自定义关键词添加
+const customKwInput=document.getElementById('customKwInput');
+const addKwBtn=document.getElementById('addKwBtn');
+function addCustomKw(){
+  const v=customKwInput.value.trim();
+  if(!v)return;
+  // 避免重复
+  const exists=[...kwChips.querySelectorAll('.chip')].some(x=>x.dataset.v===v);
+  if(exists){customKwInput.value='';return;}
+  const d=document.createElement('div');
+  d.className='chip on';d.textContent=v;d.dataset.v=v;
+  kwChips.appendChild(d);
+  // 绑定点击切换
+  d.onclick=()=>{d.classList.toggle('on');saveKws();};
+  customKwInput.value='';
+  saveKws();
+}
+// 保存自定义关键词到 localStorage
+function saveKws(){
+  const all=[...kwChips.querySelectorAll('.chip')].map(x=>x.dataset.v);
+  // 只保存不在预设列表里的自定义关键词
+  const custom=all.filter(k=>!KW_LIST.includes(k));
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(custom));
+}
+addKwBtn.onclick=addCustomKw;
+customKwInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();addCustomKw();}});
+function sel(container,cb){
+  container.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
+    if(container===modeChips){
+      container.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+      c.classList.add('on');mode=c.dataset.v;
+      kwSec.style.opacity=(mode==='search')?1:.3;
+      kwChips.querySelectorAll('.chip').forEach(x=>x.disabled=(mode!=='search'));
+    }else{
+      c.classList.toggle('on');
+      saveKws(); // 选中状态变化也保存
+    }
+    if(cb)cb();
+  });
+}
+sel(platChips);sel(kwChips);sel(modeChips);
+kwChips.querySelectorAll('.chip').forEach(x=>x.disabled=false);
+
+function getPlats(){return [...platChips.querySelectorAll('.chip.on')].map(x=>x.dataset.v)}
+function getKws(){return [...kwChips.querySelectorAll('.chip.on')].map(x=>x.dataset.v)}
+function pad(n){return String(n).padStart(2,'0')}
+function fmt(t){if(!t)return '';const d=new Date(t*1000);return pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+async function load(){
+  try{
+    const r=await fetch('/music/api/collect/status');
+    const d=await r.json();
+    running=!!d.running;
+    total.textContent=d.total||0;
+    btn.className='btn '+(running?'stop':'start');
+    btn.textContent=running?'停止采集':'开始采集';
+    runstate.textContent=running?'采集中':'空闲';
+    runstate.className='tag'+(running?' on':'');
+    const songs=d.run_songs||[];
+    const n=songs.length;
+    const tgt=d.target||0, done=d.completed||0, rem=d.remaining||0, ach=!!d.achieved;
+    const ar=songs.filter(x=>x.audio).length;
+    runCount.textContent=tgt?done:0;
+    runCount.style.color=ach?'#e8c46a':'#5cd68a';
+    runLbl.textContent=tgt?('已完成 / 目标 '+tgt+' 首'):'已完成（未设置目标）';
+    runNum.textContent=n?('本次 '+n+' 首 · 音频就绪 '+ar+'/'+n):'';
+    tgtInp.disabled=running;
+    platChips.querySelectorAll('.chip').forEach(c=>c.disabled=running);
+    modeChips.querySelectorAll('.chip').forEach(c=>c.disabled=running);
+    kwChips.querySelectorAll('.chip').forEach(c=>c.disabled=running||mode!=='search');
+    let st;
+    if(tgt){
+      st=(ach?'目标已完成，可重新设置后开始新一轮':('目标 '+tgt+' · 已完成 '+done+'/'+tgt+' · 剩余 '+rem));
+      if(running)st='采集中 · '+st;
+      else if(n)st=(d.started?('上次运行 '+fmt(d.started)+' · '):'')+st;
+    }else{
+      st=running?'采集中…':(d.started?('上次运行 '+n+' 首，始于 '+fmt(d.started)):'尚未开始');
+    }
+    if(d.run_skipped)st+=' · 跳过 '+d.run_skipped;
+    runState.textContent=st;
+    if(n){
+      list.innerHTML=songs.map((s,i)=>'<div class="row"><span class="t">'+esc(s.title)+'</span><span class="a">'+esc(s.artist||'')+'</span><span class="tag'+(s.audio?' on':' no')+'">'+(s.audio?'已下':'待补')+'</span></div>').join('');
+    }else{
+      list.innerHTML='<div class="empty">'+(running?'采集中，等待首批…':'点击开始采集或搜索歌名')+'</div>';
+    }
+  }catch(e){}
+}
+
+btn.onclick=async()=>{
+  btn.disabled=true;
+  try{
+    const v=tgtInp.value.trim();
+    const body=new URLSearchParams();
+    if(v&&!running)body.set('target',v);
+    body.set('platforms',getPlats().join(','));
+    body.set('mode',mode);
+    body.set('keywords',getKws().join(','));
+    await fetch('/music/api/collect/'+(running?'stop':'start'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
+  }catch(e){alert('请求失败：'+e)}
+  setTimeout(()=>{btn.disabled=false;load()},800);
+};
+
+// 搜索
+searchBtn.onclick=async()=>{
+  const kw=kwInput.value.trim();
+  if(!kw){alert('请输入歌名');return}
+  searchBtn.disabled=true;searchBtn.textContent='搜索中…';
+  searchList.innerHTML='<div class="empty">搜索中…</div>';
+  try{
+    const plats=getPlats().length?getPlats():['wy'];
+    const all=[];
+    for(const p of plats){
+      try{
+        const r=await fetch('/music/api/collect/search?source='+p+'&kw='+encodeURIComponent(kw)+'&page=1&limit=15');
+        const d=await r.json();
+        if(d.ok&&d.list)d.list.forEach(s=>all.push(Object.assign({_p:p},s)));
+      }catch(e){}
+    }
+    if(!all.length){searchList.innerHTML='<div class="empty">未找到结果</div>';return}
+    searchList.innerHTML=all.map((s,i)=>{
+      const p=s.source||s._p;
+      return '<div class="row"><span class="tag '+p+'">'+p+'</span><span class="t">'+esc(s.name)+'</span><span class="a">'+esc(s.singer||'')+'</span><span class="dur">'+esc(s.interval||'')+'</span><button class="collectbtn" data-i="'+i+'">采集</button></div>';
+    }).join('');
+    searchList.querySelectorAll('.collectbtn').forEach(b=>b.onclick=async()=>{
+      const s=all[+b.dataset.i];
+      b.disabled=true;b.textContent='采集中…';
+      try{
+        const r=await fetch('/music/api/collect/one',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({source:s.source||s._p,songmid:s.songmid,name:s.name,singer:s.singer||'',album:s.albumName||'',interval:s.interval||'',img:s.img||''})});
+        const d=await r.json();
+        if(d.ok){b.textContent='已入库';b.style.background='#2a6df4';}
+        else{alert(d.err||'采集失败');b.disabled=false;b.textContent='重试';}
+      }catch(e){alert('失败:'+e);b.disabled=false;b.textContent='重试';}
+      load();
+    });
+  }catch(e){searchList.innerHTML='<div class="empty">搜索失败</div>'}
+  searchBtn.disabled=false;searchBtn.textContent='搜索';
+};
+kwInput.addEventListener('keydown',e=>{if(e.key==='Enter')searchBtn.click()});
+load();setInterval(load,1500);
+
+// 汽水音乐：登录状态 / 扫码登录
+async function refreshQs(){
+  try{
+    const r=await fetch('/music/api/collect/qs-status');
+    const d=await r.json();
+    qsState.textContent=d.authed?'已登录':'未登录';
+    qsState.className='tag'+(d.authed?' on':' no');
+    qsBtn.style.display=d.authed?'none':'';
+  }catch(e){}
+}
+qsBtn.onclick=async()=>{
+  qsBtn.disabled=true;
+  try{
+    const r=await fetch('/music/api/collect/qs-qr');
+    const d=await r.json();
+    if(!d.ok){alert(d.err||'二维码生成失败');qsBtn.disabled=false;return}
+    const box=document.createElement('div');
+    box.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:99';
+    const card=document.createElement('div');
+    card.style.cssText='background:#1a1a1e;padding:24px;border-radius:14px;text-align:center;color:#fff;max-width:320px';
+    card.innerHTML='<h3 style="margin:0 0 8px">汽水音乐扫码登录</h3><p style="color:#aaa;font-size:12px;margin:0 0 14px">打开「抖音」或「汽水音乐」App 扫码<br/>登录后服务器才能解析完整音频</p>';
+    const img=document.createElement('img');
+    img.src=d.qrcode;img.style.width='220px';img.style.height='220px';img.style.borderRadius='8px';
+    card.appendChild(img);
+    const tip=document.createElement('p');tip.id='qsTip';tip.style.cssText='color:#5cd68a;font-size:12px;margin:12px 0 0';
+    tip.textContent='等待扫码…';card.appendChild(tip);
+    const closeBtn=document.createElement('button');
+    closeBtn.textContent='关闭';
+    closeBtn.style.cssText='margin-top:12px;padding:8px 20px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer';
+    closeBtn.onclick=()=>document.body.removeChild(box);
+    // —— 手机号登录表单（扫码被限备用）——
+    const sep=document.createElement('div');
+    sep.style.cssText='margin:14px 0 10px;color:#555;font-size:11px';
+    sep.textContent='— 扫码失败？用手机号登录 —';card.appendChild(sep);
+    const mobileInp=document.createElement('input');
+    mobileInp.placeholder='手机号';mobileInp.type='tel';mobileInp.maxLength=11;
+    mobileInp.style.cssText='width:100%;padding:10px 12px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0f0f12;color:#fff;font-size:14px';
+    card.appendChild(mobileInp);
+    const smsRow=document.createElement('div');smsRow.style.cssText='display:flex;gap:8px';
+    const codeInp=document.createElement('input');
+    codeInp.placeholder='短信验证码';codeInp.type='tel';codeInp.maxLength=6;
+    codeInp.style.cssText='flex:1;padding:10px 12px;border-radius:8px;border:1px solid #333;background:#0f0f12;color:#fff;font-size:14px';
+    const sendBtn=document.createElement('button');
+    sendBtn.textContent='发送验证码';
+    sendBtn.style.cssText='padding:10px 14px;border:0;border-radius:8px;background:#1e3a2a;color:#5cd68a;font-size:13px;cursor:pointer';
+    smsRow.appendChild(codeInp);smsRow.appendChild(sendBtn);card.appendChild(smsRow);
+    const loginBtn=document.createElement('button');
+    loginBtn.textContent='手机号登录';
+    loginBtn.style.cssText='width:100%;margin-top:8px;padding:10px;border:0;border-radius:8px;background:#5cd68a;color:#06210f;font-size:14px;font-weight:600;cursor:pointer';
+    card.appendChild(loginBtn);
+    sendBtn.onclick=async()=>{
+      const m=mobileInp.value.trim();
+      if(!/^1\d{10}$/.test(m)){tip.textContent='请输入正确的 11 位手机号';return}
+      sendBtn.disabled=true;sendBtn.textContent='发送中…';
+      try{
+        const r=await fetch('/music/api/collect/qs-sms-send?mobile='+encodeURIComponent(m));
+        const d=await r.json();
+        tip.textContent=d.message||(d.ok?'验证码已发送':'发送失败');
+        if(d.ok){let s=60;sendBtn.textContent=s+'s';const t=setInterval(()=>{s--;if(s<=0){clearInterval(t);sendBtn.disabled=false;sendBtn.textContent='重新发送'}else sendBtn.textContent=s+'s'},1000)}
+        else{sendBtn.disabled=false;sendBtn.textContent='重发'}
+      }catch(e){tip.textContent='请求失败';sendBtn.disabled=false;sendBtn.textContent='发送验证码'}
+    };
+    loginBtn.onclick=async()=>{
+      const m=mobileInp.value.trim();const c=codeInp.value.trim();
+      if(!/^1\d{10}$/.test(m)){tip.textContent='请输入正确的 11 位手机号';return}
+      if(!/^\d{4,6}$/.test(c)){tip.textContent='请输入短信验证码';return}
+      loginBtn.disabled=true;loginBtn.textContent='登录中…';
+      try{
+        const r=await fetch('/music/api/collect/qs-sms-login?mobile='+encodeURIComponent(m)+'&code='+encodeURIComponent(c));
+        const d=await r.json();
+        tip.textContent=d.message||(d.ok?'登录成功':'登录失败');
+        if(d.ok){clearInterval(iv);refreshQs();setTimeout(()=>document.body.removeChild(box),1000)}
+        else{loginBtn.disabled=false;loginBtn.textContent='手机号登录'}
+      }catch(e){tip.textContent='请求失败';loginBtn.disabled=false;loginBtn.textContent='手机号登录'}
+    };
+    // —— Cookie 导入（服务器IP过不了风控时的最终通道）——
+    const sep2=document.createElement('div');
+    sep2.style.cssText='margin:14px 0 10px;color:#555;font-size:11px';
+    sep2.textContent='— 以上都失败？粘贴 Cookie 登录 —';card.appendChild(sep2);
+    const guide=document.createElement('p');
+    guide.style.cssText='color:#777;font-size:11px;line-height:1.6;margin:0 0 8px;text-align:left';
+    guide.textContent='电脑 Chrome 打开 qishui.com 登录抖音账号 → F12 → Network → 刷新页面点任意请求 → 请求头里 Cookie 整段复制，粘贴到下方：';
+    card.appendChild(guide);
+    const ckInp=document.createElement('textarea');
+    ckInp.placeholder='粘贴 Cookie 整段（含 sessionid 等）';
+    ckInp.style.cssText='width:100%;height:64px;padding:10px 12px;border-radius:8px;border:1px solid #333;background:#0f0f12;color:#fff;font-size:12px;resize:vertical';
+    card.appendChild(ckInp);
+    const ckBtn=document.createElement('button');
+    ckBtn.textContent='导入 Cookie 登录';
+    ckBtn.style.cssText='width:100%;margin-top:8px;padding:10px;border:0;border-radius:8px;background:#2a6df4;color:#fff;font-size:14px;font-weight:600;cursor:pointer';
+    card.appendChild(ckBtn);
+    ckBtn.onclick=async()=>{
+      const ck=ckInp.value.trim();
+      if(ck.length<20){tip.textContent='Cookie 内容太短，请完整复制';return}
+      ckBtn.disabled=true;ckBtn.textContent='导入中…';
+      try{
+        const r=await fetch('/music/api/collect/qs-cookie-import?cookie='+encodeURIComponent(ck));
+        const d=await r.json();
+        tip.textContent=d.message||(d.ok?'登录成功':'登录失败');
+        if(d.ok){clearInterval(iv);refreshQs();setTimeout(()=>document.body.removeChild(box),1200)}
+        else{ckBtn.disabled=false;ckBtn.textContent='导入 Cookie 登录'}
+      }catch(e){tip.textContent='请求失败';ckBtn.disabled=false;ckBtn.textContent='导入 Cookie 登录'}
+    };
+    card.appendChild(closeBtn);box.appendChild(card);document.body.appendChild(box);
+    const iv=setInterval(async()=>{
+      try{
+        const r2=await fetch('/music/api/collect/qs-poll?token='+encodeURIComponent(d.token));
+        const d2=await r2.json();
+        if(d2.ok&&d2.authed){
+          clearInterval(iv);tip.textContent='登录成功！';
+          refreshQs();setTimeout(()=>document.body.removeChild(box),900);
+        }else if(d2.status==='expired'){
+          clearInterval(iv);tip.textContent=d2.message||'二维码已过期，请关闭后重新点扫码登录';
+        }else if(d2.status==='failed'){
+          clearInterval(iv);tip.textContent=d2.message||'登录失败，请关闭后重新扫码';
+        }else if(d2.status==='scanned'){
+          tip.textContent=d2.message||'已扫码，请在手机上确认登录';
+        }else{
+          tip.textContent='等待扫码…';
+        }
+      }catch(e){}
+    },2500);
+    setTimeout(()=>clearInterval(iv),120000);
+  }catch(e){alert('请求失败：'+e)}
+  qsBtn.disabled=false;
+};
+refreshQs();setInterval(refreshQs,15000);
+
+async function loadNotify(){
+  const d=await api('/official-messages?admin=1');
+  let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
+  h+='<div class="tablewrap"><table><tr><th>内容</th><th>发送时间</th><th>操作</th></tr>';
+  if(!d.list||!d.list.length)h+='<tr><td colspan="3" class="empty">暂无官方通知</td></tr>';
+  if(d.list)d.list.forEach(m=>{
+    const t=new Date(m.created*1000);
+    const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function showNotifyModal(){document.getElementById('notifyModal').classList.remove('hidden')}
+function hideNotifyModal(){document.getElementById('notifyModal').classList.add('hidden')}
+async function publishNotify(){
+  const content=document.getElementById('notifyContent').value.trim();
+  if(!content){alert('请输入通知内容');return}
+  const r=await api('/official-message',{method:'POST',body:JSON.stringify({content:content})});
+  if(r.ok){hideNotifyModal();loadNotify();}else{alert(r.err||'发布失败')}
+}
+async function delNotify(id){
+  if(!confirm('确定删除这条通知？'))return;
+  const r=await api('/official-message/'+id,{method:'DELETE'});
+  if(r.ok)loadNotify();else alert(r.err||'删除失败')
+}
+
+</script></body></html>

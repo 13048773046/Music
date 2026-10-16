@@ -1,0 +1,16 @@
+{
+  "name": "source-bridge",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "inki-music-api": "^2.0.7",
+    "ly-music-source": "^0.1.0"
+  }
+}

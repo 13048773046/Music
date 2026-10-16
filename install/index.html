@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>流萤音乐 · 安装向导</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{--bg:#0b0b0d;--card:#17171a;--line:#262629;--fg:#f5f5f5;--sub:#8e8e93;--ok:#30d158;--bad:#ff453a;--warn:#ffd60a;--blue:#2a6df4}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+min-height:100vh;padding:24px 16px calc(40px + env(safe-area-inset-bottom));line-height:1.5}
+.wrap{max-width:560px;margin:0 auto}
+.brand{text-align:center;margin:18px 0 26px}
+.brand .logo{font-size:34px}
+.brand h1{font-size:21px;font-weight:700;margin-top:6px}
+.brand p{font-size:13px;color:var(--sub);margin-top:6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:16px}
+.card h2{font-size:16px;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.step-no{width:22px;height:22px;border-radius:50%;background:var(--blue);color:#fff;font-size:12px;
+display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+label{display:block;font-size:13px;color:var(--sub);margin:14px 0 6px}
+input[type=text],input[type=password],input[type=number]{width:100%;padding:12px 14px;border-radius:10px;
+border:1px solid var(--line);background:#111;color:var(--fg);font-size:15px;outline:none}
+input:focus{border-color:var(--blue)}
+.row{display:flex;gap:10px}
+.row>div{flex:1}
+.hint{font-size:12px;color:var(--sub);margin-top:6px}
+.check{display:flex;align-items:flex-start;gap:9px;padding:11px 12px;border-radius:10px;background:#111;margin-top:10px;cursor:pointer;font-size:14px}
+.check input{margin-top:3px}
+.chk{display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:10px;font-size:13px;margin-top:8px}
+.chk.ok{background:rgba(48,209,88,.08);color:var(--ok)}
+.chk.bad{background:rgba(255,69,58,.08);color:var(--bad)}
+.chk.warn{background:rgba(255,214,10,.08);color:var(--warn)}
+.chk .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex-shrink:0;margin-top:5px}
+.chk .tx{flex:1}.chk .d{color:var(--sub);font-size:12px;margin-top:2px}
+.btn{display:block;width:100%;padding:14px;border:0;border-radius:12px;background:var(--blue);color:#fff;
+font-size:16px;font-weight:600;cursor:pointer;margin-top:6px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.ghost{background:#222226;color:var(--fg)}
+.btn.warn{background:var(--bad)}
+.actions{display:flex;gap:10px;margin-top:16px}
+.actions .btn{margin-top:0}
+.banner{padding:12px 14px;border-radius:10px;font-size:13px;margin-bottom:14px}
+.banner.bad{background:rgba(255,69,58,.1);border:1px solid rgba(255,69,58,.3);color:var(--bad)}
+.banner.warn{background:rgba(255,214,10,.1);border:1px solid rgba(255,214,10,.3);color:var(--warn)}
+.banner.ok{background:rgba(48,209,88,.1);border:1px solid rgba(48,209,88,.3);color:var(--ok)}
+.hidden{display:none}
+.steps{margin:6px 0}
+.si{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;align-items:center}
+.si:last-child{border-bottom:0}
+.si .ic{width:20px;text-align:center;flex-shrink:0}
+.si.run .ic::content{''}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #333;border-top-color:var(--blue);
+border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.si.done{color:var(--ok)}.si.run{color:var(--fg)}.si.pending{color:var(--sub)}.si.error{color:var(--bad)}
+.logbox{background:#0a0a0c;border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px;
+height:160px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#9a9aa1;white-space:pre-wrap}
+.logbox .e{color:var(--bad)}.logbox .w{color:var(--warn)}
+.link-item{display:flex;align-items:center;gap:10px;padding:12px;background:#111;border-radius:10px;margin-top:10px}
+.link-item .k{font-size:12px;color:var(--sub);width:88px;flex-shrink:0}
+.link-item .v{font-size:13px;word-break:break-all;flex:1}
+.link-item a{color:var(--blue);text-decoration:none}
+.copy{font-size:11px;color:var(--blue);background:none;border:1px solid var(--blue);border-radius:6px;
+padding:3px 8px;cursor:pointer;flex-shrink:0}
+.pwd-box{background:rgba(42,109,244,.1);border:1px solid rgba(42,109,244,.35);border-radius:10px;
+padding:14px;margin-top:12px;text-align:center}
+.pwd-box .pw{font-size:20px;font-weight:700;letter-spacing:1px;margin:6px 0;word-break:break-all}
+.pwd-box .once{font-size:12px;color:var(--warn)}
+code{background:#111;padding:1px 6px;border-radius:5px;font-size:12px}
+.summary{font-size:13px;color:var(--sub)}.summary b{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="logo">&#9835;</div>
+    <h1>流萤音乐</h1>
+    <p>自动安装向导 · 后端 + 音源桥 + 站点配置</p>
+  </div>
+
+  <!-- 已安装 -->
+  <div class="card hidden" id="installedCard">
+    <h2>已安装</h2>
+    <div class="banner ok">本服务器已完成安装，安装向导已锁定。如需重装，请删除 <code>install_state.json</code> 并重新运行 install.sh。</div>
+    <div id="installedLinks"></div>
+  </div>
+
+  <div id="wizard">
+    <!-- Step 1 环境 -->
+    <div class="card" id="card1">
+      <h2><span class="step-no">1</span>环境检测</h2>
+      <div id="envList"><div class="hint">正在检测服务器环境…</div></div>
+      <div class="banner bad hidden" id="envBlock"></div>
+      <div class="actions">
+        <button class="btn ghost" id="btnReProbe">重新检测</button>
+        <button class="btn" id="btnTo2" disabled>下一步</button>
+      </div>
+    </div>
+
+    <!-- Step 2 配置 -->
+    <div class="card hidden" id="card2">
+      <h2><span class="step-no">2</span>站点配置</h2>
+      <label>部署目录（自动探测）</label>
+      <input type="text" id="rootDir" disabled>
+      <label>网站域名 *</label>
+      <input type="text" id="domain" placeholder="music.example.com" autocomplete="off">
+      <div class="hint">请确保域名已解析到本服务器；安装后建议在宝塔/面板申请 HTTPS 证书。</div>
+      <div class="row">
+        <div><label>API 端口</label><input type="number" id="apiPort" value="8788"></div>
+        <div><label>音源桥端口</label><input type="number" id="bridgePort" value="8789"></div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="btnBack1">上一步</button>
+        <button class="btn" id="btnTo3">下一步</button>
+      </div>
+    </div>
+
+    <!-- Step 3 密码 -->
+    <div class="card hidden" id="card3">
+      <h2><span class="step-no">3</span>后台管理员密码</h2>
+      <div id="keepBox" class="check hidden">
+        <input type="checkbox" id="keepPwd">
+        <label for="keepPwd" style="margin:0;color:var(--fg)">保留现有后台密码（覆盖安装，不更改）</label>
+      </div>
+      <div id="pwdInputs">
+        <label>设置后台密码（6-64 位）</label>
+        <input type="password" id="password" placeholder="输入后台管理密码" autocomplete="new-password">
+        <div class="check"><input type="checkbox" id="genPwd"><div style="font-size:14px">随机生成 16 位强密码（完成页展示一次）</div></div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="btnBack2">上一步</button>
+        <button class="btn" id="btnTo4">下一步</button>
+      </div>
+    </div>
+
+    <!-- Step 4 确认 -->
+    <div class="card hidden" id="card4">
+      <h2><span class="step-no">4</span>安装确认</h2>
+      <div id="upgradeBanner" class="banner warn hidden">
+        <b>检测到现有部署，将执行覆盖升级。</b><br>安装会先<b>完整备份</b>数据库、媒体文件、配置与音源桥，校验通过后才替换；失败自动回滚。
+      </div>
+      <div id="freshBanner" class="banner hidden">全新安装：将创建数据库、安装依赖并配置服务。</div>
+      <div class="summary" id="confirmSummary"></div>
+      <div class="actions">
+        <button class="btn ghost" id="btnBack3">上一步</button>
+        <button class="btn" id="btnStart">开始安装</button>
+      </div>
+    </div>
+
+    <!-- Step 5 进度/结果 -->
+    <div class="card hidden" id="card5">
+      <h2><span class="step-no">5</span>安装进度</h2>
+      <div class="steps" id="stepList"></div>
+      <div class="logbox" id="logbox"></div>
+      <div id="failBox" class="hidden">
+        <div class="banner bad" id="failMsg"></div>
+        <div id="rollbackMsg" class="banner warn hidden"></div>
+      </div>
+      <div id="doneBox" class="hidden"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var TOKEN="", EXISTING=false, DONE=false;
+function $(id){return document.getElementById(id)}
+function api(path,opt){
+  opt=opt||{};opt.headers=opt.headers||{};
+  if(TOKEN)opt.headers['X-Install-Token']=TOKEN;
+  return fetch('/installapi/'+path,opt).then(function(r){return r.json().then(function(j){return {s:r.status,j:j}})});
+}
+function show(id){for(var i=1;i<=5;i++)$('card'+i).classList.add('hidden');if(id)$('card'+id).classList.remove('hidden')}
+
+function boot(){
+  api('bootstrap').then(function(r){var d=r.j;
+    if(d.locked){return showInstalled(d.result)}
+    TOKEN=d.token;EXISTING=d.existing;
+    $('rootDir').value=d.root;
+    if(EXISTING){$('keepBox').classList.remove('hidden');$('keepPwd').checked=true;toggleKeep()}
+    $('keepPwd').onchange=toggleKeep;
+    probe();
+  });
+}
+function toggleKeep(){
+  var k=$('keepPwd').checked;
+  $('pwdInputs').style.opacity=k?.4:1;$('pwdInputs').style.pointerEvents=k?'none':'auto';
+}
+function probe(){
+  $('envList').innerHTML='<div class="hint">正在检测…</div>';$('btnTo2').disabled=true;
+  api('probe?api_port='+($('apiPort').value||8788)+'&bridge_port='+($('bridgePort').value||8789))
+  .then(function(r){var d=r.j;
+    var h='';
+    d.checks.forEach(function(c){
+      var cls=c.ok?'ok':(c.required?'bad':'warn');
+      h+='<div class="chk '+cls+'"><span class="dot"></span><div class="tx">'+c.name+
+         (c.detail?'<div class="d">'+esc(c.detail)+'</div>':'')+'</div></div>';
+    });
+    $('envList').innerHTML=h;
+    if(d.can_install){$('envBlock').classList.add('hidden');$('btnTo2').disabled=false}
+    else{$('envBlock').classList.remove('hidden');
+      $('envBlock').innerHTML='<b>存在必须处理的问题：</b><br>'+d.blocking.map(function(c){return '· '+esc(c.name)}).join('<br>')}
+  });
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+
+$('btnReProbe').onclick=probe;
+$('btnTo2').onclick=function(){
+  var dm=$('domain').value.trim().toLowerCase();
+  if(!/^[a-z0-9.-]+$/.test(dm)||dm.indexOf('..')>=0){alert('请输入合法域名');return}
+  show(2)};
+$('btnBack1').onclick=function(){show(1)};
+$('btnTo3').onclick=function(){
+  if(!$('keepPwd').checked && !$('genPwd').checked && $('password').value.length<6){alert('请输入至少 6 位密码，或选择随机生成/保留现有密码');return}
+  show(3)};
+$('btnBack2').onclick=function(){show(2)};
+$('genPwd').onchange=function(){$('password').disabled=this.checked;if(this.checked)$('password').value=''};
+$('btnBack3').onclick=function(){show(3)};
+
+$('btnTo4') ? $('btnTo4').onclick=function(){
+  var dm=$('domain').value.trim().toLowerCase();
+  var keep=$('keepPwd').checked;
+  var summary='<b>域名：</b>'+esc(dm)+'<br><b>API 端口：</b>'+$('apiPort').value+
+    '　<b>音源桥端口：</b>'+$('bridgePort').value+'<br><b>后台密码：</b>'+
+    (keep?'保留现有密码':($('genPwd').checked?'随机生成（完成页展示）':'使用自定义密码'));
+  $('confirmSummary').innerHTML=summary;
+  $('upgradeBanner').classList.toggle('hidden',!EXISTING);
+  $('freshBanner').classList.toggle('hidden',EXISTING);
+  show(4);
+}:0;
+
+$('btnStart').onclick=function(){
+  var body={domain:$('domain').value.trim().toLowerCase(),
+    password:$('password').value,gen_password:$('genPwd').checked,
+    keep_admin_pwd:$('keepPwd').checked,
+    api_port:parseInt($('apiPort').value||'8788'),
+    bridge_port:parseInt($('bridgePort').value||'8789')};
+  $('btnStart').disabled=true;$('btnStart').textContent='安装中…';show(5);
+  api('start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){if(r.s!==200){alert('启动失败：'+(r.j.err||r.s));$('btnStart').disabled=false;$('btnStart').textContent='开始安装';show(4);return}
+    poll()});
+};
+
+var POLL_TIMER=null;
+function poll(){
+  api('status').then(function(r){var d=r.j;renderSteps(d);renderLogs(d.logs||[]);
+    if(d.phase==='done'&&d.locked){finish(d.result);return}
+    if(d.phase==='error'){fail(d);return}
+    POLL_TIMER=setTimeout(poll,1000);
+  }).catch(function(){POLL_TIMER=setTimeout(poll,1500)});
+}
+var STEP_NAMES={env_check:'环境检测',backup:'备份现有部署',write_config:'生成配置',admin_pwd:'设置后台密码',
+  install_deps:'安装依赖',init_db:'初始化数据库',setup_systemd:'配置 systemd',setup_nginx_install:'配置 Nginx',
+  start_services:'启动服务',selfcheck:'服务自检',finalize:'切换正式配置'};
+function renderSteps(d){
+  var h='';(d.steps||[]).forEach(function(s){
+    var ic=s.status==='done'?'✓':s.status==='running'?'<span class="spin"></span>':s.status==='error'?'✕':'·';
+    h+='<div class="si '+s.status+'"><span class="ic">'+ic+'</span><span>'+esc(STEP_NAMES[s.key]||s.name)+'</span></div>';
+  });$('stepList').innerHTML=h;
+}
+function renderLogs(logs){
+  var box=$('logbox');var atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-20;
+  box.innerHTML=logs.slice(-80).map(function(l){
+    var cls=l.level==='error'?'e':l.level==='warn'?'w':'';
+    return '<span class="'+cls+'">['+l.t+'] '+esc(l.msg)+'</span>';
+  }).join('\n');
+  if(atBottom)box.scrollTop=box.scrollHeight;
+}
+function fail(d){
+  clearTimeout(POLL_TIMER);
+  $('failBox').classList.remove('hidden');
+  $('failMsg').innerHTML='<b>安装失败：</b>'+esc(d.error||'未知错误');
+  if(d.rolled_back){$('rollbackMsg').classList.remove('hidden');
+    $('rollbackMsg').innerHTML='已自动回滚到安装前备份：<code>'+esc(d.backup_dir||'')+'</code>。修复问题后可重新运行安装。'}
+  else if(d.backup_dir){$('rollbackMsg').classList.remove('hidden');
+    $('rollbackMsg').innerHTML='已保留安装前备份：<code>'+esc(d.backup_dir)+'</code>，可手动执行 <code>python3 install/backup.py restore --yes</code> 回滚。'}
+}
+function finish(res){
+  clearTimeout(POLL_TIMER);DONE=true;
+  var box=$('doneBox');var h='<div class="banner ok"><b>安装完成！</b>以下为各入口地址，请妥善保存。</div>';
+  function item(k,u,display){h+='<div class="link-item"><span class="k">'+k+'</span><span class="v"><a href="'+u+'" target="_blank">'+esc(display||u)+'</a></span><button class="copy" data-u="'+esc(u)+'">复制</button></div>'}
+  var L=res.links||{};
+  item('官网',L.site);item('接口检测',L.api_health);item('后台管理',L.admin);item('采集控制台',L.collect);item('汽水解析',L.qishui);
+  if(!res.admin_password_kept&&res.admin_password){
+    h+='<div class="pwd-box"><div class="once">后台初始密码（仅展示一次，请立即保存）</div><div class="pw">'+esc(res.admin_password)+'</div><button class="copy" data-u="'+esc(res.admin_password)+'">复制密码</button></div>';
+  }else{
+    h+='<div class="hint" style="margin-top:10px">后台密码为你原有的密码（本次未更改）。</div>';
+  }
+  if(res.source_bridge&&!res.source_bridge.ok&&res.source_bridge.hint){
+    h+='<div class="banner warn" style="margin-top:12px">'+esc(res.source_bridge.hint)+'</div>';
+  }
+  if(res.backup_dir){h+='<div class="hint" style="margin-top:10px">安装前备份：<code>'+esc(res.backup_dir)+'</code></div>'}
+  box.innerHTML=h;box.classList.remove('hidden');
+  box.querySelectorAll('.copy').forEach(function(b){b.onclick=function(){navigator.clipboard&&navigator.clipboard.writeText(b.getAttribute('data-u'));b.textContent='已复制';setTimeout(function(){b.textContent='复制'},1200)}});
+}
+function showInstalled(res){
+  $('wizard').classList.add('hidden');$('installedCard').classList.remove('hidden');
+  if(res&&res.links){var h='';var L=res.links;
+    [['官网',L.site],['后台',L.admin],['采集',L.collect]].forEach(function(x){
+      h+='<div class="link-item"><span class="k">'+x[0]+'</span><span class="v"><a href="'+x[1]+'" target="_blank">'+esc(x[1])+'</a></span></div>'});
+    $('installedLinks').innerHTML=h}
+}
+boot();
+</script>
+</body>
+</html>

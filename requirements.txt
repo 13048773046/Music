@@ -1,0 +1,4 @@
+# 流萤音乐后端 Python 依赖（Python 3.8+）
+# 安装：pip3 install -r requirements.txt
+Pillow>=9.0.0      # 封面缩略图压缩（长边 600px / JPEG 82）
+mutagen>=1.45.0    # 上传音频时长解析（MP3/M4A/FLAC 等）

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
+<title>流萤音乐 · 为你而选的好音乐</title>
+<meta name="description" content="流萤音乐：个性化推荐、流式播放不等待、逐字歌词跟着唱。">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{--bg:#0b0b0d;--fg:#f5f5f5;--sub:#8e8e93;--line:#262629;--blue:#2a6df4}
+html,body{background:var(--bg);color:var(--fg);
+font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+min-height:100vh;-webkit-font-smoothing:antialiased}
+.wrap{max-width:720px;margin:0 auto;padding:0 22px;min-height:100vh;display:flex;flex-direction:column}
+.hero{flex:1;display:flex;flex-direction:column;justify-content:center;padding:70px 0 40px;text-align:center}
+.logo{font-size:56px;line-height:1}
+h1{font-size:34px;font-weight:800;margin-top:22px;letter-spacing:1px}
+.slogan{font-size:16px;color:var(--sub);margin-top:16px;line-height:1.7}
+.feats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:40px 0 8px}
+.feat{background:#17171a;border:1px solid var(--line);border-radius:14px;padding:18px 10px}
+.feat .ico{font-size:24px}.feat .t{font-size:13px;margin-top:10px;font-weight:600}
+.feat .d{font-size:11.5px;color:var(--sub);margin-top:5px;line-height:1.5}
+.dl{margin-top:38px;display:flex;flex-direction:column;gap:12px}
+.btn{display:block;width:100%;padding:16px;border-radius:14px;font-size:16px;font-weight:600;
+text-decoration:none;text-align:center}
+.btn.ios{background:var(--fg);color:#0b0b0d}
+.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+.soon{font-size:12px;color:var(--sub);margin-top:10px}
+footer{padding:26px 0 calc(28px + env(safe-area-inset-bottom));text-align:center;font-size:12px;color:#5a5a60}
+footer a{color:var(--sub);text-decoration:none;margin:0 8px}
+@media(max-width:420px){h1{font-size:28px}.feats{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <div class="logo">&#9835;</div>
+    <h1>流萤音乐</h1>
+    <p class="slogan">为你精心挑选的音乐<br>流式播放不等待，逐字歌词跟着唱</p>
+
+    <div class="feats">
+      <div class="feat"><div class="ico">&#127925;</div><div class="t">个性推荐</div><div class="d">懂你的口味，每次打开都有新惊喜</div></div>
+      <div class="feat"><div class="ico">&#9889;</div><div class="t">秒开播放</div><div class="d">音频流式加载，预缓存切歌不等待</div></div>
+      <div class="feat"><div class="ico">&#128214;</div><div class="t">逐字歌词</div><div class="d">跟随节拍高亮，沉浸式跟唱</div></div>
+    </div>
+
+    <div class="dl">
+      <!-- 下载地址可在后台「站点配置」维护；此处为静态占位，部署后可替换 -->
+      <a class="btn ios" href="#" onclick="return false">下载 iOS 版</a>
+      <a class="btn ghost" href="/music/admin.html">管理后台</a>
+    </div>
+    <p class="soon">Android 版本即将上线</p>
+  </section>
+  <footer>
+    <div>© 流萤音乐 Liuying Music</div>
+    <div style="margin-top:8px">
+      <a href="/music/collect.html">音源采集</a>·<a href="/api/health">服务状态</a>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

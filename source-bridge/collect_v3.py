@@ -6,12 +6,15 @@ v3.1：接入抖音官方音乐榜（chart/music/list）——只采抖音上很
 """
 import argparse, hashlib, json, os, re, ssl, sqlite3, time, urllib.parse, urllib.request
 
-DB = "/www/wwwroot/music/tracks.db"
-FILES = "/www/wwwroot/music/files"
-BRIDGE = "http://127.0.0.1:8789"
+# 路径/端口参数化：默认与历史线上完全一致；可用 MUSIC_ROOT / BRIDGE_PORT 覆盖（隔离演练用）。
+ROOT = os.environ.get("MUSIC_ROOT", "/www/wwwroot/music")
+_BPORT = int(os.environ.get("BRIDGE_PORT", "8789"))
+DB = os.path.join(ROOT, "tracks.db")
+FILES = os.path.join(ROOT, "files")
+BRIDGE = "http://127.0.0.1:%d" % _BPORT
 OWNER_UID = "a334105a8a2f4401a19001ee4ce66929"
-RUN_STATE = "/www/wwwroot/music/source-bridge/collect_run.json"
-TGT_FILE = "/www/wwwroot/music/source-bridge/collect_target.json"
+RUN_STATE = os.path.join(ROOT, "source-bridge", "collect_run.json")
+TGT_FILE = os.path.join(ROOT, "source-bridge", "collect_target.json")
 
 # 抖音官方音乐榜（热歌榜 BGM）：无签名公开接口，反映抖音热门视频/图集配乐热度
 DY_MUSIC_URL = "https://aweme.snssdk.com/aweme/v1/chart/music/list/"
@@ -455,7 +458,7 @@ def main():
     # 收尾：自动补一轮音频下载（本轮下载失败的歌标待补，这里统一补齐，App 全部可播）
     try:
         import subprocess as _sp
-        _sp.call(["python3", "/www/wwwroot/music/source-bridge/download_collected.py"])
+        _sp.call(["python3", os.path.join(ROOT, "source-bridge", "download_collected.py")])
     except Exception:
         pass
     print("DONE inserted=%d skip=%d fail=%d dropped=%d" % (inserted, skip, fail, dropped), flush=True)

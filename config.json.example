@@ -1,0 +1,24 @@
+{
+  "root": "/www/wwwroot/music",
+  "domain": "music.example.com",
+  "public_url": "https://music.example.com/music",
+  "sign_secret": "安装时自动生成；覆盖安装会复用旧值（勿手改，否则已分享短链/签名流失效）",
+  "collect_key": "安装时自动生成（X-Collect-Key 入库密钥）",
+  "ports": {
+    "api": 8788,
+    "bridge": 8789,
+    "install": 8899
+  },
+  "admin_pwd_file": "/www/wwwroot/music/admin_pwd",
+  "paths": {
+    "files": "/www/wwwroot/music/files",
+    "db": "/www/wwwroot/music/tracks.db",
+    "bridge_dir": "/www/wwwroot/music/source-bridge",
+    "collect_target": "/www/wwwroot/music/source-bridge/collect_target.json",
+    "collect_run": "/www/wwwroot/music/source-bridge/collect_run.json",
+    "collect_log": "/www/wwwroot/music/source-bridge/collect_v3.log",
+    "collect_v3": "/www/wwwroot/music/source-bridge/collect_v3.py",
+    "download_collected": "/www/wwwroot/music/source-bridge/download_collected.py",
+    "qs_session": "/www/wwwroot/music/source-bridge/qs_session.json"
+  }
+}

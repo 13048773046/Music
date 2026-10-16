@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
+<title>流萤音乐</title>
+__META_OG__
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{background:#0b0b0d;color:#f5f5f5;font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif}
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+padding:28px calc(28px + env(safe-area-inset-left)) calc(40px + env(safe-area-inset-bottom)) calc(28px + env(safe-area-inset-right))}
+.brand{font-size:12px;letter-spacing:2px;color:#6e6e73;margin-bottom:30px}
+.brand b{color:#f5f5f5;font-weight:600}
+.cover{width:min(70vw,300px);aspect-ratio:1/1;border-radius:16px;background:#17171a;overflow:hidden}
+.cover img{width:100%;height:100%;object-fit:cover;display:block}
+.title{margin-top:26px;font-size:20px;font-weight:700;text-align:center;max-width:82vw;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.artist{margin-top:9px;font-size:14px;color:#8e8e93;text-align:center;max-width:82vw;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.player{margin-top:34px;width:min(80vw,330px)}
+.prow{display:flex;align-items:center;gap:10px}
+.time{font-size:12px;color:#6e6e73;font-variant-numeric:tabular-nums;min-width:36px}
+input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;
+background:linear-gradient(to right,#f5f5f5 var(--p,0%),#2c2c2e var(--p,0%));outline:none;touch-action:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+background:#f5f5f5;border:none}
+.bwrap{display:flex;justify-content:center;margin-top:22px}
+.playbtn{width:64px;height:64px;border-radius:50%;background:#f5f5f5;border:none;cursor:pointer;
+display:flex;align-items:center;justify-content:center;transition:opacity .15s}
+.playbtn:active{opacity:.7}
+.playbtn svg{width:24px;height:24px;fill:#0b0b0d;display:block}
+.err{display:none;margin-top:18px;font-size:13px;color:#ff453a;text-align:center;max-width:80vw}
+</style>
+</head>
+<body>
+<div class="brand">&#9835; <b>流萤音乐</b></div>
+<div class="cover"><img id="cov" alt=""></div>
+<div class="title" id="ttl"></div>
+<div class="artist" id="art"></div>
+<div class="player">
+  <div class="prow">
+    <span class="time" id="cur">0:00</span>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <span class="time" id="dur">-:--</span>
+  </div>
+  <div class="bwrap">
+    <button class="playbtn" id="pb" aria-label="播放">
+      <svg id="pico" viewBox="0 0 24 24"><polygon points="7,4 20,12 7,20"/></svg>
+    </button>
+  </div>
+  <div class="err" id="err"></div>
+</div>
+<script>
+(function(){
+  var TRACK_ID = __TID__;
+  var COVER = __COVER__;
+  var api = location.origin + location.pathname.split('/api/share/')[0] + '/api';
+  var ttl = document.getElementById('ttl'), art = document.getElementById('art');
+  var cov = document.getElementById('cov'), pb = document.getElementById('pb');
+  var pico = document.getElementById('pico'), seek = document.getElementById('seek');
+  var curEl = document.getElementById('cur'), durEl = document.getElementById('dur');
+  var errEl = document.getElementById('err');
+  var audio = new Audio(), playing = false, loaded = false;
+
+  ttl.textContent = __TITLE__;
+  art.textContent = __AUTHOR__;
+  if (COVER) { cov.src = api + '/cover/' + TRACK_ID; }
+  else { cov.remove(); }
+
+  function fmt(s){ s = Math.max(0, Math.floor(s || 0)); var m = Math.floor(s/60); var ss = s%60;
+    return m + ':' + (ss < 10 ? '0' : '') + ss; }
+  function setIcon(play){ pico.innerHTML = play
+    ? '<polygon points="7,4 20,12 7,20"/>'
+    : '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+    pb.setAttribute('aria-label', play ? '播放' : '暂停'); }
+  function showErr(m){ errEl.textContent = m; errEl.style.display = 'block'; }
+  function hideErr(){ errEl.style.display = 'none'; }
+  function paint(){ var d = audio.duration || 0; var c = audio.currentTime || 0;
+    var p = d > 0 ? (c/d*1000) : 0; seek.value = p;
+    seek.style.setProperty('--p', (d > 0 ? c/d*100 : 0) + '%');
+    curEl.textContent = fmt(c); durEl.textContent = d > 0 ? fmt(d) : '-:--'; }
+
+  function loadStream(){
+    return fetch(api + '/stream-url/' + TRACK_ID)
+      .then(function(r){ if(!r.ok){ throw new Error('bad'); } return r.json(); })
+      .then(function(j){ audio.src = api + '/stream/' + TRACK_ID + '?exp=' + j.exp + '&sig=' + j.sig; loaded = true; })
+      .catch(function(){ showErr('加载失败，请稍后重试'); throw new Error('load'); });
+  }
+
+  pb.addEventListener('click', function(){
+    if (playing) { audio.pause(); setIcon(true); playing = false; return; }
+    hideErr();
+    var start = loaded ? Promise.resolve() : loadStream();
+    start.then(function(){ return audio.play(); })
+      .then(function(){ playing = true; setIcon(false); })
+      .catch(function(e){ if (e && e.message !== 'load') { showErr('无法播放，请检查网络后重试'); setIcon(true); playing = false; } });
+  });
+
+  audio.addEventListener('timeupdate', paint);
+  audio.addEventListener('durationchange', paint);
+  audio.addEventListener('loadedmetadata', paint);
+  audio.addEventListener('ended', function(){ setIcon(true); playing = false; paint(); });
+  audio.addEventListener('error', function(){ setIcon(true); playing = false; showErr('播放出错，请重试'); });
+
+  var dragging = false;
+  seek.addEventListener('input', function(){
+    dragging = true;
+    var d = audio.duration || 0;
+    var p = Number(seek.value);
+    seek.style.setProperty('--p', (d > 0 ? p/10 : 0) + '%');
+    curEl.textContent = d > 0 ? fmt(p/1000*d) : fmt(0);
+  });
+  seek.addEventListener('change', function(){
+    var d = audio.duration || 0;
+    if (d > 0) { audio.currentTime = Number(seek.value)/1000*d; }
+    dragging = false; paint();
+  });
+  audio.addEventListener('play', function(){ playing = true; setIcon(false); });
+  audio.addEventListener('pause', function(){ if (dragging) return; playing = false; setIcon(true); });
+})();
+
+async function loadNotify(){
+  const d=await api('/official-messages?admin=1');
+  let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
+  h+='<div class="tablewrap"><table><tr><th>内容</th><th>发送时间</th><th>操作</th></tr>';
+  if(!d.list||!d.list.length)h+='<tr><td colspan="3" class="empty">暂无官方通知</td></tr>';
+  if(d.list)d.list.forEach(m=>{
+    const t=new Date(m.created*1000);
+    const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function showNotifyModal(){document.getElementById('notifyModal').classList.remove('hidden')}
+function hideNotifyModal(){document.getElementById('notifyModal').classList.add('hidden')}
+async function publishNotify(){
+  const content=document.getElementById('notifyContent').value.trim();
+  if(!content){alert('请输入通知内容');return}
+  const r=await api('/official-message',{method:'POST',body:JSON.stringify({content:content})});
+  if(r.ok){hideNotifyModal();loadNotify();}else{alert(r.err||'发布失败')}
+}
+async function delNotify(id){
+  if(!confirm('确定删除这条通知？'))return;
+  const r=await api('/official-message/'+id,{method:'DELETE'});
+  if(r.ok)loadNotify();else alert(r.err||'删除失败')
+}
+
+</script>
+</body>
+</html>

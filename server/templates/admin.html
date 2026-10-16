@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流萤音乐 · 后台管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:100vh}
+.login{max-width:360px;margin:15vh auto;background:#1a1a1c;padding:30px;border-radius:16px}
+.login h2{margin-bottom:18px;font-size:18px}
+.login input{width:100%;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;margin-bottom:12px;font-size:14px}
+.login button{width:100%;padding:12px;border:0;border-radius:10px;background:#2a6df4;color:#fff;font-size:15px;cursor:pointer}
+.app{display:flex;min-height:100vh}
+.side{width:200px;background:#151517;padding:20px 0;flex-shrink:0}
+.side h2{font-size:15px;padding:0 20px 18px;border-bottom:1px solid #262629;margin-bottom:10px}
+.side button{display:block;width:100%;text-align:left;padding:11px 20px;background:none;border:0;color:#aaa;font-size:14px;cursor:pointer}
+.side button.on{color:#fff;background:#222226;border-left:3px solid #2a6df4}
+.main{flex:1;padding:24px 28px;overflow:auto;max-width:100%}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+.card{background:#1a1a1c;padding:18px;border-radius:12px}
+.card .n{font-size:26px;font-weight:600;color:#fff}
+.card .l{font-size:12px;color:#888;margin-top:4px}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:12px}
+table{width:100%;border-collapse:collapse;background:#1a1a1c;font-size:13px;min-width:560px}
+th,td{padding:11px 14px;text-align:left;border-bottom:1px solid #262629;white-space:nowrap}
+th{color:#888;font-weight:500;background:#1f1f22}
+tr:last-child td{border-bottom:0}
+td.act button{background:#3a1f1f;color:#e06c5c;border:0;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+td.act button.ok{background:#1e3a2a;color:#5cd68a}
+td.act button.gray{background:#2a2a2e;color:#ddd}
+.tag{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;background:#2a2a2e;color:#aaa}
+.tag.wy{background:#1e3a5f;color:#6fb1ff}
+.tag.kw{background:#3a2a1e;color:#ffb36b}
+.tag.off{background:#3a1f1f;color:#e06c5c}
+.tag.on{background:#1e3a2a;color:#5cd68a}
+.thumb{width:36px;height:36px;border-radius:6px;object-fit:cover;background:#222;vertical-align:middle}
+.empty{padding:30px;text-align:center;color:#555}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.topbar h1{font-size:18px}
+.topbar button{background:#2a2a2e;color:#aaa;border:0;padding:7px 14px;border-radius:8px;cursor:pointer;font-size:12px}
+.hidden{display:none}
+.modal.hidden{display:none}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;z-index:99;padding:18px}
+.modal-box{background:#1a1a1c;border-radius:14px;width:100%;max-width:420px;max-height:84vh;overflow:auto;display:flex;flex-direction:column}
+.modal-h{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #262629;font-size:15px;font-weight:600;flex-shrink:0}
+.modal-h button{background:none;border:0;color:#888;font-size:20px;cursor:pointer;padding:0 6px}
+.modal-b{padding:16px;overflow:auto}
+.modal-f{display:flex;gap:10px;padding:14px 16px;border-top:1px solid #262629;flex-shrink:0}
+.modal-f .mbtn{flex:1;padding:11px;border:0;border-radius:10px;background:#2a2a2e;color:#eee;font-size:14px;cursor:pointer}
+.modal-f .m-save{background:#2a6df4;color:#fff}
+.frow{margin-bottom:12px}
+.frow label{display:block;font-size:12px;color:#888;margin-bottom:5px}
+.frow input,.frow select,.frow textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;outline:none}
+.frow textarea{resize:none}
+.avrow{display:flex;align-items:center;gap:10px}
+.avrow img{width:64px;height:64px;border-radius:10px;object-fit:cover;background:#222;flex-shrink:0}
+.avrow button{padding:8px 12px;border:0;border-radius:8px;background:#2a2a2e;color:#ddd;font-size:13px;cursor:pointer}
+.hint{font-size:11px;color:#666;margin-top:4px}
+@media (max-width:768px){
+  .app{flex-direction:column}
+  .side{width:100%;padding:0;display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;border-bottom:1px solid #262629}
+  .side h2{display:none}
+  .side button{display:inline-block;width:auto;padding:13px 16px;border-left:0;border-bottom:3px solid transparent;white-space:nowrap}
+  .side button.on{border-left:0;border-bottom:3px solid #2a6df4;background:transparent}
+  .main{padding:14px 12px calc(20px + env(safe-area-inset-bottom))}
+  .cards{grid-template-columns:repeat(2,1fr);gap:10px}
+  .card{padding:14px}
+  .card .n{font-size:22px}
+  .topbar{margin-bottom:14px}
+  .topbar h1{font-size:16px}
+  table{font-size:12px;min-width:520px}
+  th,td{padding:10px 12px}
+  .login{margin:8vh 16px;padding:24px}
+}
+</style></head><body>
+<div id="loginBox" class="login">
+<h2>流萤音乐后台</h2>
+<input id="pwd" type="password" placeholder="管理密码">
+<button onclick="login()">登录</button>
+</div>
+<div id="appBox" class="app hidden">
+<div class="side">
+<h2>流萤音乐</h2>
+<button data-t="dash" class="on" onclick="tab('dash')">仪表盘</button>
+<button data-t="users" onclick="tab('users')">用户管理</button>
+<button data-t="tracks" onclick="tab('tracks')">上传歌曲</button>
+<button data-t="collected" onclick="tab('collected')">采集歌曲</button>
+<button data-t="comments" onclick="tab('comments')">评论管理</button>
+<button data-t="ann" onclick="tab('ann')">公告管理</button>
+<button data-t="notify" onclick="tab('notify')">官方通知</button>
+<button data-t="site" onclick="tab('site')">官网设置</button>
+</div>
+<div class="main">
+<div class="topbar"><h1 id="title">仪表盘</h1><div><button style="margin-right:8px" onclick="changePwd()">修改密码</button><button onclick="logout()">退出</button></div></div>
+<div id="content"></div>
+</div>
+</div>
+<div id="modal" class="modal hidden">
+<div class="modal-box">
+<div class="modal-h"><span id="mTitle">编辑</span><button onclick="closeModal()">×</button></div>
+<div id="mBody" class="modal-b"></div>
+<div class="modal-f"><button class="mbtn" onclick="closeModal()">取消</button><button class="mbtn m-save" id="mSaveBtn" onclick="mSave()">保存</button></div>
+</div>
+</div>
+<script>
+let token=localStorage.getItem('admin_token')||'';
+function h(){return token}
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function fmtTime(ts){if(!ts)return '-';const d=new Date(ts*1000);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function fmtDur(s){if(!s)return '-';s=Math.round(s);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+async function api(path, opts){
+  opts=opts||{};opts.headers=Object.assign({'X-Admin-Token':h()},opts.headers||{});
+  const r=await fetch('/music/api/admin'+path,opts);
+  if(r.status===401){logout();throw new Error('未授权')}
+  return r.json();
+}
+function login(){
+  const pwd=document.getElementById('pwd').value.trim();
+  token=pwd;localStorage.setItem('admin_token',token);
+  document.getElementById('loginBox').classList.add('hidden');
+  document.getElementById('appBox').classList.remove('hidden');
+  loadDash();
+}
+function logout(){token='';localStorage.removeItem('admin_token');location.reload()}
+function tab(t){
+  document.querySelectorAll('.side button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  const titles={dash:'仪表盘',users:'用户管理',tracks:'上传歌曲',collected:'采集歌曲',comments:'评论管理',ann:'公告管理',notify:'官方通知',site:'官网设置'};
+  document.getElementById('title').textContent=titles[t];
+  if(t==='dash')loadDash();if(t==='users')loadUsers();if(t==='tracks')loadTracks();if(t==='collected')loadCollected();if(t==='comments')loadComments();if(t==='ann')loadAnn();if(t==='notify')loadNotify();if(t==='site')loadSite();
+}
+let curPage={tracks:1,collected:1,comments:1};
+let curTracks=[],curCols=[];
+async function loadDash(){
+  const d=await api('/stats');
+  document.getElementById('content').innerHTML=
+    '<div class="cards">'+
+    '<div class="card"><div class="n">'+d.users+'</div><div class="l">用户总数</div></div>'+
+    '<div class="card"><div class="n">'+d.tracks+'</div><div class="l">用户上传歌曲</div></div>'+
+    '<div class="card"><div class="n">'+d.collected+'</div><div class="l">采集歌曲</div></div>'+
+    '<div class="card"><div class="n">'+d.plays+'</div><div class="l">累计播放次数</div></div>'+
+    '</div>';
+}
+// 官网设置：网站名/副标题/下载链接（landing.html 动态读取）
+async function loadSite(){
+  const c=await (await fetch('/music/api/site-config')).json();
+  const fld=(id,label,val,ph)=>(
+    '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">'+label+'</label>'+
+    '<input id="'+id+'" value="'+esc(val||'')+'" placeholder="'+ph+'" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>');
+  document.getElementById('content').innerHTML=
+  '<div style="max-width:640px">'+
+  '<div style="background:#1a1a1c;padding:24px;border-radius:12px">'+
+  '<h3 style="margin-bottom:6px;font-size:16px">官网展示配置</h3>'+
+  '<p style="font-size:12px;color:#888;margin-bottom:18px">修改后即时生效到官网首页（歌曲总数为数据库实时统计，无需填写）。</p>'+
+  fld('siteName','网站名称',c.site_name,'流萤音乐')+
+  fld('heroSub','首页副标题',c.hero_subtitle,'一句话 slogan')+
+  fld('iosUrl','iOS 下载链接',c.ios_url,'https://...ipa 或 TestFlight 地址')+
+  fld('androidUrl','Android 下载链接',c.android_url,'https://...apk')+
+  '<button class="mbtn m-save" onclick="saveSite()">保存</button>'+
+  '<span id="siteTip" style="margin-left:12px;font-size:13px"></span>'+
+  '</div></div>';
+}
+async function saveSite(){
+  const body={site_name:document.getElementById('siteName').value,
+              hero_subtitle:document.getElementById('heroSub').value,
+              ios_url:document.getElementById('iosUrl').value,
+              android_url:document.getElementById('androidUrl').value};
+  await api('/site-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('siteTip').textContent='已保存 ✓';
+  document.getElementById('siteTip').style.color='#4CD9A5';
+}
+async function loadUsers(){
+  const d=await api('/users');
+  let h='<div class="tablewrap"><table><tr><th>头像</th><th>昵称</th><th>账号</th><th>性别</th><th>年龄</th><th>签名</th><th>IP/地区</th><th>状态</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="9" class="empty">无用户</td></tr>';
+  d.list.forEach(u=>{
+    const av=u.avatar?'<img src="'+location.origin+'/music/api/avatar/'+u.id+'" style="width:36px;height:36px;border-radius:50%;object-fit:cover;background:#222" onerror="this.style.visibility=\'hidden\'">':'<div style="width:36px;height:36px;border-radius:50%;background:#2a2a2e;display:flex;align-items:center;justify-content:center;color:#888;font-size:14px">'+esc((u.name||'?')[0])+'</div>';
+    const st=u.banned?'<span class="tag off" title="'+esc(u.ban_reason||'')+'">已封禁</span>':'<span class="tag on">正常</span>';
+    h+='<tr><td>'+av+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.account)+'</td><td>'+(esc(u.gender)||'-')+'</td><td>'+(u.age||'-')+'</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis">'+esc(u.signature||'-')+'</td><td style="font-size:11px;color:#888">'+esc(u.ip||'-')+'</td><td>'+st+'</td><td class="act"><button class="gray" onclick="editUser(\''+u.id+'\')">编辑</button> '+(u.banned?'<button class="ok" onclick="unbanUser(\''+u.id+'\')">解封</button>':'<button onclick="banUser(\''+u.id+'\')">封禁</button>')+' <button onclick="delUser(\''+u.id+'\')">删除</button></td></tr>';
+  });
+  document.getElementById('content').innerHTML=h+'</table></div>';
+}
+async function loadComments(page){
+  if(page)curPage.comments=page;else curPage.comments=1;
+  const d=await api('/comments?page='+curPage.comments+'&size=20');
+  let h='<div class="tablewrap"><table><tr><th>评论者</th><th>评论内容</th><th>所属歌曲</th><th>时间</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="5" class="empty">无评论</td></tr>';
+  d.list.forEach(c=>{
+    h+='<tr><td>'+esc(c.user)+'</td><td style="white-space:normal;max-width:260px">'+esc(c.content)+'</td><td>'+esc(c.track_title)+'</td><td style="font-size:11px;color:#888">'+fmtTime(c.created)+'</td><td class="act"><button onclick="delComment('+c.id+')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+=pager(curPage.comments,d.total,'loadComments');
+  document.getElementById('content').innerHTML=h;
+}
+async function loadAnn(){
+  const h=
+  '<div style="max-width:600px">'+
+  '<div style="background:#1a1a1c;padding:24px;border-radius:12px;margin-bottom:16px">'+
+  '<h3 style="margin-bottom:16px;font-size:16px">发布新通知</h3>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">类型</label>'+
+  '<select id="annType" onchange="onAnnTypeChange()" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box">'+
+  '<option value="announcement">公告通知</option>'+
+  '<option value="update">更新通知</option>'+
+  '</select></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">标题</label>'+
+  '<input id="annTitle" placeholder="通知标题" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">内容</label>'+
+  '<textarea id="annContent" rows="5" placeholder="通知内容" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">版本号（可选）</label>'+
+  '<input id="annVersion" placeholder="如 v1.2.0" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div id="updateFields" style="display:none">'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">下载链接</label>'+
+  '<input id="annDownloadUrl" placeholder="https://..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div style="margin-bottom:14px"><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#ccc;cursor:pointer">'+
+  '<input type="checkbox" id="annForceUpdate" style="width:16px;height:16px"> 强制更新（用户不能取消，必须更新）</label></div>'+
+  '</div>'+
+  '<div style="margin-bottom:18px"><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#ccc;cursor:pointer">'+
+  '<input type="checkbox" id="annShowOnce" style="width:16px;height:16px"> 只弹一次（用户点过确认后不再弹，直到内容更新）</label></div>'+
+  '<button onclick="submitAnn()" style="width:100%;padding:12px;border:0;border-radius:10px;background:#2a6df4;color:#fff;font-size:15px;cursor:pointer">发布</button>'+
+  '</div>'+
+  '<div style="background:#1a1a1c;padding:20px;border-radius:12px;font-size:13px;color:#888;line-height:1.8">'+
+  '<b style="color:#ccc">说明：</b><br>'+
+  '• <b>公告通知</b>：普通公告，用户可关闭，半屏弹窗<br>'+
+  '• <b>更新通知</b>：版本更新提示，可设置强制更新和下载链接<br>'+
+  '• 强制更新：用户只能点"去更新"，不能取消<br>'+
+  '• 非强制更新：用户可点"以后再说"取消<br>'+
+  '• 最新一条通知会覆盖之前的，App 只展示最新一条'+
+  '</div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function onAnnTypeChange(){
+  const t=document.getElementById('annType').value;
+  document.getElementById('updateFields').style.display=(t==='update')?'block':'none';
+}
+async function submitAnn(){
+  const title=document.getElementById('annTitle').value.trim();
+  const content=document.getElementById('annContent').value.trim();
+  const version=document.getElementById('annVersion').value.trim();
+  const type=document.getElementById('annType').value;
+  const showOnce=document.getElementById('annShowOnce').checked?1:0;
+  const forceUpdate=document.getElementById('annForceUpdate').checked?1:0;
+  const downloadUrl=document.getElementById('annDownloadUrl').value.trim();
+  if(!title||!content){alert('请填写标题和内容');return;}
+  if(type==='update'&&!downloadUrl){alert('更新通知需要填写下载链接');return;}
+  try{
+    const r=await fetch('/music/api/admin/announcement',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token},body:JSON.stringify({title,content,version,type,showOnce,forceUpdate,downloadUrl})});
+    if(r.ok){alert('发布成功');loadAnn();}
+    else{alert('发布失败');}
+  }catch(e){alert('网络错误');}
+}
+async function loadTracks(page){
+  if(page)curPage.tracks=page;
+  const d=await api('/tracks?page='+curPage.tracks+'&size=20');
+  curTracks=d.list||[];
+  let h='<div class="tablewrap"><table><tr><th>封面</th><th>标题</th><th>歌手</th><th>状态</th><th>上传者</th><th>播放</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="7" class="empty">无歌曲</td></tr>';
+  d.list.forEach(t=>{
+    const st=t.offline?'<span class="tag off">已下架</span>':'<span class="tag on">在售</span>';
+    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\'hidden\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td>'+st+'</td><td>'+esc(t.uname||'-')+'</td><td>'+t.play_count+'</td><td class="act"><button class="gray" onclick="editTrack(\''+t.id+'\')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineTrack('+t.id+')">上架</button>':'<button onclick="offlineTrack('+t.id+')">下架</button>')+' <button onclick="delTrack('+t.id+')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+=pager(curPage.tracks,d.total,'loadTracks');
+  document.getElementById('content').innerHTML=h;
+}
+async function loadCollected(page){
+  if(page)curPage.collected=page;
+  const d=await api('/collected?page='+curPage.collected+'&size=20');
+  curCols=d.list||[];
+  let h='<div class="tablewrap"><table><tr><th>封面</th><th>标题</th><th>歌手</th><th>来源</th><th>状态</th><th>操作</th></tr>';
+  if(!d.list.length)h+='<tr><td colspan="6" class="empty">无歌曲</td></tr>';
+  d.list.forEach(t=>{
+    const st=t.offline?'<span class="tag off">已下架</span>':'<span class="tag on">在售</span>';
+    h+='<tr><td><img class="thumb" src="'+location.origin+'/music/api/cover/'+t.id+'" onerror="this.style.visibility=\'hidden\'"></td><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td><span class="tag '+t.source+'">'+t.source+'</span></td><td>'+st+'</td><td class="act"><button class="gray" onclick="editCol(\''+t.id+'\')">编辑</button> '+(t.offline?'<button class="ok" onclick="onlineCol('+t.id+')">上架</button>':'<button onclick="offlineCol('+t.id+')">下架</button>')+' <button onclick="delCol('+t.id+')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+=pager(curPage.collected,d.total,'loadCollected');
+  document.getElementById('content').innerHTML=h;
+}
+function pager(page,total,fn){
+  const pages=Math.ceil(total/20);
+  let h='<div style="display:flex;justify-content:center;gap:10px;margin-top:16px;align-items:center">';
+  h+='<button style="background:#2a2a2e;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer" onclick="'+fn+'('+(page>1?page-1:1)+')" '+(page<=1?'disabled':'')+'>上一页</button>';
+  h+='<span style="color:#888;font-size:13px">第 '+page+' / '+pages+' 页（共'+total+'首）</span>';
+  h+='<button style="background:#2a2a2e;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer" onclick="'+fn+'('+(page<pages?page+1:pages)+')" '+(page>=pages?'disabled':'')+'>下一页</button>';
+  return h+'</div>';
+}
+// ---------- 模态框编辑 ----------
+let mState={type:'user',id:'',fields:{},onSave:null};
+function openModal(title,body,state){mState=state;document.getElementById('mTitle').textContent=title;document.getElementById('mBody').innerHTML=body;document.getElementById('modal').classList.remove('hidden');}
+function closeModal(){document.getElementById('modal').classList.add('hidden');}
+async function mSave(){const b=document.getElementById('mSaveBtn');b.disabled=true;try{await mState.onSave()}catch(e){alert('保存失败：'+e)}b.disabled=false;}
+function pickImg(input,key){
+  const f=input.files&&input.files[0];if(!f)return;
+  if(f.size>3*1024*1024){alert('图片不能超过 3MB');input.value='';return}
+  const r=new FileReader();
+  r.onload=()=>{
+    mState.fields[key]=r.result;
+    const img=document.getElementById(key==='avatar'?'pvAvatar':'pvCover');
+    if(img){img.style.visibility='visible';img.src=r.result}
+  };
+  r.readAsDataURL(f);
+}
+async function editUser(id){
+  const u=(await api('/users')).list.find(x=>x.id===id);if(!u)return;
+  openModal('编辑用户 · '+esc(u.account),'<div class="frow"><label>头像</label><div class="avrow"><img id="pvAvatar" src="'+location.origin+'/music/api/avatar/'+id+'"><button type="button" onclick="document.getElementById(\'fiAvatar\').click()">更换头像</button></div><input type="file" id="fiAvatar" accept="image/*" class="hidden" onchange="pickImg(this,\'avatar\')"><div class="hint">点击更换，支持 jpg/png/webp，≤3MB</div></div><div class="frow"><label>昵称</label><input id="fName" value="'+esc(u.name)+'"></div><div class="frow"><label>性别</label><select id="fGender"><option value="">保密</option><option value="男">男</option><option value="女">女</option></select></div><div class="frow"><label>年龄</label><input id="fAge" type="number" min="1" max="120" value="'+(u.age||'')+'"></div><div class="frow"><label>签名</label><textarea id="fSig" rows="2">'+esc(u.signature||'')+'</textarea></div><div class="frow"><label>新密码</label><input id="fPwd" type="password" placeholder="留空则不修改"><div class="hint">留空保持原密码不变</div></div>',
+    {type:'user',id:id,fields:{avatar:null},onSave:saveUser});
+  document.getElementById('fGender').value=u.gender||'';
+}
+async function saveUser(){
+  const fd={};
+  const nm=document.getElementById('fName').value.trim();
+  const g=document.getElementById('fGender').value;
+  const ag=document.getElementById('fAge').value.trim();
+  const sg=document.getElementById('fSig').value.trim();
+  const pw=document.getElementById('fPwd').value.trim();
+  if(nm)fd.name=nm;
+  if(g)fd.gender=g;
+  if(ag)fd.age=ag;
+  if(sg)fd.signature=sg;
+  if(pw)fd.password=pw;
+  if(mState.fields.avatar)fd.avatar=mState.fields.avatar;
+  if(!Object.keys(fd).length){alert('没有可保存的修改');return}
+  await api('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user',id:mState.id,fields:fd})});
+  closeModal();loadUsers();
+}
+async function editTrack(id){
+  const t=curTracks.find(x=>x.id===id);if(!t)return;
+  openModal('编辑歌曲 · 上传','<div class="frow"><label>封面</label><div class="avrow"><img id="pvCover" src="'+location.origin+'/music/api/cover/'+id+'"><button type="button" onclick="document.getElementById(\'fiCover\').click()">更换封面</button></div><input type="file" id="fiCover" accept="image/*" class="hidden" onchange="pickImg(this,\'cover\')"><div class="hint">点击更换，支持 jpg/png/webp，≤3MB</div></div><div class="frow"><label>歌曲名称</label><input id="fTitle" value="'+esc(t.title)+'"></div><div class="frow"><label>作者/歌手</label><input id="fArtist" value="'+esc(t.artist)+'"></div>',
+    {type:'track',id:id,fields:{cover:null},onSave:saveTrack});
+}
+async function editCol(id){
+  const t=curCols.find(x=>x.id===id);if(!t)return;
+  openModal('编辑歌曲 · 采集','<div class="frow"><label>封面</label><div class="avrow"><img id="pvCover" src="'+location.origin+'/music/api/cover/'+id+'"><button type="button" onclick="document.getElementById(\'fiCover\').click()">更换封面</button></div><input type="file" id="fiCover" accept="image/*" class="hidden" onchange="pickImg(this,\'cover\')"><div class="hint">点击更换，支持 jpg/png/webp，≤3MB</div></div><div class="frow"><label>歌曲名称</label><input id="fTitle" value="'+esc(t.title)+'"></div><div class="frow"><label>作者/歌手</label><input id="fArtist" value="'+esc(t.artist)+'"></div>',
+    {type:'collected',id:id,fields:{cover:null},onSave:saveTrack});
+}
+async function saveTrack(){
+  const fd={};
+  const nm=document.getElementById('fTitle').value.trim();
+  const ar=document.getElementById('fArtist').value.trim();
+  if(nm)fd.title=nm;
+  if(ar)fd.artist=ar;
+  if(mState.fields.cover)fd.cover=mState.fields.cover;
+  if(!Object.keys(fd).length){alert('没有可保存的修改');return}
+  await api('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:mState.type,id:mState.id,fields:fd})});
+  closeModal();
+  if(mState.type==='track')loadTracks();else loadCollected();
+}
+async function banUser(id){const r=prompt('请输入封禁原因：');if(r===null)return;await api('/ban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,reason:r,action:'ban'})});loadUsers();}
+async function unbanUser(id){await api('/ban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,action:'unban'})});loadUsers();}
+async function delComment(id){if(!confirm('确认删除这条评论？'))return;await api('/del/comment/'+id,{method:'POST'});loadComments();}
+async function offlineTrack(id){const r=prompt('请输入下架原因：');if(r===null)return;await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'track',id:id,reason:r,action:'off'})});loadTracks();}
+async function onlineTrack(id){await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'track',id:id,action:'on'})});loadTracks();}
+async function offlineCol(id){const r=prompt('请输入下架原因：');if(r===null)return;await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'collected',id:id,reason:r,action:'off'})});loadCollected();}
+async function onlineCol(id){await api('/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'collected',id:id,action:'on'})});loadCollected();}
+async function delUser(id){if(!confirm('确认删除该用户？'))return;await api('/del/user/'+id,{method:'POST'});loadUsers();}
+async function delTrack(id){const r=prompt('请输入删除原因：');if(r===null)return;if(!confirm('确认删除？原因：'+r))return;await api('/del/track/'+id,{method:'POST'});loadTracks();}
+async function delCol(id){const r=prompt('请输入删除原因：');if(r===null)return;if(!confirm('确认删除？原因：'+r))return;await api('/del/collected/'+id,{method:'POST'});loadCollected();}
+async function changePwd(){
+  openModal('修改管理密码','<div class="frow"><label>当前密码</label><input id="pOld" type="password"></div><div class="frow"><label>新密码</label><input id="pNew" type="password" placeholder="6-64 位"></div><div class="frow"><label>确认新密码</label><input id="pNew2" type="password"></div>',{onSave:savePwd});
+}
+async function savePwd(){
+  const o=document.getElementById('pOld').value.trim();
+  const n=document.getElementById('pNew').value.trim();
+  const n2=document.getElementById('pNew2').value.trim();
+  if(!o||!n){alert('请填写完整');return}
+  if(n!==n2){alert('两次新密码不一致');return}
+  const r=await api('/change_pwd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old:o,pwd:n})});
+  if(r&&r.ok){closeModal();alert('密码已修改，请用新密码重新登录');logout();}
+  else{alert((r&&r.err)||'修改失败');}
+}
+if(token){document.getElementById('loginBox').classList.add('hidden');document.getElementById('appBox').classList.remove('hidden');loadDash();}
+
+async function loadNotify(){
+  const d=await api('/official-messages?admin=1');
+  let h='<div class="topbar"><h1>官方通知管理</h1><button onclick="showNotifyModal()">+ 发布新通知</button></div>';
+  h+='<div class="tablewrap"><table><tr><th>内容</th><th>发送时间</th><th>操作</th></tr>';
+  if(!d.list||!d.list.length)h+='<tr><td colspan="3" class="empty">暂无官方通知</td></tr>';
+  if(d.list)d.list.forEach(m=>{
+    const t=new Date(m.created*1000);
+    const ts=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0')+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+    h+='<tr><td style="max-width:400px;white-space:normal">'+esc(m.content)+'</td><td style="font-size:12px;color:#888">'+ts+'</td><td class="act"><button onclick="delNotify(\''+m.id+'\')">删除</button></td></tr>';
+  });
+  h+='</table></div>';
+  h+='<div class="modal hidden" id="notifyModal"><div class="modal-box" style="max-width:500px;width:100%"><h3 style="margin-bottom:16px">发布官方通知</h3><textarea id="notifyContent" placeholder="输入通知内容..." style="width:100%;height:120px;padding:12px;border-radius:10px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;resize:vertical"></textarea><div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end"><button onclick="hideNotifyModal()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a2a2e;color:#aaa;cursor:pointer">取消</button><button onclick="publishNotify()" style="padding:9px 18px;border:0;border-radius:8px;background:#2a6df4;color:#fff;cursor:pointer">发布</button></div></div></div>';
+  document.getElementById('content').innerHTML=h;
+}
+function showNotifyModal(){document.getElementById('notifyModal').classList.remove('hidden')}
+function hideNotifyModal(){document.getElementById('notifyModal').classList.add('hidden')}
+async function publishNotify(){
+  const content=document.getElementById('notifyContent').value.trim();
+  if(!content){alert('请输入通知内容');return}
+  const r=await api('/official-message',{method:'POST',body:JSON.stringify({content:content})});
+  if(r.ok){hideNotifyModal();loadNotify();}else{alert(r.err||'发布失败')}
+}
+async function delNotify(id){
+  if(!confirm('确定删除这条通知？'))return;
+  const r=await api('/official-message/'+id,{method:'DELETE'});
+  if(r.ok)loadNotify();else alert(r.err||'删除失败')
+}
+
+</script></body></html>

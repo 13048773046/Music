@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>流萤音乐 · 汽水链接入库</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{background:#0f0f10;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:640px;margin:0 auto;padding:24px 18px}
+h1{font-size:20px;font-weight:600;margin-bottom:4px}
+.sub{color:#888;font-size:13px;margin-bottom:20px}
+.box{background:#1a1a1c;border-radius:14px;padding:16px;margin-bottom:14px}
+.inprow{display:flex;gap:8px}
+.inprow input{flex:1;min-width:0;background:#111;border:1px solid #2a2a2e;color:#fff;border-radius:10px;padding:12px;font-size:14px;outline:none}
+.btn{display:block;width:100%;padding:14px;border-radius:12px;border:0;font-size:15px;font-weight:600;cursor:pointer}
+.btn:active{opacity:.8}
+.btn.pri{background:#2a6df4;color:#fff}
+.btn.sec{background:#2a2a2e;color:#fff}
+.btn.green{background:#1e3a2a;color:#5cd68a}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.card{display:flex;gap:14px}
+.card img{width:112px;height:112px;border-radius:12px;object-fit:cover;background:#222;flex-shrink:0}
+.card .meta{flex:1;min-width:0}
+.card .t{font-size:17px;font-weight:600;line-height:1.35;margin-bottom:4px}
+.card .a{color:#aaa;font-size:13px;margin-bottom:6px}
+.kv{display:flex;flex-wrap:wrap;gap:6px 14px;color:#888;font-size:12px;margin-top:8px}
+.kv b{color:#ddd;font-weight:500}
+.tag{display:inline-block;background:#1e3a5f;color:#6fb1ff;font-size:11px;padding:2px 9px;border-radius:12px;margin-top:6px}
+.lrc{background:#111;border:1px solid #2a2a2e;border-radius:10px;padding:12px;max-height:260px;overflow:auto;font-size:13px;line-height:1.8;color:#bbb;white-space:pre-wrap;font-family:inherit}
+.sec{font-size:13px;color:#888;margin:14px 0 8px}
+.owner{display:flex;align-items:center;gap:8px;background:#111;border:1px solid #2a2a2e;border-radius:10px;padding:10px 12px;font-size:13px;color:#aaa}
+.owner b{color:#5cd68a}
+.note{color:#777;font-size:12px;margin-top:10px;line-height:1.6}
+.ok{color:#5cd68a;font-size:13px;margin-top:10px}
+.err{color:#e06c5c;font-size:13px;margin-top:10px}
+.hidden{display:none}
+.loading{color:#888;font-size:13px;margin-top:10px}
+</style></head><body><div class="wrap">
+<h1>流萤音乐 · 汽水链接入库</h1>
+<div class="sub">粘贴汽水音乐分享链接，解析歌曲并入库（封面原图 / 歌词 / 音乐标签）</div>
+
+<div class="box">
+  <div class="inprow">
+    <input id="url" type="text" placeholder="粘贴汽水分享链接（可整段粘贴，自动识别链接），如 https://qishui.douyin.com/s/xxxx/" />
+    <button id="parseBtn" class="btn pri" style="width:auto;padding:0 22px;flex-shrink:0">解析</button>
+  </div>
+  <div class="loading hidden" id="loading">解析中，请稍候…</div>
+  <div class="err hidden" id="err"></div>
+</div>
+
+<div id="result" class="hidden">
+  <div class="box">
+    <div class="card">
+      <img id="cov" alt="封面" />
+      <div class="meta">
+        <div class="t" id="title"></div>
+        <div class="a" id="artist"></div>
+        <span class="tag" id="genre"></span>
+        <div class="kv">
+          <span>专辑：<b id="album"></b></span>
+          <span>时长：<b id="dur"></b></span>
+          <span>音质：<b id="size"></b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">入库归属</div>
+  <div class="owner" id="ownerRow"><span>归属账号：</span><b id="ownerAcc">3065751692</b><span id="ownerName"></span></div>
+  <div class="note" id="dupNote"></div>
+
+  <button id="saveBtn" class="btn green" style="margin-top:14px">确认入库（封面原图 + 歌词 + 音乐标签）</button>
+  <div class="ok hidden" id="ok"></div>
+  <div class="err hidden" id="saveErr"></div>
+
+  <div class="sec">歌词预览（<span id="lrcCnt">0</span> 行）</div>
+  <div class="box"><div class="lrc" id="lrc"></div></div>
+</div>
+
+<div class="note">说明：<br>· 封面将保存原图（约 3000×3000），不保存缩略图；<br>· 歌词为标准 LRC 逐字歌词；<br>· 音乐标签（如「流行」）有则入库，无则留空；<br>· 入库后歌曲归属账号 3065751692，可在 App 内播放。</div>
+
+<script>
+// 禁止双指捏合/双击放大（iOS Safari 对 user-scalable=no 不完全尊重，手势拦截兜底）
+document.addEventListener('gesturestart',function(e){e.preventDefault()});
+document.addEventListener('gesturechange',function(e){e.preventDefault()});
+document.addEventListener('dblclick',function(e){e.preventDefault()});
+const $=id=>document.getElementById(id);
+const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let cur=null;
+let lastUrl='';
+// 自动识别汽水/抖音分享链接：粘贴内容可混有文字、口令、标点等，自动提取出链接
+function extractUrl(text){
+  if(!text)return '';
+  text=String(text).trim();
+  if(/^https?:\/\/[^\s"'<>，。；：！？、（）【】《》“”‘’]+$/i.test(text))return text;
+  const urls=[];
+  const re=/https?:\/\/[^\s"'<>，。；：！？、（）【】《》“”‘’]+/gi;
+  let m;
+  while((m=re.exec(text))!==null)urls.push(m[0].replace(/[，。；;、,]+$/,''));
+  if(urls.length){
+    const q=urls.find(u=>/qishui\.douyin\.com|douyin\.com/i.test(u));
+    return q||urls[0];
+  }
+  const m2=text.match(/(?:qishui\.douyin\.com|v\.douyin\.com|www\.douyin\.com)\/[^\s"'<>，。；：！？、（）【】《》“”‘’]+/i);
+  if(m2)return 'https://'+m2[0].replace(/[，。；;、,]+$/,'');
+  return '';
+}
+function fmtDur(s){if(!s)return '--:--';s=Number(s)||0;return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function fmtSize(n){if(!n)return '';n=Number(n)||0;return n>1048576?(n/1048576).toFixed(1)+'MB':Math.round(n/1024)+'KB'}
+$('parseBtn').onclick=async()=>{
+  let raw=$('url').value.trim();
+  // 输入框为空时自动读剪贴板：在汽水 App 复制分享后，切到本页直接点「解析」即可
+  if(!raw && navigator.clipboard && navigator.clipboard.readText){
+    $('err').classList.add('hidden');
+    $('loading').textContent='正在读取剪贴板…';$('loading').classList.remove('hidden');
+    try{
+      const text=(await navigator.clipboard.readText()||'').trim();
+      if(text){raw=text;$('url').value=text;}
+    }catch(e){/* 权限拒绝/不支持：走下方手动粘贴提示 */}
+    $('loading').classList.add('hidden');
+  }
+  const url=extractUrl(raw);
+  if(!url){$('err').textContent='未识别到汽水分享链接：请先复制汽水分享后再点解析，或手动粘贴链接';$('err').classList.remove('hidden');return}
+  $('err').classList.add('hidden');$('loading').classList.remove('hidden');$('result').classList.add('hidden');
+  $('parseBtn').disabled=true;
+  try{
+    const r=await fetch('/music/api/collect/parse-share?url='+encodeURIComponent(url));
+    const d=await r.json();
+    if(!d.ok){$('err').textContent=d.err||'解析失败';$('err').classList.remove('hidden');return}
+    cur=d.track;
+    lastUrl=url;                // 记录本次解析的链接，入库时使用（输入框即将被清空）
+    $('url').value='';          // 解析成功清空输入框，便于直接粘贴下一条
+    $('cov').src=cur.cover_original||cur.cover;
+    $('title').textContent=cur.title;
+    $('artist').textContent=cur.artist||'未知歌手';
+    $('genre').textContent=cur.genre||'无标签';
+    $('genre').style.display=cur.genre?'':'none';
+    $('album').textContent=cur.album||'—';
+    $('dur').textContent=fmtDur(cur.duration);
+    $('size').textContent=fmtSize(cur.audio_size)||'—';
+    $('lrc').textContent=cur.lyric_lrc||'（无歌词）';
+    $('lrcCnt').textContent=(cur.lyric_lrc||'').split('\n').filter(x=>x.trim()).length;
+    $('ownerAcc').textContent='3065751692';
+    $('ownerName').textContent='（夏梓璇）';
+    $('dupNote').textContent=d.exists?('⚠ 库内已存在同名歌曲：'+d.exists_title+'，入库将自动跳过'):'';
+    $('ok').classList.add('hidden');$('saveErr').classList.add('hidden');
+    $('result').classList.remove('hidden');
+  }catch(e){$('err').textContent='请求失败：'+e;$('err').classList.remove('hidden')}
+  $('parseBtn').disabled=false;$('loading').classList.add('hidden');
+};
+$('url').addEventListener('keydown',e=>{if(e.key==='Enter')$('parseBtn').click()});
+$('saveBtn').onclick=async()=>{
+  if(!cur)return;
+  $('saveBtn').disabled=true;$('saveBtn').textContent='入库中…';
+  $('saveErr').classList.add('hidden');$('ok').classList.add('hidden');
+  try{
+    const r=await fetch('/music/api/collect/from-share',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:cur._share_url||lastUrl||$('url').value.trim()})});
+    const d=await r.json();
+    if(d.ok){
+      $('ok').textContent='✅ 入库成功：'+d.title+'（归属 '+d.owner_account+'）'+(d.inserted?'':'（已存在，跳过）')+' ｜ 封面原图'+(d.cover?'✓':'✗')+' 音频'+(d.audio?'✓':'✗')+' 歌词'+(d.lyric_len>0?('✓ '+d.lyric_len+'行'):'✗')+' 标签'+(d.genre?'✓ '+d.genre:'—');
+      $('ok').classList.remove('hidden');
+    }else{
+      $('saveErr').textContent=d.err||'入库失败';$('saveErr').classList.remove('hidden');
+    }
+  }catch(e){$('saveErr').textContent='请求失败：'+e;$('saveErr').classList.remove('hidden')}
+  $('saveBtn').disabled=false;$('saveBtn').textContent='确认入库（封面原图 + 歌词 + 音乐标签）';
+};
+</script>
+</div></body></html>

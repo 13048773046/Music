@@ -15,3 +15,23 @@ MusicApp/*.xcodeproj
 .DS_Store
 __pycache__/
 *.pyc
+
+# ---- 后端运行期数据与敏感配置（由安装程序生成，不入库；config.json.example 保留）----
+config.json
+install_state.json
+admin_pwd
+.sign_secret
+tracks.db
+tracks.db-wal
+tracks.db-shm
+files/
+backup/
+install_preview/
+install/install_api.log
+
+# ---- 音源桥运行期依赖与会话（source.js 为外部音源，按实际决定是否入库）----
+source-bridge/node_modules/
+source-bridge/qs_session.json
+source-bridge/collect_run.json
+source-bridge/collect_target.json
+source-bridge/collect_v3.log
