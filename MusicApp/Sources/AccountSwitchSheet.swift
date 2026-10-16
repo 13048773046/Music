@@ -95,7 +95,6 @@ struct AccountSwitchSheet: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
-        Spacer()
     }
 
     // MARK: - 账号行
