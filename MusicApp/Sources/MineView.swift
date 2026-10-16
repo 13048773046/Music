@@ -125,6 +125,10 @@ struct MineView: View {
             }
             .navigationBarHidden(true)
             .task { await initialLoad() }
+            // 切换账号后：按新账号重新加载我的数据（作品/点赞/评论/听歌时长/未读数）
+            .onChange(of: auth.currentUser?.id) { _ in
+                Task { await refreshAll() }
+            }
             // WebSocket 实时推送驱动铃铛红点
             .onReceive(NotificationBus.shared.$unreadCount) { n in
                 unreadNotifCount = n

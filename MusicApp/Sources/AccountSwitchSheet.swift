@@ -257,6 +257,8 @@ struct LoginCover: View {
         // 换 token 重建 WebSocket 连接 + 刷新未读数（登录态布尔值不变，不走 MusicApp 的 onChange）
         NotificationBus.shared.resetAndReconnect()
         Task { await NotificationBus.shared.refreshUnread() }
+        // 失效我的页预加载缓存 + 刷新全局曲库，界面切换为新账号数据
+        auth.refreshUserDataAfterAccountChange()
         dismiss()
     }
 }

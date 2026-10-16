@@ -140,6 +140,8 @@ final class AuthManager: ObservableObject {
         currentUser = nil
         Keychain.delete(service: serviceName, account: accountName)
         // 历史账号保留：重新登录后仍可在「切换账号」弹窗看到并一键切回
+        // 失效我的页预加载缓存，避免下次登录后展示旧账号数据
+        AppPreloader.shared.invalidateMine()
     }
 
     /// 切换账号：从本地历史会话切到目标账号，并重建实时通知连接
@@ -159,6 +161,14 @@ final class AuthManager: ObservableObject {
         // 换 token 重建 WebSocket 连接 + 刷新未读数（登录态布尔值不变，不走 MusicApp 的 onChange）
         NotificationBus.shared.resetAndReconnect()
         Task { await NotificationBus.shared.refreshUnread() }
+        refreshUserDataAfterAccountChange()
+    }
+
+    /// 账号切换/新账号登录后：失效我的页预加载缓存，并强制刷新全局曲库
+    /// （作品/点赞/评论/听歌时长等由「我的」页按新账号重新拉取）。
+    func refreshUserDataAfterAccountChange() {
+        AppPreloader.shared.invalidateMine()
+        Task { await Library.shared.load(force: true) }
     }
 
     /// 更新资料，成功后同步刷新本地登录态

@@ -21,6 +21,19 @@ final class AppPreloader: ObservableObject {
 
     private init() {}
 
+    /// 切换账号/新账号登录后失效「我的页」预加载数据：
+    /// 下次进入「我的」页会自行按新账号重新拉取，避免展示旧账号数据。
+    func invalidateMine() {
+        mineLoaded = false
+        mineStatsSeconds = 0
+        works = []
+        worksTotal = 0
+        likes = []
+        likesTotal = 0
+        comments = []
+        commentsTotal = 0
+    }
+
     /// 启动时并行预加载
     func preload() async {
         async let r: Void = loadRecommended()
