@@ -12,7 +12,7 @@ struct SettingsView: View {
     @State private var showNoUpdate = false
     @State private var showUpdateSheet = false
     @State private var showLogoutConfirm = false
-    @State private var showSwitchAccountConfirm = false
+    @State private var showSwitchAccountSheet = false
     @State private var checkBusy = false
     @State private var updateCheck: API.UpdateCheck?
 
@@ -80,7 +80,7 @@ struct SettingsView: View {
 
                     // 切换账号
                     Button {
-                        showSwitchAccountConfirm = true
+                        showSwitchAccountSheet = true
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.left.arrow.right")
@@ -133,13 +133,9 @@ struct SettingsView: View {
         } message: {
             Text("当前已是最新版本 v\(appVersion)。")
         }
-        .alert("确认切换账号？", isPresented: $showSwitchAccountConfirm) {
-            Button("取消", role: .cancel) {}
-            Button("切换") {
-                auth.logout()
-            }
-        } message: {
-            Text("将退出当前账号并跳转登录页，可登录其他账号。")
+        .sheet(isPresented: $showSwitchAccountSheet) {
+            AccountSwitchSheet()
+                .environmentObject(auth)
         }
         .alert("确认退出登录？", isPresented: $showLogoutConfirm) {
             Button("取消", role: .cancel) {}

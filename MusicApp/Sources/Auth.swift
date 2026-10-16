@@ -65,15 +65,25 @@ final class AuthManager: ObservableObject {
     static let shared = AuthManager()
 
     @Published var currentUser: User?
+    /// 本地保存过的账号（含历史账号），供「切换账号」弹窗展示
+    @Published private(set) var savedAccounts: [User] = []
     var isLoggedIn: Bool { currentUser != nil }
     /// 当前登录用户的 Bearer Token（可能为 nil：旧会话，后端兼容模式下仍可用）
     var authToken: String? { currentUser?.token }
 
     private let serviceName = "app.star2936.guava3291.auth"
     private let accountName = "session"
+    private let savedIdsKey = "saved_account_ids"
 
     private init() {
         restore()
+    }
+
+    /// 历史账号在 Keychain 中的条目名：acct.<userID>
+    private func acctKey(_ id: String) -> String { "acct.\(id)" }
+
+    private func persistAccountIds(_ list: [User]) {
+        UserDefaults.standard.set(list.map { $0.id }, forKey: savedIdsKey)
     }
 
     /// 接口返回 401（token 失效/被严格模式拒绝）时调用：清除本地登录态，下次进 App 需重新登录。
@@ -81,17 +91,35 @@ final class AuthManager: ObservableObject {
     func handleUnauthorized() {
         guard currentUser != nil else { return }
         DispatchQueue.main.async {
-            guard self.currentUser != nil else { return }
+            guard let cu = self.currentUser else { return }
             self.currentUser = nil
             Keychain.delete(service: self.serviceName, account: self.accountName)
+            // token 失效：同时从历史账号列表移除，避免切换到失效会话
+            self.savedAccounts.removeAll { $0.id == cu.id }
+            Keychain.delete(service: self.serviceName, account: self.acctKey(cu.id))
+            self.persistAccountIds(self.savedAccounts)
         }
     }
 
-    /// 启动时从 Keychain 恢复登录态，恢复成功则直接进首页，不再要求登录
+    /// 启动时从 Keychain 恢复登录态（当前会话 + 历史账号列表）
     private func restore() {
-        guard let data = Keychain.load(service: serviceName, account: accountName),
-              let user = try? JSONDecoder().decode(User.self, from: data) else { return }
-        currentUser = user
+        if let data = Keychain.load(service: serviceName, account: accountName),
+           let user = try? JSONDecoder().decode(User.self, from: data) {
+            currentUser = user
+        }
+        let ids = UserDefaults.standard.stringArray(forKey: savedIdsKey) ?? []
+        var list: [User] = []
+        for id in ids {
+            guard let data = Keychain.load(service: serviceName, account: acctKey(id)),
+                  let u = try? JSONDecoder().decode(User.self, from: data) else { continue }
+            list.append(u)
+        }
+        // 旧版本升级：当前会话未记录在列表里时补入（排最前）
+        if let cu = currentUser, !list.contains(where: { $0.id == cu.id }) {
+            list.insert(cu, at: 0)
+            persistAccountIds(list)
+        }
+        savedAccounts = list
     }
 
     func login(account: String, password: String) async throws {
@@ -111,6 +139,26 @@ final class AuthManager: ObservableObject {
     func logout() {
         currentUser = nil
         Keychain.delete(service: serviceName, account: accountName)
+        // 历史账号保留：重新登录后仍可在「切换账号」弹窗看到并一键切回
+    }
+
+    /// 切换账号：从本地历史会话切到目标账号，并重建实时通知连接
+    func switchAccount(to user: User) {
+        guard user.id != currentUser?.id else { return }
+        guard let data = Keychain.load(service: serviceName, account: acctKey(user.id)),
+              let saved = try? JSONDecoder().decode(User.self, from: data) else { return }
+        currentUser = saved
+        if let d = try? JSONEncoder().encode(saved) {
+            Keychain.save(d, service: serviceName, account: accountName)
+        }
+        // 切到的账号排到列表最前
+        var list = savedAccounts.filter { $0.id != saved.id }
+        list.insert(saved, at: 0)
+        savedAccounts = list
+        persistAccountIds(list)
+        // 换 token 重建 WebSocket 连接 + 刷新未读数（登录态布尔值不变，不走 MusicApp 的 onChange）
+        NotificationBus.shared.resetAndReconnect()
+        Task { await NotificationBus.shared.refreshUnread() }
     }
 
     /// 更新资料，成功后同步刷新本地登录态
@@ -144,7 +192,14 @@ final class AuthManager: ObservableObject {
         }
         if let data = try? JSONEncoder().encode(u) {
             Keychain.save(data, service: serviceName, account: accountName)
+            // 同时写入历史账号条目（登录/注册/更新资料都会同步）
+            Keychain.save(data, service: serviceName, account: acctKey(u.id))
         }
+        // 账号列表去重，当前账号排最前
+        var list = savedAccounts.filter { $0.id != u.id }
+        list.insert(u, at: 0)
+        savedAccounts = list
+        persistAccountIds(list)
         currentUser = u
     }
 }

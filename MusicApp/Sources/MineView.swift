@@ -64,10 +64,6 @@ struct MineView: View {
         return 44
     }
 
-    private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-    }
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -110,7 +106,6 @@ struct MineView: View {
                         
                         contentTabs
                         currentPage
-                        bottomBar
                     }
                 }
                 .ignoresSafeArea(edges: .top)
@@ -596,8 +591,6 @@ struct MineView: View {
         .task { await loadPlaylists() }
     }
 
-    // MARK: - 底部（关于 + 退出登录）
-
     // MARK: - 功能入口卡片（播放历史 / 我的歌单）
 
     private func socialStatItem(value: String, label: String) -> some View {
@@ -639,42 +632,6 @@ struct MineView: View {
         }
         .padding(12)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 0) {
-            Divider().background(Theme.cardBorder)
-
-            HStack {
-                Text("流萤音乐 v\(appVersion)")
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.textTertiary)
-                Spacer()
-                Text("www.dbmt999.asia")
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.textTertiary)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-
-            Button {
-                auth.logout()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("退出登录")
-                        .font(.system(size: 14, weight: .medium))
-                }
-                .foregroundColor(.red.opacity(0.9))
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-                .softCard(radius: 14)
-            }
-            .buttonStyle(PressableButtonStyle())
-            .padding(.horizontal, 20)
-            .padding(.bottom, 6)
-        }
     }
 
     // MARK: - 列表行（作品 / 点赞共用）
