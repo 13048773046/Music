@@ -219,7 +219,7 @@ REC_NOISE = float(os.environ.get("MUSIC_REC_NOISE", "1.2"))   # F4：扰动 0.6�
 REC_TITLE_SIM_THRESHOLD = 0.8
 REC_BUCKET_SECONDS = int(os.environ.get("MUSIC_REC_BUCKET", str(6 * 3600)))
 REC_SESSION_IDLE = int(os.environ.get("MUSIC_REC_IDLE", str(30 * 60)))
-REC_EXPLORE_POOL = int(os.environ.get("MUSIC_REC_EXPLORE_POOL", "120"))
+REC_EXPLORE_POOL = int(os.environ.get("MUSIC_REC_EXPLORE_POOL", "240"))   # F9：探索池=桶内 80%（8 桶每桶约 300 首）
 REC_LIMITS = {
     "behavior": 40, "artist": 30, "genre": 30,
     "hot": 20, "fresh": 10, "explore": 30,

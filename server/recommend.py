@@ -406,13 +406,15 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
     # ---------- 路 5：随机探索召回（保证新内容被看到，权重最低） ----------
     # 候选池按批次种子洗牌截断（替代 SQL RANDOM()）：同批次可复现、不同批次轮换
     # F9：全池按 id 哈希 8 桶轮转抽样（同桶取同一池、跨桶换池），替代固定"入库顺序前 120 首"——
-    # 旧实现对听歌多的用户等于"探索池 = 已听过池"（实测 114/120 已听过），未听过的新内容进不了候选
+    # 旧实现对听歌多的用户等于"探索池 = 已听过池"（实测 114/120 已听过），未听过的新内容进不了候选。
+    # 哈希注意：不能用 CAST(substr(id,1,8) AS INTEGER)（hex 含字母时 SQLite 返回 0 → 全落桶 0），
+    # 用 unicode() 取 id 前两字符码点和 %8，实测 8 桶均匀（267-325）
     explore = c.execute(
         "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
         " SELECT id,title,artist,album,genre FROM tracks WHERE offline=0 AND user_id!=?"
         " UNION ALL"
         " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0 AND play_url!=''"
-        ") WHERE (CAST(substr(id,1,8) AS INTEGER) % 8) = ? ORDER BY id LIMIT ?",
+        ") WHERE (unicode(substr(id,1,1)) + unicode(substr(id,2,1))) % 8 = ? ORDER BY id LIMIT ?",
         (viewer_id or "", _bucket % 8, REC_EXPLORE_POOL)).fetchall()
     explore = list(explore)
     rnd.shuffle(explore)
