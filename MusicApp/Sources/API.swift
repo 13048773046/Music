@@ -53,13 +53,25 @@ enum API {
         return try JSONDecoder().decode([Track].self, from: data)
     }
 
-    static func streamURL(_ id: String) -> URL {
-        base.appendingPathComponent("stream").appendingPathComponent(id)
+    /// 码率档位（弱网播放）：原码率直出 / 低码率 96kbps（后端懒转码落盘缓存）
+    enum Bitrate: Equatable {
+        case high
+        case low
+        /// 后端低码率参数（low = 96；high 不附加参数走原码率）
+        var brParam: String? { self == .low ? "96" : nil }
+    }
+
+    static func streamURL(_ id: String, bitrate: Bitrate = .high) -> URL {
+        let baseURL = base.appendingPathComponent("stream").appendingPathComponent(id)
+        guard let br = bitrate.brParam else { return baseURL }
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return baseURL }
+        comps.queryItems = [URLQueryItem(name: "br", value: br)]
+        return comps.url ?? baseURL
     }
 
     /// 获取带签名时效的播放 URL（防链接泄露/盗链）：
     /// 先向 /api/stream-url/{id} 签发短效签名；接口不可用（老服务）时回退普通 URL
-    static func signedStreamURL(for id: String) async -> URL {
+    static func signedStreamURL(for id: String, bitrate: Bitrate = .high) async -> URL {
         let signURL = base.appendingPathComponent("stream-url").appendingPathComponent(id)
         var req = URLRequest(url: signURL)
         // 网络差时快速回退普通 URL：避免切歌后长时间卡在签名请求，新歌迟迟无法开始加载
@@ -67,12 +79,35 @@ enum API {
         if let (data, _) = try? await URLSession.shared.data(for: req),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let exp = obj["exp"] as? Int, let sig = obj["sig"] as? String {
-            var comps = URLComponents(url: streamURL(id), resolvingAgainstBaseURL: false)
-            comps?.queryItems = [URLQueryItem(name: "exp", value: String(exp)),
-                                 URLQueryItem(name: "sig", value: sig)]
+            var comps = URLComponents(url: streamURL(id, bitrate: bitrate), resolvingAgainstBaseURL: false)
+            var items = comps?.queryItems ?? []
+            items.append(contentsOf: [URLQueryItem(name: "exp", value: String(exp)),
+                                      URLQueryItem(name: "sig", value: sig)])
+            comps?.queryItems = items
             if let signed = comps?.url { return signed }
         }
-        return streamURL(id)
+        return streamURL(id, bitrate: bitrate)
+    }
+
+    /// 预热低码率版本（弱网预取时调用）：触发后端后台转码（stream-prepare），立即返回。
+    /// 使低码率文件在切到该曲前就绪，弱网播放无需等待转码。失败静默（不影响主链路）。
+    static func prepareLowBitrate(for id: String) async {
+        // 先签发签名（与 stream 同体系）
+        let signURL = base.appendingPathComponent("stream-url").appendingPathComponent(id)
+        var req = URLRequest(url: signURL)
+        req.timeoutInterval = 6
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp = obj["exp"] as? Int, let sig = obj["sig"] as? String,
+              var comps = URLComponents(url: base.appendingPathComponent("stream-prepare").appendingPathComponent(id),
+                                        resolvingAgainstBaseURL: false) else { return }
+        comps.queryItems = [URLQueryItem(name: "br", value: "96"),
+                            URLQueryItem(name: "exp", value: String(exp)),
+                            URLQueryItem(name: "sig", value: sig)]
+        guard let u = comps.url else { return }
+        var r = URLRequest(url: u)
+        r.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: r)
     }
 
     /// 隐藏式分享短链（汽水风格）：https://域名/s/{8位短码}/ → H5 分享页；失败返回 nil

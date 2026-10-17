@@ -93,6 +93,14 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published private(set) var engineDownloadFraction: Double = 0
     /// 弱网播放 UI：当前是否离线（失败视图文案区分「网络未连接」与「加载失败」）
     var networkOffline: Bool { NetworkMonitor.shared.isOffline }
+    /// 当前播放曲目的码率档（弱网=low 96k，Wi-Fi=原码率；供引擎下载/缓存键一致使用）
+    private(set) var activeBitrate: API.Bitrate = .high
+    /// 当前码率档决策：蜂窝弱网 → 低码率；Wi-Fi → 原码率（离线由共享缓存兜底）
+    private var effectiveBitrate: API.Bitrate {
+        NetworkMonitor.shared.isCellular ? .low : .high
+    }
+    /// 已从低码率升级到原码率重试的曲目（low 失败 → high 兜底，避免同一首反复卡 low）
+    private var bitrateUpgraded: Set<String> = []
     /// 加载期间（duration==0）的待应用拖动位置：就绪后立即跳到该处
     private var pendingSeekFraction: Double?
 
@@ -476,8 +484,10 @@ final class PlayerManager: NSObject, ObservableObject {
             engineSwitchInProgress = true
             engineDownloadFraction = 0
             let task = Task {
-                let url = await API.signedStreamURL(for: targetID)
+                // 弱网：引擎预下载也用低码率 + 共享缓存优先（下载体积减半，命中缓存免下载）
+                let (url, bitrate) = await self.playbackURL(for: targetID)
                 guard !Task.isCancelled else { return }
+                await MainActor.run { self.activeBitrate = bitrate }
                 await MainActor.run {
                     // 预下载期间切歌/切回原音/再次切换：丢弃迟到接管并清状态
                     guard self.current?.id == targetID, self.selectedEQ != "原音" else {
@@ -531,7 +541,10 @@ final class PlayerManager: NSObject, ObservableObject {
                             }
                         }
                     }
-                    self.enginePlayer.prepare(url: url, mode: mode) { [weak self] in
+                    self.enginePlayer.prepare(url: url,
+                                              trackId: targetID,
+                                              low: self.activeBitrate == .low,
+                                              mode: mode) { [weak self] in
                         guard let self else { return }
                         self.engineSwitchInProgress = false
                         self.engineDownloadFraction = 0
@@ -676,6 +689,10 @@ final class PlayerManager: NSObject, ObservableObject {
             return
         }
         autoRetriedTrackId = trackId
+        // 弱网低码率卡死：升级原码率再试一次（low → high 兜底；播放 URL 决策自动生效）
+        if effectiveBitrate == .low, !bitrateUpgraded.contains(trackId) {
+            bitrateUpgraded.insert(trackId)
+        }
         let resume = currentTime
         // 重载并保持进度：加载完成后 seek 回卡死前位置续播（弱网恢复/服务器响应后无感续播）
         playCurrent(flushReason: .heartbeat,
@@ -695,6 +712,10 @@ final class PlayerManager: NSObject, ObservableObject {
         // 期间 loadFailed=true（UI 展示重试入口），用户手动点重试会清除并提前重载。
         if autoRetriedTrackId != current?.id {
             autoRetriedTrackId = current?.id
+            // 弱网低码率失败：升级原码率再试（low → high 兜底）
+            if effectiveBitrate == .low, let id = current?.id, !bitrateUpgraded.contains(id) {
+                bitrateUpgraded.insert(id)
+            }
             loadFailed = true
             isBuffering = false
             isPlaying = false
@@ -1313,7 +1334,13 @@ final class PlayerManager: NSObject, ObservableObject {
         guard !Task.isCancelled else { return }
         let cached = await MainActor.run { [weak self] in self?.signedURLPool[t.id] }
         if cached == nil {
-            let fetched = await API.signedStreamURL(for: t.id)   // 非 Optional，恒返回可用 URL
+            // 弱网预取：蜂窝走低码率签名 + 顺带预热后端低码率转码（切到该曲时低码率已就绪）
+            let low = NetworkMonitor.shared.isCellular
+            if low {
+                let tid = t.id
+                Task { await API.prepareLowBitrate(for: tid) }
+            }
+            let fetched = await API.signedStreamURL(for: t.id, bitrate: low ? .low : .high)   // 非 Optional，恒返回可用 URL
             guard !Task.isCancelled else { return }
             _ = await MainActor.run { [weak self] () -> Bool in
                 guard let self else { return false }
@@ -1439,6 +1466,18 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - Private
 
+    /// 播放 URL 决策（缓存共享 + 码率档）：
+    /// 共享缓存命中 → file:// 本地（秒开/离线）；否则按码率档签发网络 URL。
+    /// 返回 URL 与对应码率（引擎下载/缓存键需一致）。
+    private func playbackURL(for trackId: String) async -> (URL, API.Bitrate) {
+        let low = effectiveBitrate == .low && !bitrateUpgraded.contains(trackId)
+        let bitrate: API.Bitrate = low ? .low : .high
+        if let cached = AudioCache.shared.existing(trackId: trackId, low: low) {
+            return (cached, bitrate)
+        }
+        return (await API.signedStreamURL(for: trackId, bitrate: bitrate), bitrate)
+    }
+
     private func playCurrent(flushReason: ListenFlushReason? = nil,
                              resumeSeconds: Double? = nil,
                              autoResume: Bool = true,
@@ -1509,20 +1548,28 @@ final class PlayerManager: NSObject, ObservableObject {
         let task = Task { [weak self] in
             guard let self else { return }
             let trackId = current.id
-            // 优先复用预取缓存 URL（切歌免再向后端签发，缩短切歌等待）；未命中才实时请求
+            // 播放 URL 决策（弱网 + 缓存共享核心）：
+            // ① 共享缓存命中（引擎下载过的整曲）→ file:// 本地播放（秒开 + 离线可播）
+            // ② 预取签名 URL 池命中且码率与当前决策一致 → 免签发直接播（秒开）
+            // ③ 其余 → 按码率档实时签发（蜂窝=low 96k / Wi-Fi=原码率）
+            let lowDecision = (effectiveBitrate == .low && !bitrateUpgraded.contains(trackId))
+            let bitrate: API.Bitrate = lowDecision ? .low : .high
             let url: URL
-            let cached = await MainActor.run { () -> URL? in
-                // self 已由外层 guard let self 解包为非 Optional，直接访问
-                guard let c = self.signedURLPool[trackId] else { return nil }
+            if let cachedURL = AudioCache.shared.existing(trackId: trackId, low: lowDecision) {
+                url = cachedURL
+            } else if let poolURL = await MainActor.run { () -> URL? in
+                // 码率与当前决策一致才复用（弱网语义严格：蜂窝必须 low，Wi-Fi 不播 low）
+                guard let c = self.signedURLPool[trackId],
+                      c.absoluteString.contains("br=96") == (bitrate == .low) else { return nil }
                 self.signedURLPool.removeValue(forKey: trackId)
                 self.urlPoolOrder.removeAll { $0 == trackId }
                 return c
-            }
-            if let cached {
-                url = cached
+            } {
+                url = poolURL
             } else {
-                url = await API.signedStreamURL(for: trackId)
+                url = await API.signedStreamURL(for: trackId, bitrate: bitrate)
             }
+            _ = await MainActor.run { self.activeBitrate = bitrate }
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 // 切歌后旧任务迟到响应直接丢弃，防止覆盖新歌状态
@@ -1565,6 +1612,8 @@ final class PlayerManager: NSObject, ObservableObject {
                         }
                     }
                     self.enginePlayer.load(url: url,
+                                           trackId: current.id,
+                                           low: self.activeBitrate == .low,
                                            mode: Self.engineMode(for: self.selectedEQ),
                                            startSeconds: resumeSeconds ?? 0,
                                            autoPlay: autoResume)

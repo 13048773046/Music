@@ -115,10 +115,11 @@ final class AudioEnginePlayer {
     /// 整曲下载用共享会话：避免每次切歌新建 URLSession（每个 session 自带连接池与资源，
     /// 频繁新建会造成资源浪费与潜在泄漏）。downloadTask 会把整曲下载到临时文件，缓存策略仅影响 URL 缓存命中。
     /// delegate 用于上报下载进度（「原音→引擎」无缝切换时 UI 显示加载百分比）。
+    /// 弱网优化：首字节超时放宽到 60s（弱网/蜂窝下服务器响应慢，30s 会误杀）。
     private static let downloadSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .returnCacheDataElseLoad
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 60
         let session = URLSession(configuration: config,
                                  delegate: EngineDownloadDelegate.shared,
                                  delegateQueue: nil)
@@ -224,12 +225,38 @@ final class AudioEnginePlayer {
     /// 预下载整曲并就绪（不启动播放、不上报进度 Timer）。
     /// 用途：原音 → 引擎音效的无缝接力——AVPlayer 继续出声，引擎在后台下载；
     /// 就绪后调用 playFrom(seconds:autoPlay:) 从当前进度接管，用户感知不到加载。
+    /// 缓存共享：若该曲已在本机缓存（原音/引擎共用 AudioCache），直接读缓存免下载；
+    /// 下载完成落盘到共享缓存，原音后续播放可直接用 file:// 本地秒开。
     /// 完成/失败回调均回主线程；下载进度经 onDownloadProgress 上报（0...1）。
-    func prepare(url: URL, mode: Mode, completion: @escaping () -> Void) {
+    func prepare(url: URL, trackId: String, low: Bool = false, mode: Mode, completion: @escaping () -> Void) {
         stop()
         isPrepared = false
         onLoadingChanged?(true)
         pendingURL = url
+
+        // 缓存优先：共享缓存命中 → 免下载直接读本地文件（弱网/离线也能切音效）
+        if let cached = AudioCache.shared.existing(trackId: trackId, low: low) {
+            do {
+                let file = try AVAudioFile(forReading: cached)
+                self.audioFile = file
+                self.fileFormat = file.processingFormat
+                self.totalFrames = file.length
+                self.pausedFrame = 0
+                self.apply(mode: mode)
+                try self.engine.start()
+                self.schedule(from: 0)
+                self.isPrepared = true
+                DispatchQueue.main.async {
+                    self.onLoadingChanged?(false)
+                    completion()
+                }
+                return
+            } catch {
+                print("[AudioEngine] cache load error: \(error)")
+                // 缓存损坏：继续走网络下载（不中断用户操作）
+            }
+        }
+
         EngineDownloadDelegate.shared.register(url: url.absoluteString) { [weak self] f in
             self?.onDownloadProgress?(f)
         }
@@ -259,13 +286,17 @@ final class AudioEnginePlayer {
                 return
             }
             do {
-                // 拷贝到永久临时位置（downloadTask 完成后 tempURL 会被删）
-                let permanent = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(url.lastPathComponent)
-                if FileManager.default.fileExists(atPath: permanent.path) {
-                    try FileManager.default.removeItem(at: permanent)
+                // 落盘到共享缓存（downloadTask 完成后 tempURL 会被系统回收，必须先拷贝）。
+                // 原音/引擎共用 AudioCache：引擎下载的整曲，原音播放直接 file:// 秒开。
+                guard let permanent = AudioCache.shared.store(fromTemp: tempURL,
+                                                              trackId: trackId,
+                                                              low: low) else {
+                    DispatchQueue.main.async {
+                        self.onLoadingChanged?(false)
+                        self.onLoadFailed?()
+                    }
+                    return
                 }
-                try FileManager.default.copyItem(at: tempURL, to: permanent)
 
                 let file = try AVAudioFile(forReading: permanent)
                 self.audioFile = file
@@ -293,12 +324,12 @@ final class AudioEnginePlayer {
         task.resume()
     }
 
-    /// 从 URL 加载并播放（先下载到临时文件）。
+    /// 从 URL 加载并播放（先下载到临时文件 / 命中共享缓存则直接读缓存）。
     /// - startSeconds: 初始播放位置（无缝续播：跨播放器切换时从该秒数接续，0 = 从头）
     /// - autoPlay: 下载完成后是否立即播放（false = 就绪但保持暂停，pausedFrame 已定位，
     ///   之后 play() 会从该位置续播）
-    func load(url: URL, mode: Mode, startSeconds: Double = 0, autoPlay: Bool = true) {
-        prepare(url: url, mode: mode) { [weak self] in
+    func load(url: URL, trackId: String, low: Bool = false, mode: Mode, startSeconds: Double = 0, autoPlay: Bool = true) {
+        prepare(url: url, trackId: trackId, low: low, mode: mode) { [weak self] in
             guard let self = self else { return }
             if autoPlay {
                 self.playFrom(seconds: startSeconds, autoPlay: true)
