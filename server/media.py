@@ -100,7 +100,7 @@ def image_magic_ok(data, ext):
     if ext == ".png":
         return _head(data, 8) == b"\x89PNG\r\n\x1a\n"
     if ext == ".webp":
-        return _head(data, 4) == b"RIFF" and _head(data, 8) == b"WEBP"
+        return _head(data, 4) == b"RIFF" and data[8:12] == b"WEBP"
     if ext == ".heic":
         return len(data) >= 12 and _head(data, 4) == b"ftyp"
     return False
