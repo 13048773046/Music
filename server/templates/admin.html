@@ -192,7 +192,8 @@ async function loadSite(){
   const en1=s.enabled?' selected':'', en0=s.enabled?'':' selected';
   h+='<div style="background:#1a1a1c;padding:24px;border-radius:12px">'+
   '<h3 style="margin-bottom:6px;font-size:16px">AI 主动评论</h3>'+
-  '<p style="font-size:12px;color:#888;margin-bottom:18px">后端定时为歌曲生成并发布 AI 乐评（评论账号：AI 乐评），自动跳过近 '+s.skip_days+' 天已评过的歌曲。</p>'+
+  '<p style="font-size:12px;color:#888;margin-bottom:18px">后端定时为歌曲生成并发布 AI 乐评（评论账号：'+esc(p.name)+'），自动跳过近 '+s.skip_days+' 天已评过的歌曲。</p>'+
+  '<p style="font-size:12px;color:#888;margin-bottom:14px">实时热梗：'+(s.hotPool&&s.hotPool.fetchedAt?('已抓取 '+s.hotPool.count+' 条（'+fmtTime(s.hotPool.fetchedAt)+'），示例：'+esc((s.hotPool.words||[]).slice(0,4).join('、'))):'暂不可用（不影响评论，纯乐评）')+'</p>'+
   '<div class="cards" style="margin-bottom:16px">'+
   '<div class="card"><div class="n">'+s.aiCommentTotal+'</div><div class="l">AI 乐评总数</div></div>'+
   '<div class="card"><div class="n">'+s.okToday+'</div><div class="l">今日主动评论</div></div>'+

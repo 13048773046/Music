@@ -204,6 +204,18 @@ AI_AUTO_COUNT = _cfg_int("ai_auto_count", "MUSIC_AI_AUTO_COUNT", 2)             
 AI_AUTO_MAX_PER_TRACK = _cfg_int("ai_auto_max_per_track", "MUSIC_AI_AUTO_MAX_PER_TRACK", 2)  # 每首歌最多 AI 乐评条数
 AI_AUTO_SKIP_DAYS = _cfg_int("ai_auto_skip_days", "MUSIC_AI_AUTO_SKIP_DAYS", 7)          # 近 N 天已自动评过的歌不再选（防集中）
 
+# ---------------- 实时热词（AI 乐评热梗来源：百度热搜 + 贴吧热议，按歌曲信息匹配） ----------------
+# AI 生成乐评前抓取当前网络热梗池，并用歌曲信息（歌名/歌手/曲风）匹配出相关的热梗注入上下文；
+# 抓取失败时静默降级（无热梗，评论回到纯乐评）。
+HOT_WORDS_ENDPOINT = _cfg_str("hot_words_endpoint", "MUSIC_HOT_WORDS_ENDPOINT",
+                              "https://top.baidu.com/api/board?platform=wise&tab=realtime")
+HOT_WORDS_ENDPOINT_2 = _cfg_str("hot_words_endpoint_2", "MUSIC_HOT_WORDS_ENDPOINT_2",
+                                "https://tieba.baidu.com/hottopic/browse/topicList")
+HOT_WORDS_TTL = _cfg_int("hot_words_ttl", "MUSIC_HOT_WORDS_TTL", 3600)       # 热词缓存（秒），默认 1 小时
+HOT_WORDS_TIMEOUT = _cfg_int("hot_words_timeout", "MUSIC_HOT_WORDS_TIMEOUT", 8)
+HOT_WORDS_LIMIT = _cfg_int("hot_words_limit", "MUSIC_HOT_WORDS_LIMIT", 20)   # 注入的最大热词条数
+HOT_WORDS_MATCH = _cfg_int("hot_words_match", "MUSIC_HOT_WORDS_MATCH", 3)    # 按歌曲匹配出的热梗上限
+
 # ---------------- 汽水音乐分享解析 UA ----------------
 
 QISHUI_SHARE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "

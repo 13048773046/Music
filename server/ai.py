@@ -33,6 +33,7 @@ from server.config import AI_CFG_FILE, AI_API_BASE_DEFAULT, AI_MODEL_DEFAULT, AI
 __all__ = ['_ai_cfg', '_ai_generate_comment', '_ai_uid',
            '_ai_auto_settings', '_ai_auto_run', '_ai_comment_stats',
            '_ai_save_config', '_ai_profile', '_ai_display_name',
+           '_fetch_hot_pool', '_match_hot_words', '_hot_pool_info',
            'start_ai_worker']
 
 def _ai_cfg():
@@ -51,15 +52,20 @@ def _ai_cfg():
 
 
 def _ai_generate_comment(title, artist, album, genre):
-    """按歌曲歌名/作者（专辑、曲风）调用 qwen-turbo 生成乐评。返回纯文本或 None（失败）。"""
+    """按歌曲歌名/作者（专辑、曲风）调用 qwen-turbo 生成乐评。
+
+    先用歌曲信息匹配当前网络热梗（实时抓取+本地匹配），把相关热梗注入上下文；
+    匹配不到则注入热词池兜底；热梗源不可用时退回纯乐评。返回纯文本或 None（失败）。
+    """
     cfg = _ai_cfg()
     if not cfg.get("key"):
         return None
     sys_prompt = ("你是流萤音乐的 AI 乐评人。为给定歌曲写一段贴合歌曲本身的短乐评，"
                   "像懂音乐的朋友在分享感受：可以写听感、情绪、画面感或对歌词/旋律的理解。"
-                  "可以适当融入一两个网络热梗或流行语（如：DNA动了、上头、单曲循环、泪目、"
-                  "爷青回、绝了、自带BGM、网抑云），让乐评更有网感，但必须自然贴切、点到为止，"
-                  "不能硬凑、不能低俗、不能有攻击性，热梗最多一两个，乐评主体仍以听感/情绪/画面为主。"
+                  "可以适当融入一两个网络热梗或流行语（优先使用用户消息中提供的热梗，"
+                  "如 DNA动了、上头、单曲循环、泪目、爷青回、绝了、破防、意难平），"
+                  "让乐评更有网感，但必须自然贴切、点到为止，不能硬凑、不能低俗、不能有攻击性，"
+                  "热梗最多一两个，乐评主体仍以听感/情绪/画面为主。"
                   "要求：中文，60~120 字，真诚不浮夸，不堆砌辞藻，不编造歌手名以外的信息，"
                   "不要使用感叹号刷屏，不要出现\"AI\"\"机器人\"等字样，结尾不要加话题标签。")
     facts = "歌曲名：%s\n歌手：%s" % (title or "未知", artist or "未知")
@@ -67,6 +73,15 @@ def _ai_generate_comment(title, artist, album, genre):
         facts += "\n专辑：%s" % album
     if genre:
         facts += "\n曲风：%s" % genre
+    hot, pool = _match_hot_words(title, artist, genre)
+    if hot:
+        facts += ("\n\n与这首歌相关的当前网络热梗：%s\n"
+                  "（可从其中自然融入 1~2 个热梗/流行语，让乐评更有网感；没有合适的就不必用）"
+                  % "、".join(hot))
+    elif pool:
+        facts += ("\n\n当前网络热词：%s\n"
+                  "（若合适可自然融入 1~2 个，让乐评更有网感；没有合适的就不必用）"
+                  % "、".join(pool[:10]))
     body = {
         "model": cfg["model"],
         "messages": [
@@ -125,6 +140,109 @@ def _ai_profile():
             c.close()
     except Exception:
         return {"name": "AI 乐评", "signature": "", "avatar": ""}
+
+
+# ---------------- 实时热梗池（百度热搜 + 贴吧热议，按歌曲信息匹配） ----------------
+
+_HOT_CACHE = {"ts": 0, "pool": []}
+
+
+def _fetch_hot_pool():
+    """抓取当前网络热梗池（百度热搜 word + 贴吧热议 topic_name），TTL 缓存，失败返回 []（绝不抛错）。"""
+    now = time.time()
+    if _HOT_CACHE["pool"] and now - _HOT_CACHE["ts"] < HOT_WORDS_TTL:
+        return _HOT_CACHE["pool"]
+    pool = []
+    seen = set()
+    for url, parse in ((HOT_WORDS_ENDPOINT, _parse_baidu_hot),
+                       (HOT_WORDS_ENDPOINT_2, _parse_tieba_hot)):
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=HOT_WORDS_TIMEOUT) as r:
+                d = json.loads(r.read().decode("utf-8"))
+            for w in parse(d):
+                w = (w or "").strip()
+                if w and w not in seen:
+                    seen.add(w)
+                    pool.append(w)
+        except Exception:
+            continue
+    if pool:
+        _HOT_CACHE["pool"] = pool[:HOT_WORDS_LIMIT]
+        _HOT_CACHE["ts"] = now
+    return _HOT_CACHE["pool"]
+
+
+def _parse_baidu_hot(d):
+    """百度热搜：data.cards[0].content[0].content[].word"""
+    out = []
+    for x in (d.get("data") or {}).get("cards", [{}])[0].get("content", [{}])[0].get("content", []):
+        w = (x.get("word") or "").strip()
+        if w:
+            out.append(w)
+    return out
+
+
+def _parse_tieba_hot(d):
+    """贴吧热议：data.bang_topic.topic_list[].topic_name"""
+    out = []
+    for x in ((d.get("data") or {}).get("bang_topic") or {}).get("topic_list", []):
+        w = (x.get("topic_name") or "").strip()
+        if w:
+            out.append(w)
+    return out
+
+
+def _match_hot_words(title, artist, genre):
+    """用歌曲信息（歌名 n-gram/歌手/曲风）在热梗池中匹配相关热梗。
+
+    返回 (matched_list, full_pool)；匹配不到时 matched 为空，由调用方用池兜底。
+    """
+    pool = _fetch_hot_pool()
+    if not pool:
+        return [], []
+    keys = set()
+    for s in (title or ""):
+        s = s.strip()
+        if not s:
+            continue
+        if len(s) >= 2:
+            keys.add(s)
+        for n in (2, 3, 4):
+            if len(s) >= n:
+                for i in range(len(s) - n + 1):
+                    keys.add(s[i:i + n])
+    for s in (artist or ""):
+        s = s.strip()
+        if len(s) >= 2:
+            keys.add(s)
+    if genre:
+        g = genre.strip()
+        if len(g) >= 2:
+            keys.add(g)
+    keys = {k for k in keys if len(k) >= 2}
+    scored = []
+    for w in pool:
+        wl = w.lower()
+        score = 0
+        for k in keys:
+            kl = k.lower()
+            if kl in wl:
+                score += len(k)
+            elif wl in kl:
+                score += len(w)
+        if score > 0:
+            scored.append((score, w))
+    scored.sort(key=lambda x: -x[0])
+    return [w for _, w in scored[:HOT_WORDS_MATCH]], pool
+
+
+def _hot_pool_info():
+    """网站管理页展示的热词状态：条数/抓取时间/示例。"""
+    pool = _fetch_hot_pool()
+    return {"count": len(pool), "fetchedAt": _HOT_CACHE["ts"],
+            "words": pool[:10]}
 
 
 # ---------------- AI 主动乐评（定时自动评论 + 后台管理） ----------------
@@ -271,11 +389,13 @@ def _ai_comment_stats():
                              (_ai_uid(),)).fetchone()[0]
     finally:
         c.close()
+    hp = _hot_pool_info()
     return {"enabled": cfg["enabled"], "interval": cfg["interval"], "count": cfg["count"],
             "max_per_track": cfg["max_per_track"], "skip_days": cfg["skip_days"],
             "lastRun": last[0] if last else 0,
             "okTotal": ok_total, "failTotal": fail_total, "okToday": ok_today,
-            "aiCommentTotal": ai_total, "keyConfigured": bool(_ai_cfg().get("key"))}
+            "aiCommentTotal": ai_total, "keyConfigured": bool(_ai_cfg().get("key")),
+            "hotPool": hp}
 
 
 def _ai_auto_worker():
