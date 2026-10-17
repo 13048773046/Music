@@ -1,6 +1,7 @@
 import AVFoundation
 import MediaPlayer
 import UIKit
+import Combine
 
 // MARK: - 播放模式
 
@@ -90,6 +91,8 @@ final class PlayerManager: NSObject, ObservableObject {
     @Published private(set) var engineSwitchInProgress: Bool = false
     /// 引擎整曲下载进度 0...1（engineSwitchInProgress 期间有效）
     @Published private(set) var engineDownloadFraction: Double = 0
+    /// 弱网播放 UI：当前是否离线（失败视图文案区分「网络未连接」与「加载失败」）
+    var networkOffline: Bool { NetworkMonitor.shared.isOffline }
     /// 加载期间（duration==0）的待应用拖动位置：就绪后立即跳到该处
     private var pendingSeekFraction: Double?
 
@@ -118,13 +121,22 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 缓冲卡死检测：连续缓冲超过阈值且播放点无进展 → 判定加载失败走自愈
     private var bufferingStallStart: Date?
     private var stallProgressAtStart: Double = 0
-    /// 缓冲卡死判定阈值：缓冲超过 15s 且进度无变化
-    private let stallTimeout: TimeInterval = 15
+    /// 缓冲卡死判定阈值（秒）：按网络动态——离线不判定（等网络恢复），
+    /// 蜂窝网放宽到 25s（弱网下首包慢，过早判定会频繁跳歌），Wi-Fi 15s。
+    private var effectiveStallTimeout: TimeInterval {
+        if NetworkMonitor.shared.isOffline { return .infinity }
+        return NetworkMonitor.shared.isCellular ? 25 : 15
+    }
 
     // MARK: - 下一首预加载（只预热签名 URL + 连接头部，不整首下载）
 
-    /// 预加载窗口：当前歌之后预加载的歌曲数（下一首、下下一首、下下下一首…）
-    private let prefetchAheadCount = 4
+    /// 预加载窗口：当前歌之后预加载的歌曲数。按网络动态降级——
+    /// 离线 0（不预取，避免无用请求）；蜂窝 2（弱网优先当前曲带宽，避免预取抢带宽）；
+    /// Wi-Fi 4（正常全量预取，切歌秒开）。
+    private var prefetchAheadCount: Int {
+        if NetworkMonitor.shared.isOffline { return 0 }
+        return NetworkMonitor.shared.isCellular ? 2 : 4
+    }
     /// 签名播放 URL 缓存：trackId → URL。
     /// 切歌时优先复用，省去再向后端签发的网络往返，显著缩短切歌等待（“秒开”）；用掉即移除。
     private var signedURLPool: [String: URL] = [:]
@@ -154,6 +166,10 @@ final class PlayerManager: NSObject, ObservableObject {
     }
     private var listen = ListenState()
     private var listenTimer: Timer?
+    /// 网络恢复自动续播订阅（NetworkMonitor 状态变化）
+    private var networkCancellable: AnyCancellable?
+    /// 是否「播放中被网络打断」（用于网络恢复自动续播；用户手动暂停会清除）
+    private var interruptedWhilePlaying = false
 
     /// 收听结算触发原因：switchTrack 用于快速切走的“跳过”负向信号判定
     private enum ListenFlushReason { case switchTrack, pause, complete, heartbeat, background }
@@ -177,6 +193,27 @@ final class PlayerManager: NSObject, ObservableObject {
         setupRemoteCommands()
         setupInterruptionHandling()
         setupEngineRestoreHandling()
+
+        // 弱网播放：网络恢复自动续播——断网导致加载失败/缓冲中断的歌曲，
+        // 网络一恢复立即自动重载当前曲（保持进度），用户无感续播。
+        // 仅处理"正在听却被网络打断"的场景：loadFailed 且当前曲未变；
+        // 用户手动暂停/切走不触发。
+        networkCancellable = NetworkMonitor.shared.$isOffline
+            .dropFirst()   // 跳过初始值，只响应变化
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] offline in
+                guard let self, !offline else { return }   // 仅网络恢复时
+                // 只在「播放中被网络打断」的场景自动续播：用户手动暂停/切走不打扰
+                guard self.interruptedWhilePlaying,
+                      self.loadFailed, self.current != nil else { return }
+                self.interruptedWhilePlaying = false
+                self.loadFailed = false
+                self.isBuffering = false
+                self.playCurrent(flushReason: .heartbeat,
+                                 resumeSeconds: self.currentTime,
+                                 autoResume: true,
+                                 preserveProgress: true)
+            }
 
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 10),   // 0.1s：进度条等 UI 平滑（歌词另有逐帧实时源）
@@ -219,17 +256,19 @@ final class PlayerManager: NSObject, ObservableObject {
             if self.player.currentItem?.status == .failed {
                 self.handlePlaybackFailure()
             }
-            // 缓冲卡死检测：非新歌初始加载（已有 duration）却长时间无进展 → 自愈
+            // 缓冲卡死检测：非新歌初始加载（已有 duration）却长时间无进展 → 分级自愈：
+            // 先同曲重载（保持进度，规避弱网瞬时抖动/服务器慢响应），仍失败才走失败跳歌。
+            // 离线时 effectiveStallTimeout = ∞，不判定——等网络恢复后 AVPlayer 自动续缓冲。
             if self.isBuffering {
                 if self.bufferingStallStart == nil {
                     self.bufferingStallStart = Date()
                     self.stallProgressAtStart = self.progress
                 } else if let start = self.bufferingStallStart,
-                          Date().timeIntervalSince(start) > self.stallTimeout,
+                          Date().timeIntervalSince(start) > self.effectiveStallTimeout,
                           self.duration > 0,
                           self.progress - self.stallProgressAtStart < 0.01 {
                     self.bufferingStallStart = nil
-                    self.handlePlaybackFailure()
+                    self.handleBufferingStall()
                 }
             } else {
                 self.bufferingStallStart = nil
@@ -625,10 +664,55 @@ final class PlayerManager: NSObject, ObservableObject {
         playCurrent()
     }
 
+    /// 缓冲卡死分级自愈：先同曲重载（保持进度续播，规避弱网瞬时抖动/服务器慢响应），
+    /// 同一首歌只自动重载一次（autoRetriedTrackId 防重）；重载后仍卡死 → 升级失败跳歌。
+    private func handleBufferingStall() {
+        guard !loadFailed, let trackId = current?.id else { return }
+        // 播放中被卡死：标记「网络中断待续播」（若用户此刻手动暂停则清除）
+        if isPlaying { interruptedWhilePlaying = true }
+        // 同一首歌已自动重试过：不再重载，直接走失败跳歌
+        guard autoRetriedTrackId != trackId else {
+            handlePlaybackFailure()
+            return
+        }
+        autoRetriedTrackId = trackId
+        let resume = currentTime
+        // 重载并保持进度：加载完成后 seek 回卡死前位置续播（弱网恢复/服务器响应后无感续播）
+        playCurrent(flushReason: .heartbeat,
+                    resumeSeconds: resume,
+                    autoResume: true,
+                    preserveProgress: true)
+    }
+
     /// 播放失败统一自愈入口（原音 AVPlayer 失败通知 / item status failed / 缓冲卡死 / 3D 引擎加载失败共用）。
-    /// 行为：失败后自动切下一首；连续失败超过上限则停止，避免无限循环切歌。
+    /// 行为：优先同曲自动重试一次（弱网瞬时抖动场景无感恢复），再失败才自动切下一首；
+    /// 连续失败超过上限则停止，避免无限循环切歌。
     private func handlePlaybackFailure() {
         guard !loadFailed else { return }   // 已在失败状态，避免重复触发
+        // 播放中被失败打断：标记「网络中断待续播」（若用户此刻手动暂停则清除）
+        if isPlaying { interruptedWhilePlaying = true }
+        // 同一首歌尚未自动重试过：先同曲重载一次（1.5s 后，避开失败瞬间的抖动叠加）。
+        // 期间 loadFailed=true（UI 展示重试入口），用户手动点重试会清除并提前重载。
+        if autoRetriedTrackId != current?.id {
+            autoRetriedTrackId = current?.id
+            loadFailed = true
+            isBuffering = false
+            isPlaying = false
+            updateNowPlaying(force: true)
+            let retryTrackId = current?.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self,
+                      self.loadFailed,                       // 用户手动重试过则跳过
+                      self.current?.id == retryTrackId else { return }  // 已切走则跳过
+                self.loadFailed = false
+                self.playCurrent(flushReason: .heartbeat,
+                                 resumeSeconds: self.currentTime,
+                                 autoResume: true,
+                                 preserveProgress: true)
+            }
+            return
+        }
+        // 已重试过仍失败：真正的失败处理——切下一首，连续失败超过上限则停止
         loadFailed = true
         isBuffering = false
         isPlaying = false
@@ -1197,6 +1281,8 @@ final class PlayerManager: NSObject, ObservableObject {
     private func schedulePrefetch() {
         prefetchTask?.cancel()
         prefetchTask = nil
+        // 离线：不预取（无网络请求可发，避免无用连接尝试）
+        guard !NetworkMonitor.shared.isOffline else { return }
         guard !queue.isEmpty, queue.indices.contains(currentIndex) else { return }
         let start = currentIndex + 1
         let end = min(start + prefetchAheadCount, queue.count)
@@ -1284,13 +1370,18 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 再预取封面/歌词/主色到内存缓存，切到它时封面立即显示、歌词区直接命中。
     private func warmMetadata(for t: Track) async {
         guard !Task.isCancelled else { return }
+        // 离线/蜂窝弱网：跳过封面/歌词/主色预取，音频下载带宽优先
+        let net = NetworkMonitor.shared
+        guard !net.isOffline else { return }
         let url: URL? = await MainActor.run { [weak self] in self?.signedURLPool[t.id] }
         guard let url, !Task.isCancelled else { return }
         let asset = AVURLAsset(url: url)
         _ = try? await asset.load(.duration, .isPlayable)
         guard !Task.isCancelled else { return }
-        await prefetchCover(for: t)
-        await prefetchLyric(for: t)
+        if !net.isCellular {
+            await prefetchCover(for: t)
+            await prefetchLyric(for: t)
+        }
         await prefetchPalette(for: t)
     }
 
@@ -1671,6 +1762,8 @@ final class PlayerManager: NSObject, ObservableObject {
     private func pausePlayback() {
         // 暂停前结算一次收听时长（不触发“跳过”信号）
         flushListen(.pause)
+        // 用户手动暂停：清除「网络中断待续播」标记，网络恢复时不得自动播
+        interruptedWhilePlaying = false
         if usingEngine {
             enginePlayer.pause()
         } else {

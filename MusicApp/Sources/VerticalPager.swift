@@ -974,15 +974,20 @@ private struct RealProgressView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            // 音频加载失败：显示重试入口（网络中断/资源损坏时避免静默卡死）
+            // 音频加载失败：显示重试入口（网络中断/资源损坏时避免静默卡死）。
+            // 离线时提示网络状态（恢复后自动续播，无需手动点）；在线失败才是真·加载失败。
             if player.loadFailed {
                 Button {
                     player.reloadCurrent()
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                        Image(systemName: player.networkOffline
+                              ? "wifi.slash"
+                              : "exclamationmark.arrow.triangle.2.circlepath")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("加载失败，点此重试")
+                        Text(player.networkOffline
+                             ? "网络未连接，恢复后自动继续"
+                             : "加载失败，点此重试")
                             .font(.system(size: 13, weight: .medium))
                     }
                     .foregroundColor(secondaryTint)
