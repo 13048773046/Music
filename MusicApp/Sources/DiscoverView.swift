@@ -51,11 +51,13 @@ struct DiscoverView: View {
             }
             .navigationBarHidden(true)
             .task {
-                // M2：进入发现页先取天气×时段场景（30 分钟节流；失败静默降级为仅时段）
-                await weather.refresh()
+                // 内容加载与天气刷新并行：天气（30 分钟节流，失败降级「仅时段」）绝不阻塞内容加载——
+                // 否则定位授权等待（系统弹窗未决）会让发现页一直停在「加载中…」
+                async let w: Void = { await weather.refresh() }()
                 if case .loaded = state {} else {
                     await load()
                 }
+                _ = await w
             }
         }
         // 实时数据事件：个性化推荐更新 / 歌曲列表变化

@@ -45,9 +45,20 @@ final class WeatherContext: NSObject, ObservableObject, CLLocationManagerDelegat
         }
         let status = manager.authorizationStatus
         if status == .notDetermined {
-            // 首次进入：请求授权后再继续（用户拒绝 → 走仅时段降级）
+            // 首次进入：请求授权后再继续（用户拒绝 → 走仅时段降级）。
+            // ⚠ 授权等待带 3s 超时兜底：系统授权弹窗可能被吞/用户迟迟不响应，
+            //   任何调用方（启动预加载、发现页 .task、切前台）都绝不允许被授权未决永久挂起
+            //   ——否则会阻塞发现页内容加载（「加载中…」卡死）。
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                pendingAuth = { cont.resume() }
+                let timer = Timer(timeInterval: 3.0, repeats: false) { _ in
+                    pendingAuth = nil
+                    cont.resume()
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                pendingAuth = {
+                    timer.invalidate()
+                    cont.resume()
+                }
                 manager.requestWhenInUseAuthorization()
             }
         }
@@ -55,8 +66,17 @@ final class WeatherContext: NSObject, ObservableObject, CLLocationManagerDelegat
                 || manager.authorizationStatus == .authorizedAlways else {
             return false
         }
+        // 定位等待同样带 3s 超时（requestLocation 偶发无回调，防挂起 → 按无定位降级）
         let location: CLLocation? = await withCheckedContinuation { (cont: CheckedContinuation<CLLocation?, Never>) in
-            pendingLocation = { loc in cont.resume(returning: loc) }
+            let timer = Timer(timeInterval: 3.0, repeats: false) { _ in
+                pendingLocation = nil
+                cont.resume(returning: nil)
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            pendingLocation = { loc in
+                timer.invalidate()
+                cont.resume(returning: loc)
+            }
             manager.requestLocation()
         }
         guard let loc = location else { return false }
