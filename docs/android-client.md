@@ -2,15 +2,24 @@
 
 Jetpack Compose 原生安卓客户端，1:1 复刻 iOS SwiftUI 版 UI 与交互逻辑。
 
+> 详细说明已并入仓库主交接文档「八、Android 前端（Jetpack Compose）完整说明」（v15）；本文档为精简版技术说明。
+
+## 工程信息
+
+- **语言 / UI**：Kotlin / Jetpack Compose（Material3），Compose BOM 2024.09.03
+- **包名**：`app.star2936.guava3291`（与 iOS Bundle ID 一致）
+- **SDK**：minSdk 29（Android 10）/ targetSdk 35 / compileSdk 35
+- **版本**：1.0.0（versionCode 1）
+- **构建**：Gradle 8.9 + JDK 17，release 未混淆
+
 ## 技术栈
 
-- **语言**：Kotlin
-- **UI**：Jetpack Compose（Material3）
 - **网络**：OkHttp + kotlinx.serialization
 - **图片**：Coil
-- **音频**：Media3 ExoPlayer（含 SimpleCache 缓存）
-- **WebSocket**：OkHttp WebSocket（实时通知/行为上报）
-- **DI**：手动单例（object PlayerManager / AuthManager / NotificationBus）
+- **音频**：Media3 ExoPlayer（SimpleCache 200MB LRU 流缓存 + ForwardingPlayer + 弱网自愈）
+- **WebSocket**：OkHttp WebSocket（实时通知/行为上报，25s 心跳 + 指数退避重连）
+- **安全存储**：EncryptedSharedPreferences（登录态 + 播放会话）
+- **DI**：手动单例（object PlayerManager / AuthManager / NotificationBus / Library / WeatherContext）
 
 ## 目录结构
 
@@ -24,29 +33,38 @@ android/
 │       │   ├── MainActivity.kt          # 入口：生命周期监听 WS/音量
 │       │   ├── MusicApplication.kt      # Application：初始化缓存/预加载
 │       │   ├── state/                   # 全局状态
-│       │   │   ├── PlayerManager.kt     # 播放器（队列/模式/通知/EQ）
+│       │   │   ├── PlayerManager.kt     # 播放器（队列/模式/通知/EQ/弱网自愈）
 │       │   │   ├── AuthManager.kt       # 登录态/切换账号
 │       │   │   ├── NotificationBus.kt   # WebSocket 实时通知
-│       │   │   ├── AppRouter.kt         # 跨页跳转（评论/用户主页）
-│       │   │   └── AppPreloader.kt      # 启动预加载
+│       │   │   ├── AppState.kt          # PlayerSession（会话持久化）+ AppPreloader + AppRouter
+│       │   │   ├── Library.kt           # 曲库全局单例
+│       │   │   ├── WeatherContext.kt    # 定位 + 天气×时段场景
+│       │   │   └── PlaybackService.kt   # 前台媒体服务（系统通知/锁屏）
 │       │   ├── data/                    # 数据层
 │       │   │   ├── Api.kt               # REST API
-│       │   │   ├── Models.kt            # 数据模型
-│       │   │   └── BehaviorEvent.kt
+│       │   │   └── Models.kt            # 数据模型（含 BehaviorEvent）
 │       │   ├── ui/                      # Compose UI
-│       │   │   ├── main/                # 主框架（TabBar + 侧边栏）
-│       │   │   ├── home/                # 播放页（竖滑 Pager + 歌词）
-│       │   │   ├── discover/            # 发现页
-│       │   │   ├── mine/                # 我的页面
-│       │   │   ├── notifications/        # 消息通知
-│       │   │   ├── sidebar/             # 侧边栏
-│       │   │   ├── search/              # 搜索
-│       │   │   ├── upload/             # 上传歌曲
+│       │   │   ├── main/                # 主框架（TabBar + 侧边栏 + 子页栈）
+│       │   │   ├── home/                # 播放页（竖滑 Pager + 歌词 + 三点菜单）
+│       │   │   ├── discover/            # 发现页（猜你喜欢 + 天气卡片）
+│       │   │   ├── mine/                # 我的页面（三 Tab + 听歌时长）
+│       │   │   ├── notifications/       # 消息通知（分页）+ 官方消息
+│       │   │   ├── sidebar/             # 侧边栏（听歌模式 + 场景音乐）
+│       │   │   ├── search/              # 搜索（历史 + 结果流）
+│       │   │   ├── upload/              # 上传歌曲
+│       │   │   ├── settings/            # 设置/切换账号/改密/资料编辑/关于
+│       │   │   ├── profile/             # 用户主页
+│       │   │   ├── playlists/           # 歌单列表/详情
+│       │   │   ├── history/             # 播放历史
+│       │   │   ├── login/               # 登录/注册
+│       │   │   ├── comment/             # 评论弹窗
+│       │   │   ├── components/          # 通用组件（CoverImage/MarqueeText 等）
+│       │   │   ├── splash/              # 启动页
 │       │   │   └── theme/               # 主题色
 │       │   └── util/                    # 工具
 │       │       ├── ColorPalette.kt      # 封面主色提取
-│       │       ├── KRCLine.kt           # 逐字歌词解析
-│       │       └── PlayerSession.kt     # 播放会话持久化
+│       │       ├── LyricsParser.kt      # KRC/LRC 歌词解析
+│       │       └── TimeFormat.kt        # 时间/日期格式化
 │       └── res/                         # 资源（图标/字符串）
 ├── build.gradle.kts
 ├── settings.gradle.kts
@@ -56,7 +74,7 @@ android/
 ## 构建
 
 ```bash
-# 需要 JDK 17 + Android SDK 34 + Gradle 8.9
+# 需要 JDK 17 + Android SDK 35 + Gradle 8.9
 export JAVA_HOME=/path/to/jdk-17
 cd android
 gradle assembleDebug

@@ -52,9 +52,10 @@
 ├── MusicApp/                 # iOS SwiftUI 客户端
 ├── android/                  # Android Jetpack Compose 客户端
 │   └── app/src/main/java/app/star2936/guava3291/
-│       ├── state/            # PlayerManager / AuthManager / NotificationBus
+│       ├── state/            # PlayerManager / AuthManager / NotificationBus / AppState
 │       ├── data/             # Api / Models
 │       └── ui/              # 主框架/播放页/发现/我的/通知/侧边栏
+├── docs/                     # 交接文档（最新版）+ 项目介绍 + Android 技术文档
 └── .github/workflows/        # CI：冒烟测试 + 未签名 IPA 打包
 ```
 
