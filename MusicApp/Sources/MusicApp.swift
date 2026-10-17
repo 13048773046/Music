@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine   // Timer.publish（启动页就绪轮询）
 
 /// 全屏沉浸歌词横屏状态：AppDelegate 按此返回全局允许的方向。
 /// 比 per-View supportedInterfaceOrientations + KVC 更可靠：
@@ -23,7 +24,10 @@ struct MusicApp: App {
     @StateObject private var player = PlayerManager.shared
     @StateObject private var auth = AuthManager.shared
     @StateObject private var library = Library.shared
+    @StateObject private var preloader = AppPreloader.shared
     @State private var showSplash = true
+    /// 启动时刻：最短展示时间保底（Splash 动画 0.6s + 渐变 0.45s，避免一闪而过）
+    @State private var splashStart = Date()
     @State private var announcement: Announcement?
     @State private var updateNotice: UpdateNotice?
 
@@ -49,8 +53,9 @@ struct MusicApp: App {
                 }
             }
             .onAppear {
-                Task { await Library.shared.load() }
-                // 启动页期间并行预加载发现页/我的页数据：进入主界面后切页不再等待
+                // 播放页曲库与播放流：统一由 AppPreloader 预加载（Library.load 幂等合并）
+                // 启动页期间并行预加载 发现页推荐 / 播放页曲库与播放流 / 我的页数据 / 天气场景：
+                // 全部就绪（startupReady）才放行进入主界面，切页不再等待
                 Task { await AppPreloader.shared.preload() }
                 Task { await fetchAnnouncement() }
                 Task { await fetchUpdate() }
@@ -60,7 +65,17 @@ struct MusicApp: App {
                 }
                 // 启动即拉取未读数：首页（播放页）直接显示红点，无需先打开通知页
                 Task { await NotificationBus.shared.refreshUnread() }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            }
+            // 启动页放行（数据就绪驱动）：
+            // 最短展示 1.2s（防一闪而过）&& 发现/播放/我的全部就绪 → 进入；
+            // 6s 超时兜底（网络异常/接口卡死时不让用户卡死在启动页，各页面自行降级）
+            .onReceive(Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()) { _ in
+                guard showSplash else { return }
+                let elapsed = Date().timeIntervalSince(splashStart)
+                let minShown = elapsed >= 1.2
+                let allReady = preloader.startupReady
+                let timeout = elapsed >= 6.0
+                if (minShown && allReady) || timeout {
                     withAnimation(.easeInOut(duration: 0.45)) {
                         showSplash = false
                     }
