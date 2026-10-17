@@ -1448,6 +1448,20 @@ class H(BaseHTTPRequestHandler):
                 self._serve_file(fp)
                 return
 
+            # 官网轮播图：GET /api/banner/{name}（后台上传的 banner_ 文件，白名单正则读取）
+            if u.path.startswith("/api/banner/"):
+                name = u.path.rsplit("/", 1)[-1]
+                # 白名单：只允许本服务轮播图上传接口生成的文件名（防目录穿越/任意文件读取）
+                if not re.fullmatch(r"banner_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", name):
+                    self._err(404, "no image")
+                    return
+                fp = safe_file_path(name)
+                if not fp or not os.path.exists(fp):
+                    self._err(404, "no image")
+                    return
+                self._serve_file(fp)
+                return
+
             if u.path.startswith("/api/comments/"):
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
@@ -3133,6 +3147,45 @@ class H(BaseHTTPRequestHandler):
                     with open(os.path.join(FILES, stored), "wb") as f:
                         f.write(fdata)
                     c.close()
+                    self._json(200, {"name": stored})
+                except Exception as e:
+                    self._internal_error(e)
+                return
+
+            # 官网轮播图上传：POST /api/admin/banner（multipart image 字段，存 files/banner_*，限额 8MB）
+            if u.path == "/api/admin/banner":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized")
+                    return
+                try:
+                    if length <= 0:
+                        self._err(400, "empty body")
+                        return
+                    if length > MAX_COMMENT_IMAGE + 1024 * 1024:
+                        self._err(413, "too large")
+                        return
+                    fields, files = self._parse_multipart(length)
+                    if fields is None:
+                        self._err(400, "need multipart")
+                        return
+                    img = files.get("image")
+                    if not img or not img[0]:
+                        self._err(400, "no image")
+                        return
+                    fname, fdata = img
+                    if len(fdata) > MAX_COMMENT_IMAGE:
+                        self._err(413, "too large")
+                        return
+                    cext = os.path.splitext(fname)[1].lower()
+                    if cext not in (".jpg", ".jpeg", ".png", ".webp"):
+                        self._err(400, "unsupported image type")
+                        return
+                    if not image_magic_ok(fdata, cext):
+                        self._err(400, "图片文件格式校验失败")
+                        return
+                    stored = "banner_" + uuid.uuid4().hex + cext
+                    with open(os.path.join(FILES, stored), "wb") as f:
+                        f.write(fdata)
                     self._json(200, {"name": stored})
                 except Exception as e:
                     self._internal_error(e)

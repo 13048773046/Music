@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """流萤音乐 · 后端模块化包（由线上 server.py 机械重放，函数体零改写）。"""
 import os
+import re
 import json
 import ssl
 import sqlite3
@@ -321,7 +322,25 @@ def _write_site_config(patch):
     except Exception:
         pass
     for k, v in (patch or {}).items():
-        if k in _SITE_CONFIG_DEFAULTS and isinstance(v, str):
+        if k not in _SITE_CONFIG_DEFAULTS:
+            continue
+        if k == "banners":
+            # 官网轮播图：仅接受合法文件名数组，数量动态不固定
+            banners = []
+            if isinstance(v, list):
+                for b in v[:50]:
+                    if not isinstance(b, dict):
+                        continue
+                    name = str(b.get("name") or "").strip()
+                    if not re.fullmatch(r"banner_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", name):
+                        continue
+                    banners.append({
+                        "name": name,
+                        "title": str(b.get("title") or "")[:60],
+                        "link": str(b.get("link") or "")[:300],
+                    })
+            cfg[k] = banners
+        elif isinstance(v, str):
             cfg[k] = v.strip()
     with open(SITE_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)

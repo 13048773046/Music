@@ -186,6 +186,8 @@ _SITE_CONFIG_DEFAULTS = {
     "ios_url": "",
     "android_url": "",
     "hero_subtitle": "为你精心挑选的音乐，流式播放不等待，逐字歌词跟着唱。",
+    # 官网轮播图（后台动态管理，数量不固定）：[{name,title,link}]，name 为 files/banner_* 文件名
+    "banners": [],
 }
 
 # ---------------- AI 乐评配置 ----------------

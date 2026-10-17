@@ -153,6 +153,7 @@ async function loadSite(){
   const keyPh=a.hasKey?('已配置（'+esc(a.keyMasked)+'），留空保持不变'):'填写 AI 接口 Key（必填）';
   let h='<div style="max-width:780px">';
   // 区块一：官网展示配置
+  window._banners=(c.banners||[]).map(b=>({name:b.name,title:b.title||'',link:b.link||''}));
   h+='<div style="background:#1a1a1c;padding:24px;border-radius:12px;margin-bottom:16px">'+
   '<h3 style="margin-bottom:6px;font-size:16px">官网展示配置</h3>'+
   '<p style="font-size:12px;color:#888;margin-bottom:18px">修改后即时生效到官网首页（歌曲总数为数据库实时统计，无需填写）。</p>'+
@@ -160,6 +161,10 @@ async function loadSite(){
   fld('heroSub','首页副标题',c.hero_subtitle,'一句话 slogan')+
   fld('iosUrl','iOS 下载链接',c.ios_url,'https://...ipa 或 TestFlight 地址')+
   fld('androidUrl','Android 下载链接',c.android_url,'https://...apk')+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">官网轮播图（数量不限，可增删排序）</label>'+
+  '<div id="bannerList" style="margin-bottom:10px"></div>'+
+  '<label style="font-size:13px;color:#888;cursor:pointer;padding:8px 12px;border:1px solid #2a2a2e;border-radius:8px;display:inline-block">＋ 上传轮播图<input id="bannerFile" type="file" accept="image/*" style="display:none" onchange="uploadBanner(this.files[0])"></label>'+
+  '<span id="bannerTip" style="margin-left:10px;font-size:12px;color:#888"></span></div>'+
   '<button class="mbtn m-save" onclick="saveSite()">保存</button>'+
   '<span id="siteTip" style="margin-left:12px;font-size:13px"></span>'+
   '</div>';
@@ -224,10 +229,54 @@ async function saveSite(){
   const body={site_name:document.getElementById('siteName').value,
               hero_subtitle:document.getElementById('heroSub').value,
               ios_url:document.getElementById('iosUrl').value,
-              android_url:document.getElementById('androidUrl').value};
+              android_url:document.getElementById('androidUrl').value,
+              banners:(window._banners||[])};
   await api('/site-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   document.getElementById('siteTip').textContent='已保存 ✓';
   document.getElementById('siteTip').style.color='#4CD9A5';
+}
+// ---- 官网轮播图管理（动态数量，可增删排序） ----
+function renderBanners(){
+  const el=document.getElementById('bannerList');if(!el)return;
+  const bs=window._banners||[];
+  el.innerHTML=bs.map((b,i)=>
+    '<div style="display:flex;gap:10px;align-items:center;background:#111;border:1px solid #2a2a2e;border-radius:10px;padding:8px;margin-bottom:8px">'+
+    '<img src="/music/api/banner/'+esc(b.name)+'" style="width:76px;height:44px;object-fit:cover;border-radius:6px;background:#222;flex-shrink:0" onerror="this.style.opacity=0.25">'+
+    '<div style="flex:1;min-width:0">'+
+    '<input data-b="'+i+'" data-k="title" value="'+esc(b.title)+'" placeholder="标题（可选）" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid #2a2a2e;background:#161619;color:#fff;font-size:12px;margin-bottom:6px;box-sizing:border-box">'+
+    '<input data-b="'+i+'" data-k="link" value="'+esc(b.link)+'" placeholder="点击跳转链接（可选，留空不跳）" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid #2a2a2e;background:#161619;color:#fff;font-size:12px;box-sizing:border-box">'+
+    '</div>'+
+    '<button class="mbtn" style="padding:5px 8px;font-size:12px" onclick="mvBanner('+i+',-1)">↑</button>'+
+    '<button class="mbtn" style="padding:5px 8px;font-size:12px" onclick="mvBanner('+i+',1)">↓</button>'+
+    '<button class="mbtn" style="padding:5px 8px;font-size:12px;color:#ff6b6b" onclick="delBanner('+i+')">删</button>'+
+    '</div>').join('');
+  el.querySelectorAll('input[data-b]').forEach(inp=>{
+    inp.addEventListener('input',()=>{const b=window._banners[+inp.dataset.b];if(b)b[inp.dataset.k]=inp.value;});
+  });
+}
+function mvBanner(i,d){
+  const bs=window._banners;const j=i+d;
+  if(!bs||j<0||j>=bs.length)return;
+  const t=bs[i];bs[i]=bs[j];bs[j]=t;renderBanners();
+}
+function delBanner(i){
+  const bs=window._banners;if(!bs)return;
+  bs.splice(i,1);renderBanners();
+}
+async function uploadBanner(file){
+  const tip=document.getElementById('bannerTip');
+  if(!file){return;}
+  if(!/image\/(png|jpe?g|webp)$/i.test(file.type)){tip.textContent='仅支持 png/jpg/webp';return;}
+  const fd=new FormData();fd.append('image',file);
+  try{
+    const r=await api('/banner',{method:'POST',body:fd});
+    if(r&&r.name){
+      (window._banners=window._banners||[]).push({name:r.name,title:'',link:''});
+      renderBanners();
+      tip.textContent='已上传，点「保存」生效';tip.style.color='#4CD9A5';
+      document.getElementById('bannerFile').value='';
+    }else{tip.textContent='上传失败';}
+  }catch(e){tip.textContent='上传失败：'+e.message;}
 }
 async function saveAiKey(){
   const body={base:document.getElementById('aiBase').value,

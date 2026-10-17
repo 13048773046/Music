@@ -392,6 +392,37 @@ def run_all(port, root, strict_port, strict_root):
     body, ct = multipart({}, {"image": ("b.png", b"NOTPNGDATA", "image/png")})
     s, body, _ = req("POST", "/api/upload-comment-image", body, {"Content-Type": ct, **AUTH})
     check("非法图片上传 400", s == 400, f"s={s}")
+
+    print("== 14.7 官网轮播图（动态数量，后台管理） ==")
+    ADMINH = {"X-Admin-Token": "liuying-admin-8f3a"}   # 测试环境 admin_pwd 文件不存在，走默认值
+    body, ct = multipart({}, {"image": ("bn.png", tiny_png, "image/png")})
+    s, body, _ = req("POST", "/api/admin/banner", body, {"Content-Type": ct, **ADMINH})
+    bimg = json.loads(body)
+    check("轮播图上传 200 返回 name",
+          s == 200 and re.fullmatch(r"banner_[0-9a-f]{32}\.png", bimg.get("name", "")), body[:100])
+    bname = bimg.get("name", "")
+    s, body, _ = req("GET", f"/api/banner/{bname}")
+    check("轮播图访问 200 内容一致", s == 200 and body == tiny_png, f"s={s}")
+    s, body, _ = req("GET", "/api/banner/..%2F..%2Fetc%2Fpasswd")
+    check("轮播图路径穿越 404", s == 404, f"s={s}")
+    s, body, _ = req("GET", "/api/banner/normal.txt")
+    check("轮播图非白名单名 404", s == 404, f"s={s}")
+    s, body, _ = req("POST", "/api/admin/site-config",
+                     {"site_name": "流萤测试", "banners": [{"name": bname, "title": "新歌上线", "link": "https://example.com"}]}, ADMINH)
+    check("保存含轮播图配置 200", s == 200, body[:100])
+    s, body, _ = req("GET", "/api/site-config")
+    sc = json.loads(body)
+    check("site-config 返回动态 banners",
+          isinstance(sc.get("banners"), list) and len(sc["banners"]) == 1
+          and sc["banners"][0]["name"] == bname and sc["banners"][0]["title"] == "新歌上线", body[:200])
+    s, body, _ = req("POST", "/api/admin/site-config",
+                     {"banners": [{"name": "../evil", "title": "x"}, {"name": bname, "title": "t", "link": "l"}]}, ADMINH)
+    s2, body2, _ = req("GET", "/api/site-config")
+    sc2 = json.loads(body2)
+    check("banners 非法文件名被过滤",
+          s == 200 and s2 == 200 and len(sc2["banners"]) == 1 and sc2["banners"][0]["name"] == bname, body2[:200])
+    s, body, _ = req("POST", "/api/admin/site-config", {"banners": []}, ADMINH)
+    check("banners 清空 200", s == 200, body[:100])
     s, body, _ = req("POST", f"/api/comment/{tid}", {"userId": uid, "userName": "测试用户",
                                                      "content": "带图评论", "images": [cname]}, AUTH)
     check("带图评论 200", s == 200, body[:100])
