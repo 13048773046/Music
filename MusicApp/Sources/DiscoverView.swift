@@ -102,7 +102,7 @@ struct DiscoverView: View {
                 if let label = weather.sceneLabel {
                     weatherCard(label: label, icon: weatherIcon(for: weather.scene))
                 } else {
-                    weatherCard(label: "\(timeOfDayLabel())时段", icon: timeOfDayIcon)
+                    weatherCard(label: "\(timeOfDayLabel)时段", icon: timeOfDayIcon)
                 }
 
                 if !recommended.isEmpty {
