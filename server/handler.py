@@ -459,12 +459,11 @@ class H(BaseHTTPRequestHandler):
                 follower_count = c.execute("SELECT COUNT(*) FROM follows WHERE following_id=?", (target_uid,)).fetchone()[0]
                 # 关注数（我关注的人数）
                 following_count = c.execute("SELECT COUNT(*) FROM follows WHERE follower_id=?", (target_uid,)).fetchone()[0]
-                # 互关数（互相关注的人数）
-                mutual_count = 0
-                if me_uid:
-                    mutual_count = c.execute("""SELECT COUNT(*) FROM follows f1
-                                                INNER JOIN follows f2 ON f1.follower_id=f2.following_id AND f1.following_id=f2.follower_id
-                                                WHERE f1.follower_id=?""", (me_uid,)).fetchone()[0]
+                # 互关数（主页主人 target 的互关人数：target 关注了 X 且 X 也关注 target）
+                # 注意：互关数是主页主人的属性，与查看者无关（此前误用查看者 me_uid 导致别人主页互关恒为 0）
+                mutual_count = c.execute("""SELECT COUNT(*) FROM follows f1
+                                            INNER JOIN follows f2 ON f1.follower_id=f2.following_id AND f1.following_id=f2.follower_id
+                                            WHERE f1.follower_id=?""", (target_uid,)).fetchone()[0]
                 # 当前用户是否已关注该用户
                 is_following = False
                 if me_uid and me_uid != target_uid:

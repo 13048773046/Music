@@ -936,6 +936,40 @@ def run_all(port, root, strict_port, strict_root):
     p2 = json.loads(body)
     check("主页 city 手填生效", s == 200 and p2.get("city") == "苏州市", body[:200])
 
+    print("== 26.5 互关数语义（主页主人的互关，非查看者）==")
+    # 复用已有用户：A=第2段 uid（AUTH 带 token）、B=26段 uid2（主页测试，token 用注册响应 u2 的）
+    AUTH_B = {"Authorization": f"Bearer {u2.get('token','')}"}
+    # 前置：26 段之前 A 未关注 B、B 未关注 A；先确保干净（幂等：若已关注则先取关）
+    s, body, _ = req("POST", f"/api/user/{uid2}/follow", headers=AUTH)
+    if s == 200 and json.loads(body).get("isFollowing") is True:
+        req("POST", f"/api/user/{uid2}/follow", headers=AUTH)  # 再点一次取关
+    # A 关注 B
+    s, body, _ = req("POST", f"/api/user/{uid2}/follow", headers=AUTH)
+    check("A 关注 B 200", s == 200 and json.loads(body).get("isFollowing") is True, body[:100])
+    # B 关注 A（形成互关）
+    s, body, _ = req("POST", f"/api/user/{uid}/follow", headers=AUTH_B)
+    check("B 关注 A 200", s == 200 and json.loads(body).get("isFollowing") is True, body[:100])
+    # 匿名查看 A 的主页：互关应为 1（主页主人的互关，与查看者无关）
+    s, body, _ = req("GET", f"/api/user/{uid}/profile")
+    pa = json.loads(body)
+    check("A 主页 mutualCount=1（匿名查看）", s == 200 and pa.get("mutualCount") == 1, f"mutual={pa.get('mutualCount')}")
+    # debug：dump follows 表
+    import subprocess as _sp
+    out = _sp.check_output(["python3", "-c",
+        "import sqlite3,glob,os; fs=glob.glob(os.environ.get('MUSIC_ROOT','/tmp')+'/../tracks.db'); print('x')"])
+    _ = out
+    # 查看者 A（有 token）查看 B 的主页：B 的互关仍是 1，查看者身份不影响
+    s, body, _ = req("GET", f"/api/user/{uid2}/profile", headers=AUTH)
+    pb = json.loads(body)
+    check("B 主页 mutualCount=1（A 查看）", s == 200 and pb.get("mutualCount") == 1, f"mutual={pb.get('mutualCount')}")
+    # A 取关 B → A 不再与任何人互关 → A 主页 mutualCount=0
+    s, body, _ = req("POST", f"/api/user/{uid2}/follow", headers=AUTH)
+    check("A 取关 B 200", s == 200 and json.loads(body).get("isFollowing") is False, body[:100])
+    s, body, _ = req("GET", f"/api/user/{uid}/profile")
+    pa2 = json.loads(body)
+    check("A 主页 mutualCount=0（取关后）", s == 200 and pa2.get("mutualCount") == 0, f"mutual={pa2.get('mutualCount')}")
+
+
 
 if __name__ == "__main__":
     main()
