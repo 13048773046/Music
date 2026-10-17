@@ -14,6 +14,10 @@ struct NotificationsView: View {
     @State private var loadFailed = false
     @State private var showOfficialChat = false
     @State private var showUserProfile: String?
+    // 通知列表分页：后端 /api/notifications 已支持 page/size/hasMore（上限 50）
+    @State private var notifPage = 1
+    @State private var hasMore = false
+    @State private var loadingMore = false
 
     var body: some View {
         ZStack {
@@ -42,6 +46,28 @@ struct NotificationsView: View {
                         sectionHeader("互动通知")
                         ForEach(notifications) { n in
                             interactionRow(n)
+                        }
+                        // 分页加载更多：还有下一页时显示加载入口（WS 实时推送已会刷新列表，此处补历史分页）
+                        if hasMore {
+                            Button {
+                                Task { await loadNotifications(reset: false) }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if loadingMore {
+                                        ProgressView().tint(Theme.accent)
+                                    } else {
+                                        Image(systemName: "arrow.down.circle")
+                                            .font(.system(size: 13))
+                                    }
+                                    Text(loadingMore ? "加载中…" : "加载更多")
+                                        .font(.system(size: 13))
+                                }
+                                .foregroundColor(Theme.accent)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(loadingMore)
                         }
                     }
                 }
@@ -337,26 +363,44 @@ struct NotificationsView: View {
     }
 
     @MainActor
-    private func loadNotifications() async {
+    private func loadNotifications(reset: Bool = true) async {
         guard auth.currentUser != nil else {
             notifications = []
             unreadCount = 0
+            hasMore = false
             return
         }
+        if !reset && loadingMore { return }          // 防并发重复加载
+        if !reset { loadingMore = true }
+        defer { if !reset { loadingMore = false } }
+        let page = reset ? 1 : (notifPage + 1)
         do {
-            let r = try await API.notifications()
-            // 过滤掉official类型（官方通知单独显示在顶部）
-            notifications = r.list.filter { $0.type != "official" }
+            let r = try await API.notifications(page: page, size: 30)
+            // 过滤掉 official 类型（官方通知单独显示在顶部）
+            let filtered = r.list.filter { $0.type != "official" }
+            if reset {
+                notifications = filtered
+                notifPage = 1
+            } else {
+                // 去重置顶：WS 实时推送可能已把新通知插进来，追加时按 id 去重
+                var seen = Set(notifications.map { $0.id })
+                let fresh = filtered.filter { seen.insert($0.id).inserted }
+                notifications.append(contentsOf: fresh)
+                notifPage = page
+            }
+            hasMore = r.hasMore
             unreadCount = r.unread
             // 同步全局未读数（TabBar/铃铛红点）
             NotificationBus.shared.setUnread(r.unread)
-            Task {
-                await API.markNotificationsRead()
-                // 已读标记完成后立即清除全局红点：看过通知返回首页，红点马上消失
-                NotificationBus.shared.setUnread(0)
+            if reset {
+                Task {
+                    await API.markNotificationsRead()
+                    // 已读标记完成后立即清除全局红点：看过通知返回首页，红点马上消失
+                    NotificationBus.shared.setUnread(0)
+                }
             }
         } catch {
-            loadFailed = true
+            if reset { loadFailed = true }
         }
     }
 

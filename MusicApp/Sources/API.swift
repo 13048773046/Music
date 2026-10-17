@@ -735,10 +735,14 @@ enum API {
         return try JSONDecoder().decode(MsgList.self, from: data).list
     }
 
-    /// 获取我的互动通知列表
-    static func notifications() async throws -> (list: [Notification], unread: Int) {
-        let url = base.appendingPathComponent("notifications")
-        var req = URLRequest(url: url)
+    /// 获取我的互动通知列表（分页：page 从 1 起，size 默认 30，返回 hasMore）
+    static func notifications(page: Int = 1, size: Int = 30) async throws -> (list: [Notification], unread: Int, hasMore: Bool) {
+        // ⚠ 必须用 URLComponents 拼 query：appendingPathComponent 会把 ?/& 百分号编码成 %3F/%26 → 404（播放历史踩过坑）
+        var comps = URLComponents(url: base.appendingPathComponent("notifications"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "page", value: "\(page)"),
+                            URLQueryItem(name: "size", value: "\(size)")]
+        var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 15
         applyAuth(&req)
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -749,9 +753,10 @@ enum API {
         struct NotifResp: Decodable {
             let list: [Notification]
             let unread: Int
+            let hasMore: Bool
         }
         let r = try JSONDecoder().decode(NotifResp.self, from: data)
-        return (r.list, r.unread)
+        return (r.list, r.unread, r.hasMore)
     }
 
     /// 标记所有通知为已读
