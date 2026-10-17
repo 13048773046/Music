@@ -881,9 +881,11 @@ private struct LiveLyricView: View {
 }
 
 /// 无歌词占位：作者·歌手名 + 「该歌曲暂无歌词」，替代原本空白歌词区。
-/// 用 TimelineView(.animation) 时间轴驱动，与正常歌词 LyricPreview 同款单调滚动 + 缩放/淡出过渡：
-/// 「作者·歌手名」停留 hold 秒（默认 5s）→ 平滑滚动到「该歌曲暂无歌词」→ **停住，不循环**，
-/// 持续显示直到歌曲结束。高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
+/// 无歌词占位：作者·歌手名 + 「该歌曲暂无歌词」。
+/// 原实现用 TimelineView(.animation) 驱动（60fps），但滚动 5s 结束后"停住"仍持续
+/// 每帧重绘纯属空转。S2 改为**一次性过渡**：onAppear 后 hold 秒停留，随后
+/// withAnimation 平滑滚动到第二行并停住——之后无任何持续重绘，功耗归零。
+/// 高度与 LyricPreview 视口一致（60），保证有/无歌词切歌时页面不跳动。
 private struct NoLyricPlaceholder: View {
     let author: String
     let tint: Color
@@ -894,68 +896,44 @@ private struct NoLyricPlaceholder: View {
     private static let step: CGFloat = 32       // 第一行行高24 + 间距8，滚动位移
     private static let viewHeight: CGFloat = 60
 
-    /// 组件创建时刻（相对计时基准）：TimelineView 的 date 是 2001 年起算的绝对时间，
-    /// 直接 `t < hold` 判断恒为假（2026 年约 8.1e8 秒），会导致第一行从不显示——
-    /// 必须减去创建时刻得到「本首歌」的经过秒数。
-    @State private var startRef: TimeInterval = Date().timeIntervalSinceReferenceDate
-
-    /// 滚动单调化追踪器：class 引用属性不触发 SwiftUI 重绘，过渡阶段只增不减不回弹
-    private final class Tracker { var maxT: Double = 0; var lastC: Int = -2 }
-    @State private var tracker = Tracker()
+    /// 滚动位移（初始 0，hold 秒后动画到 -step 并停住）
+    @State private var offsetY: CGFloat = 0
+    /// 是否已滚到第二行（驱动两行样式互换）
+    @State private var moved = false
 
     var body: some View {
-        TimelineView(.animation) { ctx in
-            // 相对创建时刻的经过秒数：0 → hold 为作者行停留期，之后过渡到暂无歌词
-            let t = ctx.date.timeIntervalSinceReferenceDate - startRef
-            // 目标行：第一行停留 hold 秒后滚到第二行，单向到达后停住（不循环）
-            let c = t < Self.hold ? 0 : 1
-            // 滚动进度：进入第二行后 0→1；第一行停留期为 0
-            let seg = t < Self.hold ? 0 : min(max((t - Self.hold) / Self.scroll, 0), 1)
-            // 切行重置 + 滚动进度单调化（副作用在辅助函数中完成，ViewBuilder 内只声明式调用）
-            let _ = advanceTracker(c: c, seg: seg)
-            let raw = tracker.maxT
-            let eased = 1 - (1 - raw) * (1 - raw) * (1 - raw)   // easeOutCubic
-            let scrolling = raw < 1
-            // 位移：滚到第二行时上移 step（用 eased 插值），到顶后停住
-            let offsetY = -Self.step * eased
-
-            VStack(spacing: Self.rowGap) {
-                placeholderRow("作者·\(author)", size: 20, weight: .medium,
-                               isCur: c == 0, isOld: c == 1,
-                               scrolling: scrolling, eased: eased)
-                placeholderRow("该歌曲暂无歌词", size: 15, weight: .regular,
-                               isCur: c == 1, isOld: false,
-                               scrolling: scrolling, eased: eased)
-            }
-            .offset(y: offsetY)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: Self.viewHeight, alignment: .top)
-            .clipped()
+        VStack(spacing: Self.rowGap) {
+            placeholderRow("作者·\(author)", size: 20, weight: .medium,
+                           isCur: !moved)
+            placeholderRow("该歌曲暂无歌词", size: 15, weight: .regular,
+                           isCur: moved)
         }
+        .offset(y: offsetY)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.viewHeight, alignment: .top)
+        .clipped()
+        .task {
+            // 一次性过渡：hold 秒停留 → 0.28s easeOut 滚动到第二行 → 停住。
+            // .task 随视图销毁自动取消，切歌/离屏不会残留动画。
+            try? await Task.sleep(nanoseconds: UInt64(Self.hold * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: Self.scroll)) {
+                offsetY = -Self.step
+                moved = true
+            }
+        }
     }
 
-    /// 切行重置 + 滚动进度单调化：ViewBuilder 里不允许直接写 if 副作用语句，
-    /// 收敛到本辅助函数，在 body 内以 `let _ = advanceTracker(...)` 声明式调用
-    private func advanceTracker(c: Int, seg: Double) {
-        if c != tracker.lastC { tracker.lastC = c; tracker.maxT = 0 }
-        if seg > tracker.maxT { tracker.maxT = seg }
-    }
-
-    /// 单行过渡动画（与正常歌词 LyricPreview 一致）：
-    /// 当前行滚动期从 0.8 放大到 1.0；被替换行（旧行）同步缩小淡出。
+    /// 行样式对齐原 TimelineView 版本：当前行 0.92 亮色满字号，非当前行 0.45 暗色 0.8 缩。
+    /// 滚动过渡由 withAnimation 隐式动画驱动 scale/opacity 变化（仅过渡期一次）。
     private func placeholderRow(_ text: String, size: CGFloat, weight: Font.Weight,
-                                isCur: Bool, isOld: Bool, scrolling: Bool, eased: Double) -> some View {
-        let scale: Double = isCur
-            ? (scrolling ? 0.8 + 0.2 * eased : 1.0)
-            : (isOld ? 1.0 - 0.15 * eased : 0.8)
-        let opacity = isOld ? (1 - eased) : 1.0
-        return Text(text)
+                                isCur: Bool) -> some View {
+        Text(text)
             .font(.system(size: size, weight: weight))
             .foregroundColor(tint.opacity(isCur ? 0.92 : 0.45))
             .lineLimit(1)
-            .scaleEffect(scale, anchor: .leading)
-            .opacity(opacity)
+            .scaleEffect(isCur ? 1.0 : 0.8, anchor: .leading)
+            .opacity(isCur ? 1.0 : 0.6)
     }
 }
 

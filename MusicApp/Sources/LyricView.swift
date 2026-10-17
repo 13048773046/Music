@@ -185,22 +185,40 @@ struct LyricPreview: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { _ in
-            let display = displayTime()
-            let c = currentIndex(display)
-            // 切句重置 + 滚动进度单调化（副作用在辅助函数中完成，闭包内只用声明）
-            let _ = advanceTracker(c: c, display: display)
-            // 滚动进度：切句瞬间（display 刚过当前行 start）为 0，0.28s 后为 1。
-            // 单调化：只增不减，AVPlayer 时间抖动不会让位移回退（无回弹）。
-            let t = max(c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1,
-                        tracker.maxT)
-            let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0   // easeOutCubic：起快收慢，跟手不拖沓
-            // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
-            let scrolling = c > 0 && t < 1
-            let base = scrolling ? c - 1 : c
-            let offsetY = scrolling ? -step * eased : 0
+        // 播放中：TimelineView(.animation) 60fps 逐帧推进（切句滚动 + 逐字卡拉OK）。
+        // 暂停时：歌词时间不再前进，继续 60fps 重绘纯属空转（耗电/发热）。
+        // 改为静态渲染——displayTime() 只求值一次，SwiftUI 仅在其他依赖变化
+        // （如拖动条 scrub 预览 progress）时才重建本视图，暂停功耗几乎归零。
+        Group {
+            if PlayerManager.shared.isPlaying {
+                TimelineView(.animation) { _ in
+                    content(display: displayTime())
+                }
+            } else {
+                content(display: displayTime())
+            }
+        }
+        .frame(height: viewHeight, alignment: .top)
+        .clipped()
+    }
 
-            VStack(spacing: rowGap) {
+    /// 歌词三行渲染（当前句 / 旧句 / 预备句），由 body 决定用 60fps 时间轴
+    /// 还是暂停时的单次静态渲染驱动。
+    private func content(display: Double) -> some View {
+        let c = currentIndex(display)
+        // 切句重置 + 滚动进度单调化（副作用在辅助函数中完成，闭包内只用声明）
+        let _ = advanceTracker(c: c, display: display)
+        // 滚动进度：切句瞬间（display 刚过当前行 start）为 0，0.28s 后为 1。
+        // 单调化：只增不减，AVPlayer 时间抖动不会让位移回退（无回弹）。
+        let t = max(c > 0 ? min(max((display - lines[c].start) / Self.scrollDuration, 0), 1) : 1,
+                    tracker.maxT)
+        let eased = c > 0 ? 1 - (1 - t) * (1 - t) * (1 - t) : 0   // easeOutCubic：起快收慢，跟手不拖沓
+        // 滚动中展示 [旧行, 当前行, 预备行] 并上滑；滚动结束后 [当前行, 预备行, 预备预备]
+        let scrolling = c > 0 && t < 1
+        let base = scrolling ? c - 1 : c
+        let offsetY = scrolling ? -step * eased : 0
+
+        return VStack(spacing: rowGap) {
                 ForEach(0..<3, id: \.self) { idx in
                     let li = base + idx
                     if lines.indices.contains(li) {
@@ -227,9 +245,6 @@ struct LyricPreview: View {
             }
             .offset(y: offsetY)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(height: viewHeight, alignment: .top)
-        .clipped()
     }
 }
 
