@@ -101,10 +101,6 @@ final class PlayerManager: NSObject, ObservableObject {
     }
     /// 已从低码率升级到原码率重试的曲目（low 失败 → high 兜底，避免同一首反复卡 low）
     private var bitrateUpgraded: Set<String> = []
-    /// W1 正在预热引擎缓存的曲目（防同曲重复下载；完成后移除，失败静默）
-    private var warmingTracks: Set<String> = []
-    /// 已调度但未到期的延迟预热曲目（切歌/重载即取消；到点校验仍在播同一曲才真正发起）
-    private var pendingWarmTrackId: String?
     /// 加载期间（duration==0）的待应用拖动位置：就绪后立即跳到该处
     private var pendingSeekFraction: Double?
 
@@ -362,8 +358,6 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 短时间窗口：距上次保存 < 此值（默认 5 分钟）恢复会话、接着上次那首的下一首；
     /// 超过（如隔 10 分钟）则丢弃旧会话，重新进入带随机性的新鲜推荐流
     private static let sessionResumeWindow: TimeInterval = 300
-    /// W1 预热延迟：切歌后等当前曲稳定缓冲再预热，绝不与流式加载抢带宽
-    private static let warmDelay: TimeInterval = 3.0
     private static let sessionKey = "PlayerManager.savedSession.v1"
     /// 保存窗口：当前歌之前保留 N 首、之后保留 M 首（限制 UserDefaults 体积）
     private static let sessionKeepBefore = 30
@@ -1298,58 +1292,6 @@ final class PlayerManager: NSObject, ObservableObject {
         queueRevision += 1   // 队列内容已变：通知 VerticalPager 刷新（当前页索引已同步）
     }
 
-    /// W1 · 引擎缓存预热（音效秒切换的关键路径）——**加载优先版**：
-    /// 原音播放中后台把「当前曲」整曲下载到共享 AudioCache（不启动引擎、不占用播放器），
-    /// 用户点音效瞬间缓存命中 → AudioEnginePlayer.prepare 缓存分支直接读 file:// → ≤80ms 接管。
-    /// 策略（工业级取舍，2026-10-17 v2 修正）：
-    /// - **加载优先**：不立即预热——切歌后延迟 warmDelay 秒（播放已稳定缓冲）再发起，
-    ///   且切歌/重载立即取消未到期的延迟预热 → 预热绝不与流式加载抢带宽（修复「重开 APP 加载变慢」）
-    /// - **仅 Wi-Fi 预热**：蜂窝不预热（弱网带宽优先给正在播放的歌；蜂窝首次切音效走
-    ///   「原音不中断 + 引擎就绪无感接管」，体验仍连续）
-    /// - 仅预热当前曲 1 首（切音效时正播的就是它；队列后续曲目切到再下，控制写盘与流量）
-    /// - Wi-Fi 预热原码率；每曲仅一次（warmingTracks 防重）；缓存已命中则跳过；失败静默
-    /// - 请求低优先级（networkServiceType = .background）：系统让流式播放优先
-    /// - 线程模型：签名请求异步（后台）；下载完成回主线程落盘（与引擎操作严格串行，见 W5）
-    private func scheduleWarmEngineCache(trackId: String) {
-        // 仅 Wi-Fi 预热（蜂窝：带宽优先给正在播放的歌）
-        guard !NetworkMonitor.shared.isOffline, !NetworkMonitor.shared.isCellular else { return }
-        guard !warmingTracks.contains(trackId) else { return }
-        // 缓存已命中（任意码率）→ 无需预热（引擎/原音切换均可秒开）
-        if AudioCache.shared.exists(trackId: trackId, low: true) ||
-           AudioCache.shared.exists(trackId: trackId, low: false) { return }
-        // 延迟调度：等当前曲稳定播放后再预热，不抢加载带宽
-        pendingWarmTrackId = trackId
-        let warmTrackId = trackId
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.warmDelay) { [weak self] in
-            guard let self,
-                  self.pendingWarmTrackId == warmTrackId,   // 切歌/重载已取消
-                  self.current?.id == warmTrackId,          // 仍在播同一曲
-                  !NetworkMonitor.shared.isOffline,
-                  !NetworkMonitor.shared.isCellular,        // 到点时仍是 Wi-Fi
-                  !self.warmingTracks.contains(warmTrackId),
-                  !AudioCache.shared.exists(trackId: warmTrackId, low: true),
-                  !AudioCache.shared.exists(trackId: warmTrackId, low: false) else { return }
-            self.pendingWarmTrackId = nil
-            self.warmingTracks.insert(warmTrackId)
-            Task { [weak self] in
-                let url = await API.signedStreamURL(for: warmTrackId, bitrate: .high)
-                guard !Task.isCancelled else { return }
-                var req = URLRequest(url: url)
-                // 低优先级：系统让当前播放的流式缓冲优先
-                req.networkServiceType = .background
-                let task = URLSession.shared.downloadTask(with: req) { [weak self] tempURL, _, error in
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        self.warmingTracks.remove(warmTrackId)
-                        guard let tempURL = tempURL, error == nil else { return }
-                        _ = AudioCache.shared.store(fromTemp: tempURL, trackId: warmTrackId, low: false)
-                    }
-                }
-                task.resume()
-            }
-        }
-    }
-
     /// 2) 用 AVURLAsset 预热连接/资源头部（只拉前一小部分 metadata，不整首下载）。
     /// 播放位置或队列变化时重新计算窗口；同一位置只预加载一次。
     /// 幂等且防重：切歌会取消旧任务，队列再变也不会错取已不在队列的歌。
@@ -1547,8 +1489,6 @@ final class PlayerManager: NSObject, ObservableObject {
         guard let current = current else { return }
         // 切歌/重载会终止一切进行中的切换：取消引擎预加载任务、清空待应用拖动
         engineSwitchTask?.cancel()
-        // 切歌/重载同时取消未到期的延迟预热（不抢新歌的加载带宽；同一曲重载会重新调度）
-        pendingWarmTrackId = nil
         engineSwitchTask = nil
         engineSwitchInProgress = false
         engineDownloadFraction = 0
@@ -1714,9 +1654,6 @@ final class PlayerManager: NSObject, ObservableObject {
                 self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
                 // 新歌开始播放后，为「接下来 N 首」启动预加载（预热签名 URL + 连接头部）
                 self.schedulePrefetch()
-                // W1 音效秒切换：延迟预热「当前曲」整曲到共享缓存（Wi-Fi、播放稳定后发起，
-                // 低优先级请求）→ 用户点音效瞬间缓存命中 → 引擎 ≤80ms 接管
-                self.scheduleWarmEngineCache(trackId: trackId)
             }
         }
         loadTask = task
