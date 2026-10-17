@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material3.CircularProgressIndicator
@@ -71,6 +72,7 @@ import app.star2936.guava3291.ui.theme.TextPrimary
 import app.star2936.guava3291.ui.theme.TextSecondary
 import app.star2936.guava3291.ui.theme.TextTertiary
 import app.star2936.guava3291.util.dateString
+import app.star2936.guava3291.util.listenText
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 
@@ -109,6 +111,9 @@ fun MineScreen(
     var followerCount by remember { mutableIntStateOf(0) }
     var followingCount by remember { mutableIntStateOf(0) }
     var mutualCount by remember { mutableIntStateOf(0) }
+    var gender by remember { mutableStateOf("") }
+    var age by remember { mutableIntStateOf(0) }
+    var city by remember { mutableStateOf("") }
 
     // 加载未读通知数
     val currentUid = user?.id
@@ -181,6 +186,7 @@ fun MineScreen(
             val uid = user?.id ?: return
             val p = Api.fetchUserProfile(uid)
             followerCount = p.followerCount; followingCount = p.followingCount; mutualCount = p.mutualCount
+            gender = p.gender ?: ""; age = p.age ?: 0; city = p.city
         } catch (_: Exception) {}
     }
 
@@ -229,6 +235,10 @@ fun MineScreen(
                     followerCount = followerCount,
                     followingCount = followingCount,
                     mutualCount = mutualCount,
+                    gender = gender,
+                    age = age,
+                    city = city,
+                    listenSeconds = AppPreloader.mineStatsSeconds.value,
                     statusBarTop = statusBarTop,
                     onUpload = { filePicker.launch("audio/*") },
                     onNotifications = { onOpenNotifications() },
@@ -288,6 +298,10 @@ private fun UserHeader(
     followerCount: Int,
     followingCount: Int,
     mutualCount: Int,
+    gender: String,
+    age: Int,
+    city: String,
+    listenSeconds: Int,
     statusBarTop: androidx.compose.ui.unit.Dp,
     onUpload: () -> Unit,
     onNotifications: () -> Unit,
@@ -368,6 +382,47 @@ private fun UserHeader(
                                 .background(Color.White.copy(alpha = 0.15f))
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    // meta 行（性别 · 年龄 · 城市）+ 听歌时长胶囊（结构对齐 iOS，样式沿用本页体系）
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val meta = listOfNotNull(
+                            gender.takeIf { it.isNotEmpty() },
+                            age.takeIf { it > 0 }?.let { "$it 岁" },
+                            city.takeIf { it.isNotEmpty() },
+                        )
+                        if (meta.isNotEmpty()) {
+                            Text(
+                                meta.joinToString(" · "),
+                                color = Color.White.copy(alpha = 0.6f),  // 与签名同透明度
+                                fontSize = 12.sp,                          // 与签名同字号
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                        }
+                        if (listenSeconds > 0) {
+                            Spacer(Modifier.width(8.dp))
+                            // 时长胶囊：复用 ID 徽标样式（11sp Medium 白0.8 · 胶囊白0.15 · h8/v3）
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(percent = 50))
+                                    .background(Color.White.copy(alpha = 0.15f))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Filled.Schedule, contentDescription = "听歌时长",
+                                    tint = Color.White.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    listenText(listenSeconds),
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 11.sp, fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                     if (!user?.signature.isNullOrEmpty()) {

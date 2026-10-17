@@ -76,14 +76,34 @@ object PlayerManager {
     private var autoRetriedTrackId: String? = null
     private var bufferingStallStart: Long? = null
     private var stallProgressAtStart = 0.0
-    private val stallTimeoutMs = 15000L
+    // 卡死超时动态化：离线不设超时（等网络恢复，对齐 iOS isOffline → 无限等待）
+    private val stallTimeoutMs: Long
+        get() = if (NetworkMonitor.isOffline.value) Long.MAX_VALUE else 15000L
     private var pendingSeekFraction: Double? = null
+
+    // ---------- 码率决策（对齐 iOS activeBitrate/effectiveBitrate/bitrateUpgraded） ----------
+    /** 已从低码率升级到原码率重试的曲目（low 失败 → high 兜底，避免同一首反复卡 low） */
+    private val bitrateUpgraded = mutableSetOf<String>()
+    /** 当前播放曲目实际使用的码率档（true=low 96k） */
+    private var activeLow = false
+
+    /** 弱网播放 UI：当前是否离线（失败视图文案区分「网络未连接」与「加载失败」） */
+    val networkOffline: Boolean get() = NetworkMonitor.isOffline.value
+
+    /** 当前曲目码率档决策：蜂窝弱网 → 低码率；已升级（low 失败）→ 原码率 */
+    private fun effectiveLowFor(trackId: String?): Boolean =
+        NetworkMonitor.isCellular.value && trackId != null && trackId !in bitrateUpgraded
+
+    /** 签名 URL 池键：码率绑定（高低码率不互相覆盖） */
+    private fun poolKey(id: String, low: Boolean) = "$id::$low"
 
     // ---------- 预加载 ----------
     private val signedURLPool = mutableMapOf<String, String>()
     private val urlPoolOrder = mutableListOf<String>()
     private val urlPoolLimit = 16
-    private val prefetchAheadCount = 4
+    // 预取窗口动态化：离线暂停预取（省流量，对齐 iOS isOffline → 0）
+    private val prefetchAheadCount: Int
+        get() = if (NetworkMonitor.isOffline.value) 0 else 4
     private var prefetchJob: Job? = null
 
     // ---------- 推荐流 ----------
@@ -213,7 +233,7 @@ object PlayerManager {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                // 弱网工业级：网络错误重试一次，其他错误跳下一首
+                // 弱网工业级：网络错误按码率档处理，其他错误跳下一首
                 val isNetworkError = when (error.errorCode) {
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
@@ -222,7 +242,15 @@ object PlayerManager {
                     else -> false
                 }
                 if (isNetworkError) {
-                    handlePlaybackFailure()
+                    // low 码率失败 → 同曲升级原码率重试一次（防反复卡低码率）；
+                    // 已升级/非 low → 走延迟重试；断网 → 失败视图（网络恢复后自动续播）
+                    val tid = current?.id
+                    if (activeLow && tid != null && tid !in bitrateUpgraded) {
+                        bitrateUpgraded.add(tid)
+                        reloadCurrent()
+                    } else {
+                        handlePlaybackFailure()
+                    }
                 } else {
                     // 解码器/格式错误：直接跳下一首，不卡屏
                     scope.launch {
@@ -330,7 +358,7 @@ object PlayerManager {
         val prevs = mutableListOf<MediaItem>()
         if (currentIndex > 0) {
             val pt = q[currentIndex - 1]
-            signedURLPool[pt.id]?.let { u ->
+            signedURLPool[poolKey(pt.id, activeLow)]?.let { u ->
                 prevs.add(MediaItem.Builder()
                     .setMediaId(pt.id)
                     .setUri(u)
@@ -348,7 +376,7 @@ object PlayerManager {
         val end = minOf(currentIndex + 1 + prefetchAheadCount, q.size)
         for (i in (currentIndex + 1) until end) {
             val nt = q[i]
-            val u = signedURLPool[nt.id] ?: continue
+            val u = signedURLPool[poolKey(nt.id, activeLow)] ?: continue
             nexts.add(MediaItem.Builder()
                 .setMediaId(nt.id)
                 .setUri(u)
@@ -371,10 +399,10 @@ object PlayerManager {
             // 补前一首的 URL（通知栏上一首按钮需要 player 有前一个 item）
             if (currentIndex > 0) {
                 val pt = q[currentIndex - 1]
-                if (!signedURLPool.containsKey(pt.id)) {
+                if (!signedURLPool.containsKey(poolKey(pt.id, activeLow))) {
                     try {
                         val u = Api.signedStreamUrl(pt.id)
-                        signedURLPool[pt.id] = u
+                        signedURLPool[poolKey(pt.id, activeLow)] = u
                         withContext(Dispatchers.Main) {
                             var exists = false
                             for (j in 0 until player.mediaItemCount) {
@@ -399,10 +427,10 @@ object PlayerManager {
             }
             for (i in (currentIndex + 1) until end) {
                 val nt = queue.value[i]
-                if (signedURLPool.containsKey(nt.id)) continue
+                if (signedURLPool.containsKey(poolKey(nt.id, activeLow))) continue
                 try {
                     val u = Api.signedStreamUrl(nt.id)
-                    signedURLPool[nt.id] = u
+                    signedURLPool[poolKey(nt.id, activeLow)] = u
                     withContext(Dispatchers.Main) {
                         var exists = false
                         for (j in 0 until player.mediaItemCount) {
@@ -438,7 +466,7 @@ object PlayerManager {
         val startInsert = lastIdx + 1
         for (i in startInsert until end) {
             val t = q[i]
-            val u = signedURLPool[t.id] ?: break
+            val u = signedURLPool[poolKey(t.id, activeLow)] ?: break
             var already = false
             for (j in 0 until player.mediaItemCount) {
                 if (player.getMediaItemAt(j).mediaId == t.id) { already = true; break }
@@ -477,10 +505,11 @@ object PlayerManager {
 
         val sameTrack = listen.trackId == cur.id
         flushListen(flushReason ?: if (sameTrack) ListenFlushReason.Heartbeat else ListenFlushReason.SwitchTrack)
-        // 工业级：切歌时记录上一首播放历史
+        // 工业级：切歌时记录上一首播放历史（本地 MRU + 后端上报；本地只存元数据）
         if (!sameTrack && listen.trackId.isNotEmpty()) {
             val prevId = listen.trackId
             val prevTrack = queue.value.find { it.id == prevId }
+            prevTrack?.let { LocalPlayHistory.record(it) }
             scope.launch {
                 try {
                     Api.recordHistory(prevId, prevTrack?.title ?: "", prevTrack?.displayAuthor ?: "", prevTrack?.cover)
@@ -516,15 +545,23 @@ object PlayerManager {
 
         loadJob.set(scope.launch {
             val trackId = cur.id
-            val cached = signedURLPool.remove(trackId).also {
-                if (it != null) urlPoolOrder.remove(trackId)
+            // 码率决策：蜂窝弱网 → 低码率秒开；low 失败已升级 → 原码率；离线 → 只用已升级档
+            val low = if (NetworkMonitor.isOffline.value) {
+                bitrateUpgraded.contains(trackId)
+            } else {
+                NetworkMonitor.isCellular.value && trackId !in bitrateUpgraded
+            }
+            activeLow = low
+            val key = poolKey(trackId, low)
+            val cached = signedURLPool.remove(key).also {
+                if (it != null) urlPoolOrder.remove(key)
             }
             // 弱网工业级：signedStreamUrl 重试 3 次（指数退避 1s/2s/4s）
             val url = cached ?: run {
                 var lastError: Exception? = null
                 for (attempt in 0..2) {
                     try {
-                        return@run Api.signedStreamUrl(trackId)
+                        return@run Api.signedStreamUrl(trackId, low)
                     } catch (e: Exception) {
                         lastError = e
                         if (attempt < 2) kotlinx.coroutines.delay(1000L * (1 shl attempt))
@@ -751,17 +788,20 @@ object PlayerManager {
     }
 
     private suspend fun warmURLOnly(t: Track) {
-        if (signedURLPool.containsKey(t.id)) {
+        // 预取码率与播放决策一致：蜂窝弱网 → 低码率（预取 low 档，秒开且省流量）
+        val low = effectiveLowFor(t.id)
+        val key = poolKey(t.id, low)
+        if (signedURLPool.containsKey(key)) {
             withContext(Dispatchers.Main) { topUpQueue() }
             return
         }
-        val fetched = Api.signedStreamUrl(t.id)
+        val fetched = Api.signedStreamUrl(t.id, low)
         synchronized(signedURLPool) {
             if (signedURLPool.size >= urlPoolLimit && urlPoolOrder.isNotEmpty()) {
                 signedURLPool.remove(urlPoolOrder.removeAt(0))
             }
-            signedURLPool[t.id] = fetched
-            urlPoolOrder.add(t.id)
+            signedURLPool[key] = fetched
+            urlPoolOrder.add(key)
         }
         withContext(Dispatchers.Main) { topUpQueue() }
     }
@@ -790,16 +830,18 @@ object PlayerManager {
         }
     }
 
-    /** 冷启动预热首曲签名 URL */
+    /** 冷启动预热首曲签名 URL（码率档与当前网络一致） */
     suspend fun prewarm(t: Track) {
-        if (!signedURLPool.containsKey(t.id)) {
-            val fetched = Api.signedStreamUrl(t.id)
+        val low = effectiveLowFor(t.id)
+        val key = poolKey(t.id, low)
+        if (!signedURLPool.containsKey(key)) {
+            val fetched = Api.signedStreamUrl(t.id, low)
             synchronized(signedURLPool) {
                 if (signedURLPool.size >= urlPoolLimit && urlPoolOrder.isNotEmpty()) {
                     signedURLPool.remove(urlPoolOrder.removeAt(0))
                 }
-                signedURLPool[t.id] = fetched
-                urlPoolOrder.add(t.id)
+                signedURLPool[key] = fetched
+                urlPoolOrder.add(key)
             }
         }
     }

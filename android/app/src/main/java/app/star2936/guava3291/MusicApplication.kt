@@ -3,6 +3,8 @@ package app.star2936.guava3291
 import android.app.Application
 import android.content.ComponentCallbacks2
 import app.star2936.guava3291.state.AuthManager
+import app.star2936.guava3291.state.LocalPlayHistory
+import app.star2936.guava3291.state.NetworkMonitor
 import app.star2936.guava3291.state.NotificationBus
 import app.star2936.guava3291.state.PlayerManager
 import app.star2936.guava3291.state.PlayerSession
@@ -17,6 +19,8 @@ class MusicApplication : Application(), ComponentCallbacks2 {
         PlayerManager.init(this)
         NotificationBus.register()
         WeatherContext.init(this)
+        NetworkMonitor.init(this)
+        LocalPlayHistory.init(this)
         registerComponentCallbacks(this)
     }
 

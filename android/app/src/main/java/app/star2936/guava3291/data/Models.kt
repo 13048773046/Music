@@ -208,10 +208,12 @@ data class UserProfile(
     val gender: String? = null,
     val age: Int? = null,
     val background: String? = null,
+    @SerialName("city") val city: String = "",
     @SerialName("workCount") val workCount: Int = 0,
     @SerialName("followerCount") val followerCount: Int = 0,
     @SerialName("followingCount") val followingCount: Int = 0,
     @SerialName("mutualCount") val mutualCount: Int = 0,
+    @SerialName("likeCount") val likeCount: Int = 0,
     @SerialName("isFollowing") val isFollowing: Boolean = false,
 ) {
     val avatarURL: String get() = Api.avatarUrl(id)

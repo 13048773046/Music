@@ -24,7 +24,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,34 +31,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.star2936.guava3291.data.Api
-import app.star2936.guava3291.data.HistoryTrack
+import app.star2936.guava3291.data.Track
+import app.star2936.guava3291.state.LocalPlayHistory
 import app.star2936.guava3291.state.PlayerManager
 import app.star2936.guava3291.ui.components.StatusPlaceholder
 import app.star2936.guava3291.ui.theme.Background
 import app.star2936.guava3291.ui.theme.TextPrimary
 import app.star2936.guava3291.ui.theme.TextSecondary
 
-/** 播放历史页（对应 iOS HistoryView） */
+/** 播放历史页（本地 MRU，对应 iOS HistoryView + LocalPlayHistory） */
 @Composable
 fun HistoryScreen(onBack: () -> Unit) {
-    var tracks by remember { mutableStateOf<List<HistoryTrack>>(emptyList()) }
+    var items by remember { mutableStateOf<List<LocalPlayHistory.Item>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        try {
-            val result = Api.fetchHistory()
-            tracks = result.list
-            loading = false
-        } catch (e: Exception) {
-            error = e.message ?: "加载失败"
-            loading = false
-        }
+        // 本地历史：设备级、即时读取、离线可用（无网络请求，不做失败态）
+        items = LocalPlayHistory.load()
+        loading = false
     }
 
     Column(
@@ -85,17 +77,16 @@ fun HistoryScreen(onBack: () -> Unit) {
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 androidx.compose.material3.CircularProgressIndicator(color = TextSecondary)
             }
-            error != null -> StatusPlaceholder(text = error ?: "加载失败", modifier = Modifier.fillMaxSize())
-            tracks.isEmpty() -> StatusPlaceholder(text = "暂无播放历史", modifier = Modifier.fillMaxSize())
+            items.isEmpty() -> StatusPlaceholder(text = "暂无播放历史", modifier = Modifier.fillMaxSize())
             else -> LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
             ) {
-                items(tracks) { h ->
+                items(items) { h ->
                     HistoryRow(h) {
-                        // 点击播放：需要构造 Track 对象
-                        // 简化：直接用 trackId 加载
-                        // TODO: 完整实现时从 history 记录构造 Track 并播放
+                        // 点击播放：以历史列表为队列、从点击曲开始（仅元数据本地构造，秒起播）
+                        val tracks = items.map { it.toTrack() }
+                        PlayerManager.playInNormalMode(h.toTrack(), tracks)
                     }
                 }
             }
@@ -103,22 +94,30 @@ fun HistoryScreen(onBack: () -> Unit) {
     }
 }
 
+private fun LocalPlayHistory.Item.toTrack(): Track = Track(
+    id = id,
+    title = title,
+    artist = artist.takeIf { it.isNotEmpty() },
+    cover = cover.takeIf { it.isNotEmpty() },
+)
+
 @Composable
-private fun HistoryRow(item: HistoryTrack, onClick: () -> Unit) {
+private fun HistoryRow(item: LocalPlayHistory.Item, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        androidx.compose.foundation.Image(
-            painter = androidx.compose.ui.res.painterResource(app.star2936.guava3291.R.drawable.app_logo),
-            null,
-            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-        )
-        item.coverURL?.let { url ->
+        if (item.cover.isNotEmpty()) {
             coil.compose.AsyncImage(
-                model = url,
+                model = item.cover,
                 contentDescription = null,
+                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+            )
+        } else {
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(app.star2936.guava3291.R.drawable.app_logo),
+                null,
                 modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
                 contentScale = androidx.compose.ui.layout.ContentScale.Crop
             )
@@ -126,7 +125,7 @@ private fun HistoryRow(item: HistoryTrack, onClick: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(item.title, color = TextPrimary, fontSize = 15.sp, maxLines = 1, fontWeight = FontWeight.Medium)
-            Text(item.artist ?: "未知歌手", color = TextSecondary, fontSize = 12.sp, maxLines = 1)
+            Text(item.artist.ifEmpty { "未知歌手" }, color = TextSecondary, fontSize = 12.sp, maxLines = 1)
         }
     }
 }

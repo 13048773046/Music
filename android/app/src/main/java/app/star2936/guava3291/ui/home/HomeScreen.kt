@@ -56,6 +56,7 @@ import app.star2936.guava3291.data.BehaviorEvent
 import app.star2936.guava3291.data.Track
 import app.star2936.guava3291.state.AuthManager
 import app.star2936.guava3291.state.LyricsLinesCache
+import app.star2936.guava3291.state.NetworkMonitor
 import app.star2936.guava3291.state.PlayerManager
 import app.star2936.guava3291.state.AppRouter
 import app.star2936.guava3291.ui.components.CoverImage
@@ -365,11 +366,16 @@ private fun rememberLyrics(trackId: String): LyricsState {
 
 data class LyricsState(val lines: List<KRCLine>)
 
-// 加载失败重试（对应 iOS 失败重试胶囊）
+// 加载失败重试（对应 iOS 失败重试胶囊；断网时文案区分「网络未连接」）
 @Composable
 private fun LoadFailedView(track: Track) {
+    val offline by NetworkMonitor.isOffline.collectAsState()
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("加载失败", color = TextSecondary, fontSize = 14.sp)
+        Text(if (offline) "网络未连接" else "加载失败", color = TextSecondary, fontSize = 14.sp)
+        if (offline) {
+            Spacer(Modifier.height(4.dp))
+            Text("网络恢复后自动续播", color = TextTertiary, fontSize = 12.sp)
+        }
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier

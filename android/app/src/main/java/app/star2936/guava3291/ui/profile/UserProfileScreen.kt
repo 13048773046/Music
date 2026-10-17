@@ -48,6 +48,8 @@ import app.star2936.guava3291.ui.components.StatusPlaceholder
 import app.star2936.guava3291.ui.components.TrackRow
 import app.star2936.guava3291.ui.theme.Accent
 import app.star2936.guava3291.ui.theme.Background
+import app.star2936.guava3291.ui.theme.Card
+import app.star2936.guava3291.ui.theme.CardBorder
 import app.star2936.guava3291.ui.theme.TextPrimary
 import app.star2936.guava3291.ui.theme.TextSecondary
 import coil.compose.AsyncImage
@@ -99,18 +101,41 @@ fun UserProfileScreen(userId: String, onBack: () -> Unit) {
                     )
                 }
                 Text(p.name, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                // meta 行（性别 · 年龄 · 城市）：与签名同款样式（13sp TextSecondary），有值才显示
+                val meta = listOfNotNull(
+                    p.gender?.takeIf { it.isNotEmpty() },
+                    p.age?.takeIf { it > 0 }?.let { "$it 岁" },
+                    p.city.takeIf { it.isNotEmpty() },
+                )
+                if (meta.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(meta.joinToString(" · "), fontSize = 13.sp, color = TextSecondary, maxLines = 1)
+                }
                 p.signature?.let {
                     Spacer(Modifier.height(4.dp))
                     Text(it, fontSize = 13.sp, color = TextSecondary)
                 }
                 Spacer(Modifier.height(16.dp))
 
-                // 统计
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    StatItem(p.workCount, "作品")
+                // 统计 5 项卡片（结构对齐 iOS：获赞第 5 项 + Card 圆角 14；
+                // 数值沿用本页 StatItem 样式 18sp Bold / 12sp，分隔线同 MineScreen 体系）
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Card)
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    StatItem(p.workCount, "歌曲")
+                    StatDivider()
                     StatItem(p.followerCount, "粉丝")
+                    StatDivider()
                     StatItem(p.followingCount, "关注")
+                    StatDivider()
                     StatItem(p.mutualCount, "互关")
+                    StatDivider()
+                    StatItem(p.likeCount, "获赞")
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -156,4 +181,10 @@ private fun StatItem(count: Int, label: String) {
         Text("$count", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         Text(label, fontSize = 12.sp, color = TextSecondary)
     }
+}
+
+/** 统计分隔线：1dp × 20dp（与 MineScreen StatDivider 同体系，Card 底色上用描边色） */
+@Composable
+private fun StatDivider() {
+    Box(Modifier.width(1.dp).height(20.dp).background(CardBorder))
 }

@@ -144,14 +144,33 @@ fun AppRoot() {
     var showSwitchLoading by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var prevUid by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(user?.id) }
 
+    // 断网恢复自动续播（对应 iOS NetworkMonitor 恢复回调）：
+    // 离线期间播放失败 → 网络恢复后自动重试当前曲，无需用户手动点重试
+    var wasOffline by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(app.star2936.guava3291.state.NetworkMonitor.isOffline.value)
+    }
+    val offline by app.star2936.guava3291.state.NetworkMonitor.isOffline.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(offline) {
+        if (wasOffline && !offline) {
+            if (app.star2936.guava3291.state.PlayerManager.loadFailed.value) {
+                app.star2936.guava3291.state.PlayerManager.reloadCurrent()
+            }
+        }
+        wasOffline = offline
+    }
+
     androidx.compose.runtime.LaunchedEffect(user?.id) {
+        // 启动页最短展示 1.2s：数据就绪也至少停留 1.2s（避免闪跳）；超时 6s 兜底（对齐 iOS）
+        val minShowMs = 1200L
+        val maxWaitMs = 6000L
         if (user != null && prevUid != null && user?.id != prevUid) {
             // 切换账号：显示加载并预加载
             showSwitchLoading = true
             app.star2936.guava3291.state.AppPreloader.preload()
-            val deadline = System.currentTimeMillis() + 5000
-            while (System.currentTimeMillis() < deadline) {
-                if (app.star2936.guava3291.state.AppPreloader.discoverRecommendedReady.value &&
+            val switchStart = System.currentTimeMillis()
+            while (System.currentTimeMillis() - switchStart < maxWaitMs) {
+                if ((System.currentTimeMillis() - switchStart >= minShowMs) &&
+                    app.star2936.guava3291.state.AppPreloader.discoverRecommendedReady.value &&
                     app.star2936.guava3291.state.AppPreloader.mineLoaded.value
                 ) break
                 kotlinx.coroutines.delay(100)
@@ -161,9 +180,10 @@ fun AppRoot() {
         prevUid = user?.id
         if (user != null) {
             app.star2936.guava3291.state.AppPreloader.preload()
-            val deadline = System.currentTimeMillis() + 5000
-            while (System.currentTimeMillis() < deadline) {
-                if (app.star2936.guava3291.state.AppPreloader.discoverRecommendedReady.value &&
+            val start = System.currentTimeMillis()
+            while (System.currentTimeMillis() - start < maxWaitMs) {
+                if ((System.currentTimeMillis() - start >= minShowMs) &&
+                    app.star2936.guava3291.state.AppPreloader.discoverRecommendedReady.value &&
                     app.star2936.guava3291.state.AppPreloader.mineLoaded.value
                 ) break
                 kotlinx.coroutines.delay(100)

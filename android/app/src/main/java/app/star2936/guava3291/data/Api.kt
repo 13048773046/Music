@@ -49,7 +49,8 @@ object Api {
     fun lyricUrl(id: String) = "$BASE/lyric/$id"
     fun avatarUrl(id: String) = "$BASE/avatar/$id"
     fun backgroundUrl(id: String) = "$BASE/background/$id"
-    fun streamUrl(id: String) = "$BASE/stream/$id"
+    fun streamUrl(id: String, low: Boolean = false): String =
+        "$BASE/stream/$id" + if (low) "?br=96" else ""
     fun wsUrl(token: String) = "wss://www.dbmt999.asia/music/api/ws?token=${URLEncoder.encode(token, "UTF-8")}"
 
     class ApiException(val msg: String) : Exception(msg)
@@ -130,8 +131,13 @@ object Api {
 
     // ---------- 签名播放 URL ----------
 
-    suspend fun signedStreamUrl(id: String): String {
+    /**
+     * 签名流 URL（对齐 iOS API.signedStreamURL for:bitrate:）。
+     * @param low 低码率档（br=96，蜂窝弱网秒开）；后端签名只校验 tid:exp，br 参数不影响验签。
+     */
+    suspend fun signedStreamUrl(id: String, low: Boolean = false): String {
         val signUrl = "$BASE/stream-url/$id"
+        val streamBase = streamUrl(id, low)
         return withContext(Dispatchers.IO) {
             val req = Request.Builder().url(signUrl).build()
             try {
@@ -143,13 +149,21 @@ object Api {
                         val exp = obj["exp"]?.jsonPrimitive?.contentOrNull ?: ""
                         val sig = obj["sig"]?.jsonPrimitive?.contentOrNull ?: ""
                         if (exp.isNotEmpty() && sig.isNotEmpty()) {
-                            return@withContext "$BASE/stream/$id?exp=$exp&sig=${URLEncoder.encode(sig, "UTF-8")}"
+                            // 分隔符：low 时 streamBase 已含 ?br=96 → 追加用 &；非 low 时首参用 ?
+                            val sep = if (low) "&" else "?"
+                            return@withContext "$streamBase$sep" +
+                                "exp=$exp&sig=${URLEncoder.encode(sig, "UTF-8")}"
                         }
                     }
                 }
             } catch (_: Exception) { }
-            "$BASE/stream/$id"   // 失败回退普通 URL（与 iOS 一致）
+            streamBase   // 失败回退普通 URL（低码率回退 br=96，与 iOS 一致）
         }
+    }
+
+    /** 预生成低码率签名 URL（对齐 iOS API.prepareLowBitrate：预取阶段预热 low 档） */
+    suspend fun prepareLowBitrate(id: String) {
+        try { signedStreamUrl(id, low = true) } catch (_: Exception) { }
     }
 
     // ---------- 互动 ----------
