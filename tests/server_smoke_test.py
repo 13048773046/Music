@@ -813,6 +813,40 @@ def run_all(port, root, strict_port, strict_root):
           f"ids={ids[:12]}")
     conn1.close()
 
+    print("== 23. 版本更新检查（check-update 版本对比）==")
+    # 临时库无公告 → hasUpdate false
+    s, body, _ = req("GET", "/api/check-update")
+    cu0 = json.loads(body)
+    check("check-update 无公告 → hasUpdate false", s == 200 and cu0.get("hasUpdate") is False, body[:100])
+    # 创建 update 公告（version=9.9.9，带 force_update 与 download_url）
+    s, body, _ = req("POST", "/api/admin/announcement",
+                     body={"title": "新版发布", "content": "修复若干问题", "version": "9.9.9",
+                           "type": "update", "force_update": 1,
+                           "download_url": "https://example.com/app.ipa"},
+                     headers=ADMIN)
+    check("admin 创建 update 公告 200", s == 200, body[:100])
+    s, body, _ = req("GET", "/api/check-update")
+    cu1 = json.loads(body)
+    check("check-update 有公告未传版本 → hasUpdate true", s == 200 and cu1.get("hasUpdate") is True, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=1.0.0")
+    cu2 = json.loads(body)
+    check("check-update 客户端旧版本(1.0.0<9.9.9) → hasUpdate true", s == 200 and cu2.get("hasUpdate") is True, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=9.9.9")
+    cu3 = json.loads(body)
+    check("check-update 客户端同版本(9.9.9) → hasUpdate false", s == 200 and cu3.get("hasUpdate") is False, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=10.0.0")
+    cu4 = json.loads(body)
+    check("check-update 客户端新版本(10.0.0) → hasUpdate false", s == 200 and cu4.get("hasUpdate") is False, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=9.9")
+    cu5 = json.loads(body)
+    check("check-update 段数不同缺位补0(9.9<9.9.9) → hasUpdate true", s == 200 and cu5.get("hasUpdate") is True, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=9.10")
+    cu6 = json.loads(body)
+    check("check-update 段数不同(9.10>9.9.9) → hasUpdate false", s == 200 and cu6.get("hasUpdate") is False, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=abc")
+    cu7 = json.loads(body)
+    check("check-update 非法版本号 → 按存在公告提示(hasUpdate true)", s == 200 and cu7.get("hasUpdate") is True, body[:100])
+
 
 if __name__ == "__main__":
     main()

@@ -114,19 +114,47 @@ struct MusicApp: App {
         } catch {}
     }
 
+    /// 本地 App 版本号（Info.plist CFBundleShortVersionString）
+    private var localVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    /// 版本号逐段数字比较：latest > current 返回 true。
+    /// 支持 1 / 1.0 / 1.0.0 等格式，段数不同按缺位补 0（如 1.10 > 1.9.9）；相等返回 false。
+    private func isNewerVersion(_ latest: String, than current: String) -> Bool {
+        func parts(_ v: String) -> [Int] {
+            v.split(whereSeparator: { $0 == "." || $0 == "-" || $0 == "_" })
+                .map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        }
+        let lp = parts(latest), cp = parts(current)
+        let n = max(lp.count, cp.count)
+        for i in 0..<n {
+            let a = i < lp.count ? lp[i] : 0
+            let b = i < cp.count ? cp[i] : 0
+            if a != b { return a > b }
+        }
+        return false
+    }
+
     private func fetchUpdate() async {
-        let url = API.base.appendingPathComponent("check-update")
+        // 携带本地版本号：后端对比后返回 hasUpdate；前端再做一次本地兜底对比
+        var comps = URLComponents(string: API.base.appendingPathComponent("check-update").absoluteString)
+        comps?.queryItems = [URLQueryItem(name: "v", value: localVersion)]
+        let url = comps?.url ?? API.base.appendingPathComponent("check-update")
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
             let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             guard let hasUpdate = obj?["hasUpdate"] as? Bool, hasUpdate else { return }
+            let latestV = obj?["version"] as? String ?? ""
+            // 本地兜底：后端返回的新版本不高于本地版本时不弹窗
+            if !latestV.isEmpty && !isNewerVersion(latestV, than: localVersion) { return }
             await MainActor.run {
                 updateNotice = UpdateNotice(
                     id: obj?["id"] as? String ?? "",
                     title: obj?["title"] as? String ?? "",
                     content: obj?["content"] as? String ?? "",
-                    version: obj?["version"] as? String ?? "",
+                    version: latestV,
                     forceUpdate: (obj?["forceUpdate"] as? Int) ?? 0,
                     downloadUrl: obj?["downloadUrl"] as? String ?? ""
                 )

@@ -39,6 +39,26 @@ __all__ = ['H']
 _TEMPLATE_CACHE = {}
 
 
+def _version_lt(a, b):
+    """版本号逐段数字比较：a < b 返回 True。
+    支持 1 / 1.0 / 1.0.0 等格式，段数不同按缺位补 0 比较（如 9.10 > 9.9.9）；
+    段内非数字前缀按 0 处理（如 1.0.0-beta → 1.0.0），相等返回 False（不算更旧）。"""
+    def parts(v):
+        out = []
+        for seg in re.split(r"[.\-_]", v.strip()):
+            m = re.match(r"\d+", seg)
+            out.append(int(m.group(0)) if m else 0)
+        return out
+    pa, pb = parts(a), parts(b)
+    n = max(len(pa), len(pb))
+    for i in range(n):
+        x = pa[i] if i < len(pa) else 0
+        y = pb[i] if i < len(pb) else 0
+        if x != y:
+            return x < y
+    return False
+
+
 def _render_template(name):
     """读取 server/templates/<name>（带简单缓存）。"""
     t = _TEMPLATE_CACHE.get(name)
@@ -278,8 +298,12 @@ class H(BaseHTTPRequestHandler):
                                  "version": row[3] or "", "showOnce": row[4] or 0})
                 return
 
-            # 检查更新：返回最新一条 active 更新通知（type=update）
+            # 检查更新：返回最新一条 active 更新通知（type=update）。
+            # 支持客户端传 ?v=<本地版本号>：本地版本 >= 公告版本时不提示（逐段数字比较）。
+            # 客户端未传版本或公告版本为空时按"存在公告即提示"（保持旧行为）。
             if u.path == "/api/check-update":
+                qs = urllib.parse.parse_qs(u.query)
+                client_v = (qs.get("v") or [""])[0].strip()
                 c = db()
                 row = c.execute("SELECT id, title, content, version, force_update, download_url FROM announcements"
                                 " WHERE active=1 AND type='update' ORDER BY created DESC LIMIT 1").fetchone()
@@ -287,8 +311,12 @@ class H(BaseHTTPRequestHandler):
                 if not row:
                     self._json(200, {"hasUpdate": False})
                     return
+                latest_v = row[3] or ""
+                if client_v and latest_v and not _version_lt(client_v, latest_v):
+                    self._json(200, {"hasUpdate": False})
+                    return
                 self._json(200, {"hasUpdate": True, "id": row[0], "title": row[1],
-                                 "content": row[2], "version": row[3] or "",
+                                 "content": row[2], "version": latest_v,
                                  "forceUpdate": row[4] or 0, "downloadUrl": row[5] or ""})
                 return
 
