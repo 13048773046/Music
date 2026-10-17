@@ -399,8 +399,6 @@ private struct LoadingSweep: View {
 struct MarqueeText: View {
     let text: String
     let font: Font
-    /// 溢出（文字超出可用宽度，会被右侧按钮挡住）时使用的紧凑字号；nil = 不缩小
-    var compactFont: Font? = nil
     let color: Color
     /// 滚动速度（pt/秒）
     var speed: CGFloat = 50
@@ -409,49 +407,34 @@ struct MarqueeText: View {
     /// 是否允许滚动：非当前播放页传 false，离屏页不再跑 repeatForever 动画，减少卡顿
     var active: Bool = true
 
-    @State private var textWidth: CGFloat = 0      // 原字号单份文字宽（溢出→缩小判定）
-    @State private var displayWidth: CGFloat = 0   // 显示字号单份文字宽（滚动距离判定）
+    @State private var textWidth: CGFloat = 0      // 单份文字宽（溢出判定 + 滚动距离）
     @State private var containerWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
     /// 本轮滚动动画是否已启动：测量回调可能多次触发，避免重复开动画
     @State private var started = false
 
-    /// 原字号是否溢出容器（会被右侧音效按钮挡住）→ 据此缩小字号
+    /// 原字号是否溢出容器 → 溢出即跑马灯滚动（不再缩小字号，需求：过长直接滚动）
     private var overflow: Bool { textWidth > containerWidth + 4 && containerWidth > 0 }
-    /// 显示字号：溢出时用紧凑字号缩小
-    private var displayFont: Font { overflow ? (compactFont ?? font) : font }
-    /// 是否真正滚动：原字号溢出（进入缩小态）**且**缩小后单份文字仍放不下 → 才滚动；
-    /// 缩小后已完全可见则静止（此前按原字号误判导致「缩小后还在滚 / 该滚不滚」）
+    /// 是否滚动：原字号溢出即滚动（去掉了"缩小后放得下就静止"的分支）
     private var shouldScroll: Bool {
-        overflow && displayWidth > containerWidth + 4 && containerWidth > 0
+        overflow && containerWidth > 0
     }
 
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 50) {
-                Text(text).font(displayFont).foregroundColor(color).fixedSize()
+                Text(text).font(font).foregroundColor(color).fixedSize()
                 if shouldScroll {
-                    Text(text).font(displayFont).foregroundColor(color).fixedSize()
+                    Text(text).font(font).foregroundColor(color).fixedSize()
                 }
             }
             .overlay(alignment: .leading) {
-                // 原字号测量：决定是否需要缩小（与显示字号解耦，避免缩小后溢出判断跟着变）
+                // 文字测量：溢出判定 + 滚动距离（恒为原字号，不再有显示字号）
                 Text(text).font(font).fixedSize().hidden()
                     .background(
                         GeometryReader { orig in
                             Color.clear.onAppear {
                                 textWidth = orig.size.width
-                                tryStart()
-                            }
-                        }
-                    )
-                // 显示字号测量：决定是否滚动 + 精确滚动距离（滚动距离必须按显示字号算，
-                // 否则缩小后距离过大、回跳露白/卡顿）
-                Text(text).font(displayFont).fixedSize().hidden()
-                    .background(
-                        GeometryReader { disp in
-                            Color.clear.onAppear {
-                                displayWidth = disp.size.width
                                 tryStart()
                             }
                         }
@@ -486,7 +469,7 @@ struct MarqueeText: View {
     private func tryStart() {
         guard active, shouldScroll, !started else { return }
         started = true
-        let distance = displayWidth + 50
+        let distance = textWidth + 50
         withAnimation(
             .linear(duration: Double(distance / speed))
                 .delay(pause)
