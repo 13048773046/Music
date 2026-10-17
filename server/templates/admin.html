@@ -224,6 +224,7 @@ async function loadSite(){
   h+='</table></div>'+
   '</div></div>';
   document.getElementById('content').innerHTML=h;
+  renderBanners();
 }
 async function saveSite(){
   const body={site_name:document.getElementById('siteName').value,
@@ -257,11 +258,11 @@ function renderBanners(){
 function mvBanner(i,d){
   const bs=window._banners;const j=i+d;
   if(!bs||j<0||j>=bs.length)return;
-  const t=bs[i];bs[i]=bs[j];bs[j]=t;renderBanners();
+  const t=bs[i];bs[i]=bs[j];bs[j]=t;renderBanners();saveSite();
 }
 function delBanner(i){
   const bs=window._banners;if(!bs)return;
-  bs.splice(i,1);renderBanners();
+  bs.splice(i,1);renderBanners();saveSite();
 }
 async function uploadBanner(file){
   const tip=document.getElementById('bannerTip');
@@ -273,7 +274,8 @@ async function uploadBanner(file){
     if(r&&r.name){
       (window._banners=window._banners||[]).push({name:r.name,title:'',link:''});
       renderBanners();
-      tip.textContent='已上传，点「保存」生效';tip.style.color='#4CD9A5';
+      await saveSite();
+      tip.textContent='已上传并保存 ✓';tip.style.color='#4CD9A5';
       document.getElementById('bannerFile').value='';
     }else{tip.textContent='上传失败';}
   }catch(e){tip.textContent='上传失败：'+e.message;}

@@ -291,15 +291,43 @@ def _admin_token():
 
 
 def _read_site_config():
-    """读官网配置 + 实时歌曲总数；文件不存在时用默认值。"""
+    """读官网配置 + 实时歌曲总数；文件不存在时用默认值。轮播图(banners)以数据库为准（持久化）。"""
     cfg = dict(_SITE_CONFIG_DEFAULTS)
+    file_banners = []
     try:
         with open(SITE_CONFIG_FILE, "r", encoding="utf-8") as f:
             saved = json.load(f)
         if isinstance(saved, dict):
-            cfg.update({k: v for k, v in saved.items() if k in _SITE_CONFIG_DEFAULTS})
+            for k, v in saved.items():
+                if k in _SITE_CONFIG_DEFAULTS and k != "banners":
+                    cfg[k] = v
+            if isinstance(saved.get("banners"), list):
+                file_banners = saved["banners"]
     except Exception:
         pass
+    # 轮播图：数据库优先（重启/重开不丢失）；旧文件有而数据库空时迁移一次
+    try:
+        c = db()
+        try:
+            rows = c.execute("SELECT name,title,link FROM banners ORDER BY sort,id").fetchall()
+            if rows:
+                cfg["banners"] = [{"name": r[0], "title": r[1] or "", "link": r[2] or ""} for r in rows]
+            elif file_banners:
+                for i, b in enumerate(file_banners[:50]):
+                    if not isinstance(b, dict):
+                        continue
+                    name = str(b.get("name") or "").strip()
+                    if not re.fullmatch(r"banner_[0-9a-f]{32}\.(?:jpg|jpeg|png|webp)", name):
+                        continue
+                    c.execute("INSERT OR IGNORE INTO banners(name,title,link,sort) VALUES(?,?,?,?)",
+                              (name, str(b.get("title") or "")[:60], str(b.get("link") or "")[:300], i))
+                c.commit()
+                cfg["banners"] = [{"name": r[0], "title": r[1] or "", "link": r[2] or ""}
+                                  for r in c.execute("SELECT name,title,link FROM banners ORDER BY sort,id").fetchall()]
+        finally:
+            c.close()
+    except Exception:
+        cfg["banners"] = []
     # 实时歌曲总数（用户上传 + 采集，排除 offline）
     try:
         c = db()
@@ -318,14 +346,16 @@ def _write_site_config(patch):
         with open(SITE_CONFIG_FILE, "r", encoding="utf-8") as f:
             saved = json.load(f)
         if isinstance(saved, dict):
-            cfg.update(saved)
+            for k, v in saved.items():
+                if k in _SITE_CONFIG_DEFAULTS and k != "banners":
+                    cfg[k] = v
     except Exception:
         pass
     for k, v in (patch or {}).items():
         if k not in _SITE_CONFIG_DEFAULTS:
             continue
         if k == "banners":
-            # 官网轮播图：仅接受合法文件名数组，数量动态不固定
+            # 官网轮播图：校验后全量写入数据库（动态数量、持久化），文件字段不再作为存储源
             banners = []
             if isinstance(v, list):
                 for b in v[:50]:
@@ -339,6 +369,18 @@ def _write_site_config(patch):
                         "title": str(b.get("title") or "")[:60],
                         "link": str(b.get("link") or "")[:300],
                     })
+            try:
+                c = db()
+                try:
+                    c.execute("DELETE FROM banners")
+                    for i, b in enumerate(banners):
+                        c.execute("INSERT INTO banners(name,title,link,sort) VALUES(?,?,?,?)",
+                                  (b["name"], b["title"], b["link"], i))
+                    c.commit()
+                finally:
+                    c.close()
+            except Exception:
+                pass
             cfg[k] = banners
         elif isinstance(v, str):
             cfg[k] = v.strip()

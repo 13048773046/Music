@@ -233,5 +233,13 @@ def db():
     # 回填历史 AI 乐评的 is_ai 标识（早期被动评论未写该列）
     c.execute("UPDATE comments SET is_ai=1 WHERE user_id=? AND is_ai=0", ("ai_liuying_comment",))
 
+    # 官网轮播图（后台「网站管理」动态管理，数据库持久化，重启/重开不丢失）
+    c.execute("""CREATE TABLE IF NOT EXISTS banners(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        title TEXT DEFAULT '',
+        link TEXT DEFAULT '',
+        sort INTEGER DEFAULT 0)""")
+
     c.commit()
     return c
