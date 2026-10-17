@@ -141,9 +141,11 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 预加载窗口：当前歌之后预加载的歌曲数。按网络动态降级——
     /// 离线 0（不预取，避免无用请求）；蜂窝 2（弱网优先当前曲带宽，避免预取抢带宽）；
     /// Wi-Fi 4（正常全量预取，切歌秒开）。
+    /// 预取 ahead 数量：固定 3 首（Wi-Fi 与蜂窝一致）。
+    /// 弱网保护由「当前曲就绪后才启动预取」+「只取每首开头一小部分」承担，不靠减少数量。
     private var prefetchAheadCount: Int {
         if NetworkMonitor.shared.isOffline { return 0 }
-        return NetworkMonitor.shared.isCellular ? 2 : 4
+        return 3
     }
     /// 签名播放 URL 缓存：trackId → URL。
     /// 切歌时优先复用，省去再向后端签发的网络往返，显著缩短切歌等待（“秒开”）；用掉即移除。
@@ -154,6 +156,8 @@ final class PlayerManager: NSObject, ObservableObject {
     private let urlPoolLimit = 16
     /// 进行中的预加载任务（切歌/队列变化时取消，防错加载）
     private var prefetchTask: Task<Void, Never>?
+    /// 预取启动轮询（当前曲就绪探测）
+    private var prefetchReadyTimer: Timer?
 
     // MARK: - 个性化推荐流（汽水式无限听歌流）
 
@@ -1298,6 +1302,32 @@ final class PlayerManager: NSObject, ObservableObject {
     /// 两阶段执行：
     ///   阶段1 并行签发「接下来 N 首」的签名 URL 并立即补进 AVQueuePlayer，
     ///         让系统对下一首预缓冲真实音频数据（顺序切歌走 advanceToNextItem 秒开/无缝）；
+    /// 预取启动闸门：**当前曲加载完成**后才开始预取「接下来 3 首」。
+    /// 就绪判定——引擎：isPrepared（整曲已就绪/缓存命中）；原音：AVPlayer 已开始播放
+    /// （timeControlStatus==.playing，或 readyToPlay 且 rate>0）。
+    /// 每 0.2s 探测一次；暂停（isPlaying=false）时不预取也不阻塞（进入后自然放行）。
+    private func schedulePrefetchWhenReady() {
+        prefetchReadyTimer?.invalidate()
+        prefetchReadyTimer = nil
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let ready: Bool
+            if self.usingEngine {
+                ready = self.enginePlayer.isPrepared
+            } else {
+                ready = (self.player.timeControlStatus == .playing)
+                    || (self.player.currentItem?.status == .readyToPlay && self.player.rate > 0)
+            }
+            if ready || !self.isPlaying {
+                self.prefetchReadyTimer?.invalidate()
+                self.prefetchReadyTimer = nil
+                self.schedulePrefetch()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        prefetchReadyTimer = timer
+    }
+
     ///   阶段2 顺序预热元数据连接 + 封面 + 歌词 + 主色（不阻塞阶段1的 URL 就绪与入队）。
     private func schedulePrefetch() {
         prefetchTask?.cancel()
@@ -1386,7 +1416,9 @@ final class PlayerManager: NSObject, ObservableObject {
             guard let url = signedURLPool[t.id] else { break }
             guard !inserted.contains(t.id), !existingIDs.contains(t.id) else { continue }
             let item = AVPlayerItem(url: url)
-            item.preferredForwardBufferDuration = 30
+            // 只预缓冲开头一小部分（15s ≈ low 96k ~180KB / high 原码率 ~700KB），
+            // 非整曲下载：切到该曲时从此位置继续流式加载，秒开且不占整曲带宽
+            item.preferredForwardBufferDuration = 15
             Self.setTrackId(t.id, on: item)
             player.insert(item, after: nil)
             inserted.append(t.id)
@@ -1496,6 +1528,9 @@ final class PlayerManager: NSObject, ObservableObject {
         // 取消上一首的加载任务（快速连续切歌时旧签名 URL 请求不再继续）
         loadTask?.cancel()
         loadTask = nil
+        // 取消未完成的预取启动轮询（新歌就绪后重新探测）
+        prefetchReadyTimer?.invalidate()
+        prefetchReadyTimer = nil
         // 先结算上一首的收听：真正切歌才可能产生“跳过”负向信号；
         // 同一首歌重播（单曲循环/音效重载）只结算有效收听，不算跳过
         let sameTrack = (listen.trackId == current.id)
@@ -1652,8 +1687,10 @@ final class PlayerManager: NSObject, ObservableObject {
                     }
                 }
                 self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
-                // 新歌开始播放后，为「接下来 N 首」启动预加载（预热签名 URL + 连接头部）
-                self.schedulePrefetch()
+                // 预取时序：当前曲真正加载完成（引擎 isPrepared / 原音已开始播放）后才为
+                // 「接下来 3 首」启动预加载——预取绝不与当前曲抢加载带宽；
+                // 且预取只取每首开头一小部分（AVQueuePlayer 系统预缓冲，非整曲下载）。
+                self.schedulePrefetchWhenReady()
             }
         }
         loadTask = task

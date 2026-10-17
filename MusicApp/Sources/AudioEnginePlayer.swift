@@ -98,8 +98,8 @@ final class AudioEnginePlayer {
     /// 当前下载任务与目标 URL：快速切歌时取消旧任务、丢弃旧回调，防止旧歌覆盖新歌
     private var currentTask: URLSessionDownloadTask?
     private var pendingURL: URL?
-    /// prepare 是否就绪（已下载、引擎已启动、已 schedule）
-    private var isPrepared = false
+    /// prepare 是否就绪（已下载、引擎已启动、已 schedule）。供 PlayerManager 预取闸门读取。
+    var isPrepared = false
     /// 引擎运行状态低频检查计数（progress timer 内每 ~1s 检查一次）。
     /// AVAudioEngine 长时间运行可能被系统异常停止且不触发配置变化通知 → 静默无声，
     /// 兜底：检测到未运行时自动 restartIfNeeded 续播。
