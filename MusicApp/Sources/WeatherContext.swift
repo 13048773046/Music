@@ -66,9 +66,10 @@ final class WeatherContext: NSObject, ObservableObject, CLLocationManagerDelegat
                 || manager.authorizationStatus == .authorizedAlways else {
             return false
         }
-        // 定位等待同样带 3s 超时（requestLocation 偶发无回调，防挂起 → 按无定位降级）
+        // 定位等待带 12s 超时兜底：一次性定位（requestLocation）冷启动/GPS 收敛常需 3-10s，
+        // 超时太短会误伤正常慢定位（天气卡片永不显示）。超时仍返回 nil → 按无定位降级「仅时段」。
         let location: CLLocation? = await withCheckedContinuation { (cont: CheckedContinuation<CLLocation?, Never>) in
-            let timer = Timer(timeInterval: 3.0, repeats: false) { _ in
+            let timer = Timer(timeInterval: 12.0, repeats: false) { _ in
                 self.pendingLocation = nil
                 cont.resume(returning: nil)
             }

@@ -97,9 +97,12 @@ struct DiscoverView: View {
                 // 头部
                 header
 
-                // M2 今日心情卡片：天气×时段场景快照（定位/天气不可用时整卡隐藏，不影响浏览）
-                if weather.isAvailable, let label = weather.sceneLabel {
-                    weatherCard(label: label)
+                // 今日心情卡片：天气可用 → 天气×时段场景；不可用 → 「仅时段」兜底卡片（卡片常驻不消失）。
+                // 之前定位/天气失败时整卡隐藏，用户会疑惑"卡片去哪了"。
+                if let label = weather.sceneLabel {
+                    weatherCard(label: label, icon: weatherIcon(for: weather.scene))
+                } else {
+                    weatherCard(label: "\(timeOfDayLabel())时段", icon: timeOfDayIcon)
                 }
 
                 if !recommended.isEmpty {
@@ -208,9 +211,9 @@ struct DiscoverView: View {
     // MARK: - 今日心情卡片（M2）
 
     /// 天气×时段场景卡片：展示场景标签 + 温度/城市；右上角可手动刷新（强制重取，绕过 30 分钟节流）
-    private func weatherCard(label: String) -> some View {
+    private func weatherCard(label: String, icon: String) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: weatherIcon)
+            Image(systemName: icon)
                 .font(.system(size: 24))
                 .foregroundColor(Theme.accent)
                 .frame(width: 48, height: 48)
@@ -245,8 +248,8 @@ struct DiscoverView: View {
     }
 
     /// 场景 → SF Symbol 图标（与后端场景 key 一一对应；未知场景用 sparkles 兜底）
-    private var weatherIcon: String {
-        switch weather.scene {
+    private func weatherIcon(for scene: String?) -> String {
+        switch scene {
         case "rain": return "cloud.rain.fill"
         case "snow": return "snowflake"
         case "hot": return "sun.max.fill"
@@ -256,6 +259,31 @@ struct DiscoverView: View {
         case "night": return "moon.stars.fill"
         case "cloudy": return "cloud.fill"
         default: return "sparkles"
+        }
+    }
+
+    /// 本地时段标签（天气不可用时的兜底卡片）：按小时返回「深夜/清晨/上午/中午/下午/傍晚/晚上」
+    private var timeOfDayLabel: String {
+        let h = weather.hour ?? Calendar.current.component(.hour, from: Date())
+        switch h {
+        case 0..<5: return "深夜"
+        case 5..<8: return "清晨"
+        case 8..<11: return "上午"
+        case 11..<13: return "中午"
+        case 13..<17: return "下午"
+        case 17..<19: return "傍晚"
+        default: return "晚上"
+        }
+    }
+
+    /// 时段兜底图标
+    private var timeOfDayIcon: String {
+        let h = weather.hour ?? Calendar.current.component(.hour, from: Date())
+        switch h {
+        case 5..<8: return "sunrise.fill"
+        case 8..<17: return "sun.max.fill"
+        case 17..<19: return "sunset.fill"
+        default: return "moon.stars.fill"
         }
     }
 
