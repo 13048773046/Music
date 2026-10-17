@@ -35,3 +35,4 @@ source-bridge/qs_session.json
 source-bridge/collect_run.json
 source-bridge/collect_target.json
 source-bridge/collect_v3.log
+android/.gradle/
