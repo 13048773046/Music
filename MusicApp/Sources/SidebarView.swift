@@ -9,6 +9,8 @@ import UIKit
 struct SidebarView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var auth: AuthManager
+    /// 预加载器：启动页阶段已并行拉取「我的作品」总数（worksTotal），侧滑栏据此显示/隐藏"我的作品"模式
+    @ObservedObject private var preloader = AppPreloader.shared
     /// 点遮罩 / 左滑关闭
     var onClose: () -> Void
 
@@ -98,7 +100,8 @@ struct SidebarView: View {
 
     private var modeButtons: some View {
         VStack(spacing: 10) {
-            ForEach(ListenMode.allCases, id: \.self) { mode in
+            // 无上传作品的用户不显示「我的作品」模式（预加载阶段 worksTotal 已就绪；上传后 MineView 同步刷新实时出现）
+            ForEach(ListenMode.allCases.filter { $0 != .works || preloader.worksTotal > 0 }, id: \.self) { mode in
                 SidebarModeButton(
                     title: mode.rawValue,
                     icon: mode.icon,

@@ -954,6 +954,8 @@ struct MineView: View {
         await loadPage($works, reset: reset) { page, size in
             try await API.myTracks(page: page, pageSize: size)
         }
+        // 同步「我的作品」总数到预加载器：侧滑栏据此显示/隐藏「我的作品」模式按钮（上传/删除后实时更新）
+        AppPreloader.shared.worksTotal = works.total
     }
 
     @MainActor
