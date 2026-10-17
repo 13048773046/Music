@@ -603,6 +603,19 @@ def run_all(port, root, strict_port, strict_root):
     # 删除 AI 评论（不存在 id → 幂等 200）
     s, body, _ = req("DELETE", "/api/admin/ai-comment/notexistid", headers=ADMIN)
     check("ai-comment 删除 200（幂等）", s == 200, body[:100])
+    # AI 乐评账号形象（名称/签名/头像）
+    s, body, _ = req("GET", "/api/admin/ai-profile")
+    check("ai-profile 无 token 401", s == 401, f"s={s}")
+    s, body, _ = req("GET", "/api/admin/ai-profile", headers=ADMIN)
+    ap0 = json.loads(body)
+    check("ai-profile 200 含 name/signature/avatar",
+          s == 200 and "name" in ap0 and "signature" in ap0 and "avatar" in ap0, body[:100])
+    bdata, ctype = multipart({"name": "流萤乐评", "signature": "把每首歌的情绪讲给你听"}, {})
+    s, body, _ = req("POST", "/api/admin/ai-profile", body=bdata,
+                     headers={"X-Admin-Token": ADMIN["X-Admin-Token"], "Content-Type": ctype})
+    ap1 = json.loads(body)
+    check("ai-profile 更新 200 且名称生效",
+          s == 200 and ap1.get("name") == "流萤乐评", body[:100])
 
     print("== 22. WebSocket 握手与鉴权 ==")
     WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"

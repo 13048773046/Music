@@ -32,7 +32,8 @@ from server.config import AI_CFG_FILE, AI_API_BASE_DEFAULT, AI_MODEL_DEFAULT, AI
 
 __all__ = ['_ai_cfg', '_ai_generate_comment', '_ai_uid',
            '_ai_auto_settings', '_ai_auto_run', '_ai_comment_stats',
-           '_ai_save_config', 'start_ai_worker']
+           '_ai_save_config', '_ai_profile', '_ai_display_name',
+           'start_ai_worker']
 
 def _ai_cfg():
     """读取 AI 接入配置：优先 ai_config.json（权限 600），环境变量兜底。密钥不写入代码/日志。"""
@@ -92,6 +93,35 @@ def _ai_generate_comment(title, artist, album, genre):
 
 def _ai_uid():
     return "ai_liuying_comment"
+
+
+def _ai_display_name():
+    """AI 乐评账号当前昵称（网站管理可改），兜底 'AI 乐评'。"""
+    try:
+        c = db()
+        try:
+            r = c.execute("SELECT name FROM users WHERE id=?", (_ai_uid(),)).fetchone()
+            return (r[0] or "AI 乐评") if r else "AI 乐评"
+        finally:
+            c.close()
+    except Exception:
+        return "AI 乐评"
+
+
+def _ai_profile():
+    """AI 乐评账号形象（昵称/签名/头像文件名），供网站管理页展示与编辑。"""
+    try:
+        c = db()
+        try:
+            r = c.execute("SELECT name, signature, avatar FROM users WHERE id=?",
+                          (_ai_uid(),)).fetchone()
+            if not r:
+                return {"name": "AI 乐评", "signature": "", "avatar": ""}
+            return {"name": r[0] or "AI 乐评", "signature": r[1] or "", "avatar": r[2] or ""}
+        finally:
+            c.close()
+    except Exception:
+        return {"name": "AI 乐评", "signature": "", "avatar": ""}
 
 
 # ---------------- AI 主动乐评（定时自动评论 + 后台管理） ----------------
@@ -197,17 +227,18 @@ def _ai_auto_run(run_type="auto", count=None, force=False):
                                 "status": "fail", "reason": "generate_failed"})
                 continue
             cid = uuid.uuid4().hex
+            ai_name = _ai_display_name()
             c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created,is_ai)
                          VALUES(?,?,?,?,?,?,?,1)""",
-                      (cid, tid, _ai_uid(), "AI 乐评", text, "[]", now))
+                      (cid, tid, _ai_uid(), ai_name, text, "[]", now))
             # 通知歌曲上传者（AI 评论了你的歌曲）
             owner_id, owner_title = _track_owner(c, tid)
             if owner_id:
                 c.execute("""INSERT INTO notifications(id,user_id,type,title,content,from_user_id,from_user_name,track_id,track_title,is_read,created)
                              VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                           (uuid.uuid4().hex, owner_id, "comment", "收到 AI 乐评",
-                           "AI 乐评评论了你的歌曲《%s》" % (owner_title or title or ""),
-                           _ai_uid(), "AI 乐评", tid, owner_title or title or "", 0, now))
+                           "%s 评论了你的歌曲《%s》" % (ai_name, owner_title or title or ""),
+                           _ai_uid(), ai_name, tid, owner_title or title or "", 0, now))
             c.execute("INSERT INTO ai_comment_logs(id,run_type,track_id,track_title,status,comment_id,created) "
                       "VALUES(?,?,?,?,?,?,?)",
                       (log_id, run_type, tid, title or "", "ok", cid, now))

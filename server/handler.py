@@ -793,6 +793,12 @@ class H(BaseHTTPRequestHandler):
                     self._json(200, {"ok": True, "saved": True}); return
                 self._err(400, "bad request"); return
 
+            # ---------- AI 乐评账号形象（名称/签名/头像，网站管理） ----------
+            if u.path == "/api/admin/ai-profile":
+                if not _admin_auth(self): self._err(401, "unauthorized"); return
+                p = _ai_profile()
+                self._json(200, {"ok": True, **p}); return
+
             # ---------- AI 主动乐评管理（网站管理：状态/配置/手动触发/删除） ----------
             if u.path.startswith("/api/admin/ai-comment"):
                 if not _admin_auth(self): self._err(401, "unauthorized"); return
@@ -1750,6 +1756,43 @@ class H(BaseHTTPRequestHandler):
                 res = _ai_auto_run("manual", count=body.get("count"),
                                    force=bool(body.get("force", False)))
                 self._json(200, {"ok": True, **res}); return
+
+            # ---------- AI 乐评账号形象更新（名称/签名/头像，multipart，网站管理） ----------
+            if u.path == "/api/admin/ai-profile":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    fields, files = self._parse_multipart(length)
+                except Exception:
+                    self._err(400, "need multipart"); return
+                c = db()
+                try:
+                    name = (fields.get("name") or "").strip()[:MAX_NAME] or "AI 乐评"
+                    signature = (fields.get("signature") or "").strip()[:100]
+                    avatar_fname = None
+                    av = files.get("avatar")
+                    if av and av[1]:
+                        aext = os.path.splitext(av[0])[1].lower()
+                        if aext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                            aext = ".jpg"
+                        if not image_magic_ok(av[1], aext):
+                            c.close()
+                            self._err(400, "头像文件格式校验失败")
+                            return
+                        avatar_fname = _ai_uid() + "_avatar" + aext
+                        with open(os.path.join(FILES, avatar_fname), "wb") as f:
+                            f.write(av[1])
+                    if avatar_fname:
+                        c.execute("UPDATE users SET name=?,signature=?,avatar=? WHERE id=?",
+                                  (name, signature, avatar_fname, _ai_uid()))
+                    else:
+                        c.execute("UPDATE users SET name=?,signature=? WHERE id=?",
+                                  (name, signature, _ai_uid()))
+                    c.commit()
+                finally:
+                    c.close()
+                p = _ai_profile()
+                self._json(200, {"ok": True, **p}); return
 
             # ---------- 关注/取关用户 ----------
             if u.path.startswith("/api/user/") and u.path.endswith("/follow"):
@@ -3129,11 +3172,12 @@ class H(BaseHTTPRequestHandler):
                     existing = c.execute(
                         "SELECT id,content,created FROM comments WHERE track_id=? AND user_id=? ORDER BY created",
                         (tid, _ai_uid())).fetchall()
+                    ai_name = _ai_display_name()
                     if len(existing) >= 2:
                         c.close()
                         self._json(200, {"ok": True, "comment": {
                             "id": existing[-1][0], "userId": _ai_uid(),
-                            "userName": "AI 乐评", "content": existing[-1][1],
+                            "userName": ai_name, "content": existing[-1][1],
                             "images": [], "created": existing[-1][2],
                             "isAi": True, "duplicate": True}})
                         return
@@ -3146,7 +3190,7 @@ class H(BaseHTTPRequestHandler):
                     now = time.time()
                     c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created,is_ai)
                                  VALUES(?,?,?,?,?,?,?,1)""",
-                              (cid, tid, _ai_uid(), "AI 乐评", text, "[]", now))
+                              (cid, tid, _ai_uid(), ai_name, text, "[]", now))
                     c.commit()
                     # 通知歌曲上传者（AI 评论了你的歌曲）
                     owner_id, owner_title = _track_owner(c, tid)
@@ -3154,12 +3198,12 @@ class H(BaseHTTPRequestHandler):
                         c.execute("""INSERT INTO notifications(id, user_id, type, title, content, from_user_id, from_user_name, track_id, track_title, is_read, created)
                                      VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                                   (uuid.uuid4().hex, owner_id, "comment", "收到 AI 乐评",
-                                   f"AI 乐评评论了你的歌曲《{owner_title}》",
-                                   _ai_uid(), "AI 乐评", tid, owner_title, 0, now))
+                                   f"{ai_name} 评论了你的歌曲《{owner_title}》",
+                                   _ai_uid(), ai_name, tid, owner_title, 0, now))
                     c.commit()
                     c.close()
                     self._json(200, {"ok": True, "comment": {
-                        "id": cid, "userId": _ai_uid(), "userName": "AI 乐评",
+                        "id": cid, "userId": _ai_uid(), "userName": ai_name,
                         "content": text, "images": [], "created": now, "isAi": True}})
                 except Exception as e:
                     self._internal_error(e)

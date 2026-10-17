@@ -139,12 +139,13 @@ async function loadDash(){
     '<div class="card"><div class="n">'+d.plays+'</div><div class="l">累计播放次数</div></div>'+
     '</div>';
 }
-// 网站管理：官网展示配置 + AI 接口配置（key/base/model）+ AI 主动评论控制
+// 网站管理：官网展示配置 + AI 接口配置（key/base/model）+ AI 评论人形象 + AI 主动评论控制
 async function loadSite(){
-  const [c,a,s]=await Promise.all([
+  const [c,a,s,p]=await Promise.all([
     (await fetch('/music/api/site-config')).json(),
     api('/ai-config'),
-    api('/ai-comment')
+    api('/ai-comment'),
+    api('/ai-profile')
   ]);
   const fld=(id,label,val,ph)=>(
     '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">'+label+'</label>'+
@@ -172,7 +173,22 @@ async function loadSite(){
   '<button class="mbtn m-save" onclick="saveAiKey()">保存</button>'+
   '<span id="aiKeyTip" style="margin-left:12px;font-size:13px"></span>'+
   '</div>';
-  // 区块三：AI 主动评论
+  // 区块三：AI 评论人形象
+  const avUrl=p.avatar?(location.origin+'/music/api/avatar/ai_liuying_comment'):'';
+  h+='<div style="background:#1a1a1c;padding:24px;border-radius:12px;margin-bottom:16px">'+
+  '<h3 style="margin-bottom:6px;font-size:16px">AI 评论人形象</h3>'+
+  '<p style="font-size:12px;color:#888;margin-bottom:18px">设置 AI 评论显示的名称、头像与签名，保存后新评论与通知即时使用。</p>'+
+  '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:14px">'+
+  (avUrl?'<img src="'+avUrl+'" style="width:64px;height:64px;border-radius:50%;object-fit:cover;background:#222" onerror="this.style.visibility=\'hidden\'">':'<div style="width:64px;height:64px;border-radius:50%;background:#2a2a2e;display:flex;align-items:center;justify-content:center;color:#888;font-size:22px">'+esc((p.name||'AI')[0])+'</div>')+
+  '<label style="font-size:13px;color:#888;cursor:pointer;padding:8px 12px;border:1px solid #2a2a2e;border-radius:8px">上传头像<input id="aiAvatar" type="file" accept="image/*" style="display:none" onchange="document.getElementById(\'aiAvatarName\').textContent=this.files[0]?this.files[0].name:\'\'"></label>'+
+  '<span id="aiAvatarName" style="font-size:12px;color:#888"></span>'+
+  '</div>'+
+  fld('aiName','名称',p.name,'AI 乐评')+
+  fld('aiSig','签名',p.signature,'一句话签名')+
+  '<button class="mbtn m-save" onclick="saveAiProfile()">保存形象</button>'+
+  '<span id="aiProfileTip" style="margin-left:12px;font-size:13px"></span>'+
+  '</div>';
+  // 区块四：AI 主动评论
   const en1=s.enabled?' selected':'', en0=s.enabled?'':' selected';
   h+='<div style="background:#1a1a1c;padding:24px;border-radius:12px">'+
   '<h3 style="margin-bottom:6px;font-size:16px">AI 主动评论</h3>'+
@@ -218,6 +234,18 @@ async function saveAiKey(){
   await api('/ai-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   document.getElementById('aiKeyTip').textContent='已保存 ✓（新配置即时生效）';
   document.getElementById('aiKeyTip').style.color='#4CD9A5';
+  loadSite();
+}
+async function saveAiProfile(){
+  const fd=new FormData();
+  fd.append('name',document.getElementById('aiName').value);
+  fd.append('signature',document.getElementById('aiSig').value);
+  const av=document.getElementById('aiAvatar').files[0];
+  if(av)fd.append('avatar',av);
+  const r=await fetch('/music/api/admin/ai-profile',{method:'POST',headers:{'X-Admin-Token':h()},body:fd});
+  if(r.status===401){logout();throw new Error('未授权')}
+  document.getElementById('aiProfileTip').textContent='已保存 ✓（新评论即时生效）';
+  document.getElementById('aiProfileTip').style.color='#4CD9A5';
   loadSite();
 }
 async function saveAiCfg(){
