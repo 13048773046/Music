@@ -156,7 +156,8 @@ struct MusicApp: App {
                     content: obj?["content"] as? String ?? "",
                     version: latestV,
                     forceUpdate: (obj?["forceUpdate"] as? Int) ?? 0,
-                    downloadUrl: obj?["downloadUrl"] as? String ?? ""
+                    downloadUrl: obj?["downloadUrl"] as? String ?? "",
+                    downloadUrlIos: obj?["downloadUrlIos"] as? String ?? ""
                 )
             }
         } catch {}
@@ -180,6 +181,7 @@ struct UpdateNotice: Identifiable {
     let version: String
     let forceUpdate: Int
     let downloadUrl: String
+    let downloadUrlIos: String
 }
 
 /// 公告弹窗（半屏）
@@ -246,9 +248,10 @@ struct UpdateSheet: View {
                     .lineSpacing(6)
             }
             Spacer()
-            // 去更新按钮（始终显示）
+            // 去更新按钮（始终显示）；iOS 优先用 downloadUrlIos（后台分开配置），兜底 downloadUrl
             Button(action: {
-                if let url = URL(string: update.downloadUrl) {
+                let target = update.downloadUrlIos.isEmpty ? update.downloadUrl : update.downloadUrlIos
+                if let url = URL(string: target) {
                     UIApplication.shared.open(url)
                 }
                 if update.forceUpdate != 1 {

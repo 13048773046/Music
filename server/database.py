@@ -125,7 +125,8 @@ def db():
         download_url TEXT DEFAULT '',
         created REAL)""")
     ann_cols = [r[1] for r in c.execute("PRAGMA table_info(announcements)")]
-    for col, default in [("show_once","0"),("type","'announcement'"),("force_update","0"),("download_url","''")]:
+    for col, default in [("show_once","0"),("type","'announcement'"),("force_update","0"),
+                         ("download_url","''"),("download_url_ios","''"),("download_url_android","''")]:
         if col not in ann_cols:
             c.execute("ALTER TABLE announcements ADD COLUMN %s TEXT DEFAULT %s" % (col, default))
     # 通知表：互动通知（点赞/评论/分享）+ 官方通知记录；comment_id 用于评论通知点击定位

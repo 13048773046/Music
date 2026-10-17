@@ -301,11 +301,13 @@ class H(BaseHTTPRequestHandler):
             # 检查更新：返回最新一条 active 更新通知（type=update）。
             # 支持客户端传 ?v=<本地版本号>：本地版本 >= 公告版本时不提示（逐段数字比较）。
             # 客户端未传版本或公告版本为空时按"存在公告即提示"（保持旧行为）。
+            # 下载链接分平台：downloadUrl（兼容旧字段，= iOS 链接兜底）、downloadUrlIos、downloadUrlAndroid。
             if u.path == "/api/check-update":
                 qs = urllib.parse.parse_qs(u.query)
                 client_v = (qs.get("v") or [""])[0].strip()
                 c = db()
-                row = c.execute("SELECT id, title, content, version, force_update, download_url FROM announcements"
+                row = c.execute("SELECT id, title, content, version, force_update, download_url,"
+                                " download_url_ios, download_url_android FROM announcements"
                                 " WHERE active=1 AND type='update' ORDER BY created DESC LIMIT 1").fetchone()
                 c.close()
                 if not row:
@@ -315,9 +317,13 @@ class H(BaseHTTPRequestHandler):
                 if client_v and latest_v and not _version_lt(client_v, latest_v):
                     self._json(200, {"hasUpdate": False})
                     return
+                ios_url = row[6] or row[5] or ""
                 self._json(200, {"hasUpdate": True, "id": row[0], "title": row[1],
                                  "content": row[2], "version": latest_v,
-                                 "forceUpdate": row[4] or 0, "downloadUrl": row[5] or ""})
+                                 "forceUpdate": row[4] or 0,
+                                 "downloadUrl": ios_url,
+                                 "downloadUrlIos": ios_url,
+                                 "downloadUrlAndroid": row[7] or ""})
                 return
 
             # 我的统计：总听歌时长（秒）、听过的歌曲数
@@ -1490,6 +1496,20 @@ class H(BaseHTTPRequestHandler):
                 self._serve_file(fp)
                 return
 
+            # 安装包下载：GET /api/package/{name}（后台/官网/客户端共用；APK/IPA 流式返回）
+            # 兼容 /music 前缀：线上 Nginx 剥前缀转发 /api/...，直连后端时保留 /music/api/...
+            if u.path.startswith("/api/package/") or u.path.startswith("/music/api/package/"):
+                name = u.path.rsplit("/", 1)[-1]
+                if not re.fullmatch(r"package_[0-9a-f]{32}\.(?:apk|ipa)", name):
+                    self._err(404, "no package")
+                    return
+                fp = safe_file_path(name)
+                if not fp or not os.path.exists(fp):
+                    self._err(404, "no package")
+                    return
+                self._serve_file(fp, cacheable=False)
+                return
+
             if u.path.startswith("/api/comments/"):
                 tid = u.path.rsplit("/", 1)[-1]
                 c = db()
@@ -2084,11 +2104,91 @@ class H(BaseHTTPRequestHandler):
                 atype = data.get("type") or "announcement"
                 force_update = 1 if str(data.get("forceUpdate") or "0") in ("1", "true", "yes") else 0
                 download_url = data.get("downloadUrl") or ""
-                c.execute("INSERT INTO announcements(id,title,content,version,show_once,type,force_update,download_url,active,created) VALUES(?,?,?,?,?,?,?,?,1,?)",
-                          (aid, title, content, data.get("version") or "", show_once, atype, force_update, download_url, time.time()))
+                download_url_ios = data.get("downloadUrlIos") or ""
+                download_url_android = data.get("downloadUrlAndroid") or ""
+                c.execute("INSERT INTO announcements(id,title,content,version,show_once,type,force_update,"
+                          "download_url,download_url_ios,download_url_android,active,created)"
+                          " VALUES(?,?,?,?,?,?,?,?,?,?,1,?)",
+                          (aid, title, content, data.get("version") or "", show_once, atype, force_update,
+                           download_url, download_url_ios, download_url_android, time.time()))
                 c.commit()
                 c.close()
                 self._json(200, {"ok": True, "id": aid}); return
+
+            # 编辑通知（公告/更新）：POST /api/admin/announcement/update（body: id + 可改字段，
+            # 支持 title/content/version/type/forceUpdate/showOnce/active/downloadUrl/downloadUrlIos/downloadUrlAndroid）
+            if u.path == "/api/admin/announcement/update":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    raw = self.rfile.read(min(int(self.headers.get("Content-Length",0)), 8 * 1024))
+                    data = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    self._err(400, "bad json"); return
+                aid = (data.get("id") or "").strip()
+                if not aid:
+                    self._err(400, "id required"); return
+                c = db()
+                try:
+                    cur = c.execute("SELECT id FROM announcements WHERE id=?", (aid,)).fetchone()
+                    if not cur:
+                        c.close(); self._err(404, "not found"); return
+                    sets, vals = [], []
+                    for key, col in [("title", "title"), ("content", "content"), ("version", "version"),
+                                     ("downloadUrl", "download_url"), ("downloadUrlIos", "download_url_ios"),
+                                     ("downloadUrlAndroid", "download_url_android")]:
+                        if key in data:
+                            sets.append("%s=?" % col); vals.append(str(data[key] or ""))
+                    for key, col in [("forceUpdate", "force_update"), ("showOnce", "show_once"), ("active", "active")]:
+                        if key in data:
+                            sets.append("%s=?" % col); vals.append(1 if str(data[key] or "0") in ("1", "true", "yes") else 0)
+                    if "type" in data:
+                        sets.append("type=?"); vals.append(str(data["type"] or ""))
+                    if sets:
+                        vals.append(aid)
+                        c.execute("UPDATE announcements SET %s WHERE id=?" % ",".join(sets), vals)
+                        c.commit()
+                    c.close()
+                    self._json(200, {"ok": True, "id": aid})
+                except Exception as e:
+                    try: c.close()
+                    except Exception: pass
+                    self._internal_error(e)
+                return
+
+            # 安装包上传：POST /api/admin/upload-package（multipart：file + platform=android|ios，
+            # 存 files/package_*，上限 MAX_PACKAGE=100MB，zip 魔数校验）
+            if u.path == "/api/admin/upload-package":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    if length <= 0:
+                        self._err(400, "empty body"); return
+                    if length > MAX_PACKAGE + 64 * 1024:
+                        self._err(413, "too large"); return
+                    fields, files = self._parse_multipart(length)
+                    if fields is None:
+                        self._err(400, "need multipart"); return
+                    platform = (fields.get("platform") or "").strip()
+                    if platform not in ("android", "ios"):
+                        self._err(400, "platform must be android|ios"); return
+                    pkg = files.get("file")
+                    if not pkg or not pkg[0]:
+                        self._err(400, "no file"); return
+                    fname, fdata = pkg
+                    cext = os.path.splitext(fname)[1].lower()
+                    allow_ext = {".apk": "android", ".ipa": "ios"}
+                    if cext not in allow_ext or allow_ext[cext] != platform:
+                        self._err(400, "platform/extension mismatch (android→.apk, ios→.ipa)"); return
+                    if not fdata.startswith(b"PK\x03\x04"):
+                        self._err(400, "安装包格式校验失败（APK/IPA 均为 zip 容器）"); return
+                    stored = "package_" + uuid.uuid4().hex + cext
+                    with open(os.path.join(FILES, stored), "wb") as f:
+                        f.write(fdata)
+                    self._json(200, {"ok": True, "url": "/music/api/package/" + stored, "size": len(fdata)})
+                except Exception as e:
+                    self._internal_error(e)
+                return
 
             if u.path == "/api/admin/update":
                 if self.headers.get("X-Admin-Token", "").strip() != ADMIN_TOKEN:

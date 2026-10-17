@@ -847,6 +847,71 @@ def run_all(port, root, strict_port, strict_root):
     cu7 = json.loads(body)
     check("check-update 非法版本号 → 按存在公告提示(hasUpdate true)", s == 200 and cu7.get("hasUpdate") is True, body[:100])
 
+    print("== 25. 安装包上传与双平台下载链接 ==")
+    # 鉴权
+    s, body, _ = req("POST", "/api/admin/upload-package", body=b"x", headers={"Content-Type": "application/octet-stream"})
+    check("upload-package 无 token 401", s == 401, f"s={s}")
+    # 非 multipart
+    bdata, ctype = multipart({"platform": "android"}, {})
+    s, body, _ = req("POST", "/api/admin/upload-package", body=bdata,
+                     headers={"X-Admin-Token": ADMIN["X-Admin-Token"], "Content-Type": ctype})
+    check("upload-package 无文件 400", s == 400, f"s={s} {body[:80]}")
+    # 平台/扩展名不符：ios + .apk
+    bdata, ctype = multipart({"platform": "ios"}, {"file": ("x.apk", b"PK\x03\x04fake", "application/octet-stream")})
+    s, body, _ = req("POST", "/api/admin/upload-package", body=bdata,
+                     headers={"X-Admin-Token": ADMIN["X-Admin-Token"], "Content-Type": ctype})
+    check("upload-package 平台/扩展名不符 400", s == 400, f"s={s} {body[:80]}")
+    # 非 zip 魔数
+    bdata, ctype = multipart({"platform": "android"}, {"file": ("x.apk", b"NOTAZIP", "application/octet-stream")})
+    s, body, _ = req("POST", "/api/admin/upload-package", body=bdata,
+                     headers={"X-Admin-Token": ADMIN["X-Admin-Token"], "Content-Type": ctype})
+    check("upload-package 非 zip 魔数 400", s == 400, f"s={s} {body[:80]}")
+    # 正常上传 apk
+    pkg_body = b"PK\x03\x04" + b"\x00" * 64 + b"fake-apk"
+    bdata, ctype = multipart({"platform": "android"},
+                             {"file": ("music.apk", pkg_body, "application/vnd.android.package-archive")})
+    s, body, _ = req("POST", "/api/admin/upload-package", body=bdata,
+                     headers={"X-Admin-Token": ADMIN["X-Admin-Token"], "Content-Type": ctype})
+    d = json.loads(body)
+    check("upload-package android apk 上传成功",
+          s == 200 and d.get("ok") and d.get("url", "").startswith("/music/api/package/package_"), f"s={s} {body[:120]}")
+    pkg_url = d.get("url", "")
+    # 下载回读一致
+    s, body2, _ = req("GET", pkg_url)
+    check("package 下载 200 且内容一致", s == 200 and body2 == pkg_body, f"s={s} len={len(body2)}")
+    # 目录穿越拦截
+    s, body, _ = req("GET", "/api/package/..%2f..%2fetc%2fpasswd")
+    check("package 非法文件名 404", s == 404, f"s={s}")
+    # 创建带双平台链接的 update 公告（version 8.8.8）
+    s, body, _ = req("POST", "/api/admin/announcement",
+                     body={"title": "新版本 8.8.8", "content": "更新内容", "version": "8.8.8", "type": "update",
+                           "force_update": 0, "downloadUrlIos": "https://example.com/ios.ipa",
+                           "downloadUrlAndroid": "https://example.com/android.apk"},
+                     headers=ADMIN)
+    check("admin 创建 update 公告带双平台链接 200", s == 200, body[:100])
+    s, body, _ = req("GET", "/api/check-update")
+    cu = json.loads(body)
+    check("check-update 返回双平台链接",
+          s == 200 and cu.get("hasUpdate") is True
+          and cu.get("downloadUrlIos") == "https://example.com/ios.ipa"
+          and cu.get("downloadUrlAndroid") == "https://example.com/android.apk"
+          and cu.get("downloadUrl") == "https://example.com/ios.ipa", body[:160])
+    # 编辑接口：改 version 与 ios 链接
+    s, body, _ = req("POST", "/api/admin/announcement/update",
+                     body={"id": cu.get("id"), "version": "9.8.8",
+                           "downloadUrlIos": "https://example.com/ios-new.ipa"},
+                     headers=ADMIN)
+    check("admin 编辑 update 公告 200", s == 200, body[:100])
+    s, body, _ = req("GET", "/api/check-update?v=9.7")
+    cu2 = json.loads(body)
+    check("编辑后 check-update 新版本生效",
+          s == 200 and cu2.get("hasUpdate") is True
+          and cu2.get("version") == "9.8.8"
+          and cu2.get("downloadUrlIos") == "https://example.com/ios-new.ipa", body[:160])
+    s, body, _ = req("GET", "/api/check-update?v=9.8.8")
+    cu3 = json.loads(body)
+    check("编辑后同版本不提示", s == 200 and cu3.get("hasUpdate") is False, body[:100])
+
 
 if __name__ == "__main__":
     main()

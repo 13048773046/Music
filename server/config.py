@@ -109,6 +109,7 @@ MAX_UPLOAD = 100 * 1024 * 1024        # 单曲音频上限 100MB
 MAX_PROFILE = 8 * 1024 * 1024         # 注册/改资料请求上限 8MB
 MAX_COMMENT = 200                     # 评论最大字符
 MAX_COMMENT_IMAGE = 8 * 1024 * 1024   # 单张评论图片上限 8MB
+MAX_PACKAGE = 100 * 1024 * 1024       # 安装包（APK/IPA）上传上限 100MB（与 Nginx client_max_body_size 对齐）
 MAX_NAME = 40                         # 昵称/歌手/标题最大长度
 
 # ---------------- 鉴权 / 密码 / Token ----------------

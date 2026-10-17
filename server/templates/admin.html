@@ -356,8 +356,12 @@ async function loadAnn(){
   '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">版本号（可选）</label>'+
   '<input id="annVersion" placeholder="如 v1.2.0" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
   '<div id="updateFields" style="display:none">'+
-  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">下载链接</label>'+
-  '<input id="annDownloadUrl" placeholder="https://..." style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box"></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">苹果安装包（iOS 更新链接：上传 IPA 或填自定义链接）</label>'+
+  '<input id="annUrlIos" placeholder="https://... 或点下方上传自动填入" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:8px">'+
+  '<button onclick="uploadPackage(\'ios\')" style="width:100%;padding:9px;border:0;border-radius:8px;background:#1f2b3a;color:#9ecbff;font-size:13px;cursor:pointer">上传 IPA 安装包（≤100MB）</button></div>'+
+  '<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">安卓安装包（Android 更新链接：上传 APK 或填自定义链接）</label>'+
+  '<input id="annUrlAndroid" placeholder="https://... 或点下方上传自动填入" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a2a2e;background:#111;color:#fff;font-size:14px;box-sizing:border-box;margin-bottom:8px">'+
+  '<button onclick="uploadPackage(\'android\')" style="width:100%;padding:9px;border:0;border-radius:8px;background:#1f2b3a;color:#9ecbff;font-size:13px;cursor:pointer">上传 APK 安装包（≤100MB）</button></div>'+
   '<div style="margin-bottom:14px"><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#ccc;cursor:pointer">'+
   '<input type="checkbox" id="annForceUpdate" style="width:16px;height:16px"> 强制更新（用户不能取消，必须更新）</label></div>'+
   '</div>'+
@@ -368,7 +372,7 @@ async function loadAnn(){
   '<div style="background:#1a1a1c;padding:20px;border-radius:12px;font-size:13px;color:#888;line-height:1.8">'+
   '<b style="color:#ccc">说明：</b><br>'+
   '• <b>公告通知</b>：普通公告，用户可关闭，半屏弹窗<br>'+
-  '• <b>更新通知</b>：版本更新提示，可设置强制更新和下载链接<br>'+
+  '• <b>更新通知</b>：版本更新提示，苹果/安卓安装包分开上传（≤100MB）或填自定义链接<br>'+
   '• 强制更新：用户只能点"去更新"，不能取消<br>'+
   '• 非强制更新：用户可点"以后再说"取消<br>'+
   '• 最新一条通知会覆盖之前的，App 只展示最新一条'+
@@ -379,6 +383,28 @@ function onAnnTypeChange(){
   const t=document.getElementById('annType').value;
   document.getElementById('updateFields').style.display=(t==='update')?'block':'none';
 }
+async function uploadPackage(platform){
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept=platform==='ios'?'.ipa':'.apk';
+  input.onchange=async ()=>{
+    const f=input.files[0];
+    if(!f)return;
+    if(f.size>100*1024*1024){alert('安装包不能超过 100MB');return;}
+    const fd=new FormData();
+    fd.append('platform',platform);
+    fd.append('file',f);
+    try{
+      const r=await fetch('/music/api/admin/upload-package',{method:'POST',headers:{'X-Admin-Token':token},body:fd});
+      const d=await r.json();
+      if(r.ok&&d.url){
+        document.getElementById(platform==='ios'?'annUrlIos':'annUrlAndroid').value=location.origin+d.url;
+        alert('上传成功');
+      }else{alert(d.err||'上传失败');}
+    }catch(e){alert('网络错误');}
+  };
+  input.click();
+}
 async function submitAnn(){
   const title=document.getElementById('annTitle').value.trim();
   const content=document.getElementById('annContent').value.trim();
@@ -386,11 +412,12 @@ async function submitAnn(){
   const type=document.getElementById('annType').value;
   const showOnce=document.getElementById('annShowOnce').checked?1:0;
   const forceUpdate=document.getElementById('annForceUpdate').checked?1:0;
-  const downloadUrl=document.getElementById('annDownloadUrl').value.trim();
+  const downloadUrlIos=document.getElementById('annUrlIos').value.trim();
+  const downloadUrlAndroid=document.getElementById('annUrlAndroid').value.trim();
   if(!title||!content){alert('请填写标题和内容');return;}
-  if(type==='update'&&!downloadUrl){alert('更新通知需要填写下载链接');return;}
+  if(type==='update'&&!downloadUrlIos&&!downloadUrlAndroid){alert('更新通知需要填写至少一个平台的安装包或链接');return;}
   try{
-    const r=await fetch('/music/api/admin/announcement',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token},body:JSON.stringify({title,content,version,type,showOnce,forceUpdate,downloadUrl})});
+    const r=await fetch('/music/api/admin/announcement',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token},body:JSON.stringify({title,content,version,type,showOnce,forceUpdate,downloadUrl:downloadUrlIos,downloadUrlIos,downloadUrlAndroid})});
     if(r.ok){alert('发布成功');loadAnn();}
     else{alert('发布失败');}
   }catch(e){alert('网络错误');}
