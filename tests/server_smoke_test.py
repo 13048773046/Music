@@ -245,12 +245,12 @@ def run_all(port, root, strict_port, strict_root):
     conn = sqlite3.connect(os.path.join(root, "tracks.db"))
     _now = time.time()
     for r in [
-        ("rec_1", "晴天", "周杰伦", "叶惠美", "", 240, "gd", "gd_1", "", 0, _now, "rec_owner", 50, 20, 5, "", 0, "流行"),
-        ("rec_2", "七里香", "周杰伦", "七里香", "", 250, "gd", "gd_2", "", 0, _now, "rec_owner", 30, 15, 3, "", 0, "流行"),
-        ("rec_3", "海阔天空", "Beyond", "乐与怒", "", 300, "gd", "gd_3", "", 0, _now - 100, "rec_owner", 40, 10, 2, "", 0, "摇滚"),
-        ("rec_4", "后来", "刘若英", "我等你", "", 280, "gd", "gd_4", "", 0, _now - 200, "rec_owner", 20, 8, 1, "", 0, "流行"),
-        ("rec_5", "平凡之路", "朴树", "猎户星座", "", 260, "gd", "gd_5", "", 0, _now - 300, "rec_owner", 10, 5, 1, "", 0, "民谣"),
-        ("rec_6", "晴天 (Live)", "周杰伦", "叶惠美", "", 245, "gd", "gd_6", "", 0, _now, "rec_owner", 45, 18, 4, "", 0, "流行"),
+        ("rec_1", "晴天", "周杰伦", "叶惠美", "", 240, "gd", "gd_1", "rec_1.mp3", 0, _now, "rec_owner", 50, 20, 5, "", 0, "流行"),
+        ("rec_2", "七里香", "周杰伦", "七里香", "", 250, "gd", "gd_2", "rec_2.mp3", 0, _now, "rec_owner", 30, 15, 3, "", 0, "流行"),
+        ("rec_3", "海阔天空", "Beyond", "乐与怒", "", 300, "gd", "gd_3", "rec_3.mp3", 0, _now - 100, "rec_owner", 40, 10, 2, "", 0, "摇滚"),
+        ("rec_4", "后来", "刘若英", "我等你", "", 280, "gd", "gd_4", "rec_4.mp3", 0, _now - 200, "rec_owner", 20, 8, 1, "", 0, "流行"),
+        ("rec_5", "平凡之路", "朴树", "猎户星座", "", 260, "gd", "gd_5", "rec_5.mp3", 0, _now - 300, "rec_owner", 10, 5, 1, "", 0, "民谣"),
+        ("rec_6", "晴天 (Live)", "周杰伦", "叶惠美", "", 245, "gd", "gd_6", "rec_6.mp3", 0, _now, "rec_owner", 45, 18, 4, "", 0, "流行"),
     ]:
         conn.execute(
             "INSERT OR IGNORE INTO collected_tracks"
@@ -646,6 +646,45 @@ def run_all(port, root, strict_port, strict_root):
         s, _, _ = req("POST", "/api/login", body, {"Content-Type": ct})
         codes.append(s)
     check("登录限流触发 429", 429 in codes, str(codes))
+
+    print("== 23. 推荐健康度与采集歌计数回归（S1/S2）==")
+    COLLECT = {"X-Collect-Key": "liuying-collect-7f3a9c2e"}
+    # 入库一条采集歌：/api/collect/add 按设计 play_url 恒为空（未下载音频）
+    items = [{"title": "采集回归歌", "artist": "采集歌手", "source": "smoke23", "source_id": "smoke23-1"}]
+    s, body, _ = req("POST", "/api/collect/add", {"items": items}, COLLECT)
+    ca = json.loads(body)
+    check("collect/add 200 inserted=1", s == 200 and ca.get("inserted") == 1, body[:100])
+    conn1 = sqlite3.connect(db_path)
+    cid = conn1.execute("SELECT id FROM collected_tracks WHERE source='smoke23' AND source_id='smoke23-1'").fetchone()[0]
+    conn1.close()
+    # S2：play_url 为空（未下载音频）→ 不得出现在任何推荐批次
+    seen = []
+    for _ in range(3):
+        s, body, _ = req("GET", "/api/recommend?fresh=1", headers=AUTH)
+        rl = json.loads(body)
+        if isinstance(rl, list):
+            seen += [t.get("id") for t in rl]
+    check("S2: play_url 为空的采集歌不进推荐", cid not in seen, f"seen={len(seen)}")
+    # 模拟下载完成（回填 play_url 本地文件名）→ 应能进入推荐（新鲜/热度路必含）
+    conn1 = sqlite3.connect(db_path)
+    conn1.execute("UPDATE collected_tracks SET play_url=? WHERE id=?", (cid + ".mp3", cid))
+    conn1.commit()
+    conn1.close()
+    s, body, _ = req("GET", "/api/recommend?fresh=1", headers=AUTH)
+    rl = json.loads(body)
+    ids = [t.get("id") for t in rl] if isinstance(rl, list) else []
+    check("S2: 已下载音频的采集歌进入推荐", cid in ids, f"ids={ids[:10]}")
+    # S1：播放采集歌 → play_count+1 且响应返回其计数
+    s, body, _ = req("POST", f"/api/play/{cid}", None, AUTH)
+    pc = json.loads(body)
+    conn1 = sqlite3.connect(db_path)
+    db_pc = conn1.execute("SELECT play_count FROM collected_tracks WHERE id=?", (cid,)).fetchone()[0]
+    conn1.close()
+    check("S1: 播放采集歌响应 playCount=1", s == 200 and pc.get("playCount", 0) == 1, body[:100])
+    check("S1: 采集歌 play_count 落库=1", db_pc == 1, f"db_pc={db_pc}")
+    # S1 回归：上传歌播放仍走 tracks 计数
+    s, body, _ = req("POST", f"/api/play/{tid}", None, AUTH)
+    check("S1: 上传歌播放仍返回 playCount", s == 200 and json.loads(body).get("playCount", 0) >= 1, body[:100])
 
 
 if __name__ == "__main__":

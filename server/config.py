@@ -215,21 +215,24 @@ REC_FRESH_DAYS = 14
 REC_MAX_PER_ARTIST = 3
 REC_MAX_PER_GENRE = 5
 REC_MMR_LAMBDA = 0.7
-REC_NOISE = 0.6
+REC_NOISE = float(os.environ.get("MUSIC_REC_NOISE", "1.2"))   # F4：扰动 0.6→1.2，让不同批次种子真正改变排序
 REC_TITLE_SIM_THRESHOLD = 0.8
 REC_BUCKET_SECONDS = int(os.environ.get("MUSIC_REC_BUCKET", str(6 * 3600)))
 REC_SESSION_IDLE = int(os.environ.get("MUSIC_REC_IDLE", str(30 * 60)))
-REC_EXPLORE_POOL = 120
+REC_EXPLORE_POOL = int(os.environ.get("MUSIC_REC_EXPLORE_POOL", "120"))
 REC_LIMITS = {
     "behavior": 40, "artist": 30, "genre": 30,
     "hot": 20, "fresh": 10, "explore": 30,
 }
 REC_WEIGHTS = {
-    "behavior": 5.0, "artist": 4.0, "genre": 3.0,
-    "hot": 1.2, "fresh": 2.0, "explore": 0.6,
+    # F4：行为 5.0→4.0、探索 0.6→1.0（降低单一偏好垄断、提高新内容曝光）
+    "behavior": float(os.environ.get("MUSIC_REC_W_BEHAVIOR", "4.0")),
+    "artist": 4.0, "genre": 3.0,
+    "hot": 1.2, "fresh": 2.0, "explore": float(os.environ.get("MUSIC_REC_W_EXPLORE", "1.0")),
 }
 REC_HOT_TOP = 60
-REC_PUSH_WINDOW = 3 * 3600
+# F3：推送去重窗口 3h→24h——长会话（实测最长 8.3h）中途不再重复推送已推过的歌
+REC_PUSH_WINDOW = int(os.environ.get("MUSIC_REC_PUSH_WINDOW", str(24 * 3600)))
 # 长期去重：解决"听来听去都是那几首"——
 # 用户最近 N 天内听完成分 ≥ 阈值的歌，视为"已听过"，长期不再重复推荐（只推没听过的新内容）
 REC_REPLAY_DAYS = int(os.environ.get("MUSIC_REC_REPLAY_DAYS", "30"))

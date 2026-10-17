@@ -2744,9 +2744,13 @@ class H(BaseHTTPRequestHandler):
                         c.close()
                         self._err(401, "未登录或登录已过期")
                         return
+                    # S1：采集歌播放计数同步自增（热度路需要采集歌计数；like/share 已同步，见 /api/like、/api/share）
                     c.execute("UPDATE tracks SET play_count=play_count+1 WHERE id=?", (tid,))
+                    c.execute("UPDATE collected_tracks SET play_count=play_count+1 WHERE id=?", (tid,))
                     c.commit()
                     row = c.execute("SELECT play_count FROM tracks WHERE id=?", (tid,)).fetchone()
+                    if not row:
+                        row = c.execute("SELECT play_count FROM collected_tracks WHERE id=?", (tid,)).fetchone()
                     c.close()
                     self._json(200, {"playCount": row[0] if row else 0})
                 except Exception as e:

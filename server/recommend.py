@@ -173,6 +173,8 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
     viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底。
     """
     now = time.time()
+    # F9：探索路按时间桶做全池 8 桶轮转（同桶可复现、跨桶换池，解决探索池固定为"入库前 120 首"的盲区）
+    _bucket = int(now // REC_BUCKET_SECONDS)
     rnd = rnd or random
     # 新鲜重开：随机扰动 ×3、探索路权重 ×2，结果带随机性又不脱离行为画像
     noise = REC_NOISE * 3 if fresh else REC_NOISE
@@ -193,6 +195,17 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
                 " AND created >= ?",
                 (viewer_id, REC_REPLAY_FRACTION_MIN, now - REC_REPLAY_DAYS * 86400.0)).fetchall()
             exclude_self |= {r[0] for r in _hist if r[0]}
+        except Exception:
+            pass
+    # F1：7 天内听过（任意听完成度）的歌曲近期不重推——"今天刚听的歌不回头"，
+    # 与 30 天 ≥50% 黑名单互补（黑名单只覆盖听完整过半的歌）
+    if viewer_id:
+        try:
+            _recent = c.execute(
+                "SELECT DISTINCT track_id FROM behavior_events"
+                " WHERE user_id=? AND event='listen' AND created >= ?",
+                (viewer_id, now - 7 * 86400.0)).fetchall()
+            exclude_self |= {r[0] for r in _recent if r[0]}
         except Exception:
             pass
 
@@ -319,7 +332,7 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
             "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
             " SELECT id,title,artist,album,genre FROM tracks WHERE offline=0 AND user_id!=?"
             " UNION ALL"
-            " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0"
+            " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0 AND play_url!=''"
             ") WHERE " + where_sql + " LIMIT ?",
             ([viewer_id or ""] + list(args) + [limit])).fetchall()
 
@@ -366,7 +379,7 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
         " WHERE offline=0 AND user_id!=?"
         " UNION ALL"
         " SELECT id,title,artist,album,genre,play_count,like_count,share_count FROM collected_tracks"
-        " WHERE offline=0"
+        " WHERE offline=0 AND play_url!=''"
         ") ORDER BY (play_count + like_count*3 + share_count*5) DESC LIMIT ?",
         (viewer_id or "", REC_HOT_TOP)).fetchall()
     for rank, (rid, rtitle, rartist, ralbum, rgenre) in enumerate(hot):
@@ -382,7 +395,7 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
         "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
         " SELECT id,title,artist,album,genre,created FROM tracks WHERE offline=0 AND user_id!=?"
         " UNION ALL"
-        " SELECT id,title,artist,album,genre,created FROM collected_tracks WHERE offline=0"
+        " SELECT id,title,artist,album,genre,created FROM collected_tracks WHERE offline=0 AND play_url!=''"
         ") WHERE created >= ? ORDER BY created DESC LIMIT ?",
         (viewer_id or "", now - REC_FRESH_DAYS * 86400.0, REC_LIMITS["fresh"])).fetchall()
     for rid, rtitle, rartist, ralbum, rgenre in fresh:
@@ -392,13 +405,15 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
 
     # ---------- 路 5：随机探索召回（保证新内容被看到，权重最低） ----------
     # 候选池按批次种子洗牌截断（替代 SQL RANDOM()）：同批次可复现、不同批次轮换
+    # F9：全池按 id 哈希 8 桶轮转抽样（同桶取同一池、跨桶换池），替代固定"入库顺序前 120 首"——
+    # 旧实现对听歌多的用户等于"探索池 = 已听过池"（实测 114/120 已听过），未听过的新内容进不了候选
     explore = c.execute(
         "SELECT id,title,artist,album,COALESCE(genre,'') FROM ("
         " SELECT id,title,artist,album,genre FROM tracks WHERE offline=0 AND user_id!=?"
         " UNION ALL"
-        " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0"
-        ") ORDER BY id LIMIT ?",
-        (viewer_id or "", REC_EXPLORE_POOL)).fetchall()
+        " SELECT id,title,artist,album,genre FROM collected_tracks WHERE offline=0 AND play_url!=''"
+        ") WHERE (CAST(substr(id,1,8) AS INTEGER) % 8) = ? ORDER BY id LIMIT ?",
+        (viewer_id or "", _bucket % 8, REC_EXPLORE_POOL)).fetchall()
     explore = list(explore)
     rnd.shuffle(explore)
     for rid, rtitle, rartist, ralbum, rgenre in explore[:REC_LIMITS["explore"]]:
