@@ -28,13 +28,14 @@ from http.server import BaseHTTPRequestHandler
 from server.config import *
 from server.database import db
 from server.common import *
+from server.media import image_magic_ok
 from server.config import AI_CFG_FILE, AI_API_BASE_DEFAULT, AI_MODEL_DEFAULT, AI_UID
 
 __all__ = ['_ai_cfg', '_ai_generate_comment', '_ai_uid',
            '_ai_auto_settings', '_ai_auto_run', '_ai_comment_stats',
            '_ai_save_config', '_ai_profile', '_ai_display_name',
            '_fetch_hot_pool', '_match_hot_words', '_hot_pool_info',
-           'start_ai_worker']
+           '_fetch_meme_image', 'start_ai_worker']
 
 def _ai_cfg():
     """读取 AI 接入配置：优先 ai_config.json（权限 600），环境变量兜底。密钥不写入代码/日志。"""
@@ -245,6 +246,43 @@ def _hot_pool_info():
             "words": pool[:10]}
 
 
+def _fetch_meme_image():
+    """抓取随机表情包并下载到本地（FILES/cmt_<hex>.<ext>，与评论图片同规范）。
+
+    返回本地文件名，前端经 /api/comment-image/{name} 展示；任何失败返回 None（静默降级，评论仍正常发布）。
+    """
+    try:
+        req = urllib.request.Request(MEME_ENDPOINT, headers={
+            "User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=MEME_TIMEOUT) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        url = (d.get("url") or "").strip()
+        if not url or d.get("nsfw"):
+            return None
+        req2 = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req2, timeout=MEME_TIMEOUT) as r:
+            data = r.read(MEME_MAX_BYTES + 1)
+        if not data or len(data) > MEME_MAX_BYTES:
+            return None
+        ext = os.path.splitext(urllib.parse.urlparse(url).path)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            ext = ""
+        if ext:
+            if not image_magic_ok(data, ext):
+                return None
+        else:
+            ext = next((cand for cand in (".png", ".jpg", ".webp")
+                        if image_magic_ok(data, cand)), "")
+            if not ext:
+                return None
+        stored = "cmt_" + uuid.uuid4().hex + ext
+        with open(os.path.join(FILES, stored), "wb") as f:
+            f.write(data)
+        return stored
+    except Exception:
+        return None
+
+
 # ---------------- AI 主动乐评（定时自动评论 + 后台管理） ----------------
 
 _AI_WORKER_STARTED = False
@@ -349,9 +387,14 @@ def _ai_auto_run(run_type="auto", count=None, force=False):
                 continue
             cid = uuid.uuid4().hex
             ai_name = _ai_display_name()
+            images = "[]"
+            if random.random() * 100 < MEME_PROB_PCT:
+                m = _fetch_meme_image()
+                if m:
+                    images = json.dumps([m])
             c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created,is_ai)
                          VALUES(?,?,?,?,?,?,?,1)""",
-                      (cid, tid, _ai_uid(), ai_name, text, "[]", now))
+                      (cid, tid, _ai_uid(), ai_name, text, images, now))
             # 通知歌曲上传者（AI 评论了你的歌曲）
             owner_id, owner_title = _track_owner(c, tid)
             if owner_id:
@@ -395,7 +438,8 @@ def _ai_comment_stats():
             "lastRun": last[0] if last else 0,
             "okTotal": ok_total, "failTotal": fail_total, "okToday": ok_today,
             "aiCommentTotal": ai_total, "keyConfigured": bool(_ai_cfg().get("key")),
-            "hotPool": hp}
+            "hotPool": hp,
+            "memeInfo": {"endpoint": MEME_ENDPOINT, "probPct": MEME_PROB_PCT}}
 
 
 def _ai_auto_worker():

@@ -3188,9 +3188,14 @@ class H(BaseHTTPRequestHandler):
                         return
                     cid = uuid.uuid4().hex
                     now = time.time()
+                    images = "[]"
+                    if random.random() * 100 < MEME_PROB_PCT:
+                        m = _fetch_meme_image()
+                        if m:
+                            images = json.dumps([m])
                     c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created,is_ai)
                                  VALUES(?,?,?,?,?,?,?,1)""",
-                              (cid, tid, _ai_uid(), ai_name, text, "[]", now))
+                              (cid, tid, _ai_uid(), ai_name, text, images, now))
                     c.commit()
                     # 通知歌曲上传者（AI 评论了你的歌曲）
                     owner_id, owner_title = _track_owner(c, tid)

@@ -216,6 +216,12 @@ HOT_WORDS_TIMEOUT = _cfg_int("hot_words_timeout", "MUSIC_HOT_WORDS_TIMEOUT", 8)
 HOT_WORDS_LIMIT = _cfg_int("hot_words_limit", "MUSIC_HOT_WORDS_LIMIT", 20)   # 注入的最大热词条数
 HOT_WORDS_MATCH = _cfg_int("hot_words_match", "MUSIC_HOT_WORDS_MATCH", 3)    # 按歌曲匹配出的热梗上限
 
+# ---------------- AI 评论表情包（随机表情包 API → 下载本地 → 图片评论） ----------------
+MEME_ENDPOINT = _cfg_str("meme_endpoint", "MUSIC_MEME_ENDPOINT", "https://meme-api.com/gimme")
+MEME_PROB_PCT = _cfg_int("meme_prob", "MUSIC_MEME_PROB", 30)      # AI 评论附带表情包概率（百分比），默认 30%
+MEME_TIMEOUT = _cfg_int("meme_timeout", "MUSIC_MEME_TIMEOUT", 10)
+MEME_MAX_BYTES = _cfg_int("meme_max_bytes", "MUSIC_MEME_MAX_BYTES", 6 * 1024 * 1024)
+
 # ---------------- 汽水音乐分享解析 UA ----------------
 
 QISHUI_SHARE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
