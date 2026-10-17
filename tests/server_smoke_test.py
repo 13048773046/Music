@@ -686,6 +686,56 @@ def run_all(port, root, strict_port, strict_root):
     s, body, _ = req("POST", f"/api/play/{tid}", None, AUTH)
     check("S1: 上传歌播放仍返回 playCount", s == 200 and json.loads(body).get("playCount", 0) >= 1, body[:100])
 
+    print("== 24. 天气×时段心情场景（M2）==")
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from server.recommend import _scene_for, _fetch_weather
+    check("深夜(23点)→深夜陪伴", _scene_for(None, None, 23).get("key") == "night")
+    check("凌晨(2点)→深夜陪伴", _scene_for(None, None, 2).get("key") == "night")
+    check("雨天(61,20,14点)→雨天治愈", _scene_for(61, 20, 14).get("key") == "rain")
+    check("雪天(71,-5,12点)→冬日暖歌", _scene_for(71, -5, 12).get("key") == "snow")
+    check("酷热(0,35,15点)→夏日清凉", _scene_for(0, 35, 15).get("key") == "hot")
+    check("严寒(0,2,15点)→冬日温暖", _scene_for(0, 2, 15).get("key") == "cold")
+    check("晴天清晨(0,22,9点)→元气清晨", _scene_for(0, 22, 9).get("key") == "clear_day_morning")
+    check("晴天傍晚(0,22,19点)→宁静傍晚", _scene_for(0, 22, 19).get("key") == "clear_day_evening")
+    check("阴天(45,10,12点)→阴天舒缓", _scene_for(45, 10, 12).get("key") == "cloudy")
+    check("无天气数据(白天)→按时段兜底", _scene_for(None, None, 14).get("key") == "clear_day_afternoon")
+    check("天气服务失败→返回None(降级)", _fetch_weather(None, None) is None)
+    check("非法坐标→返回None(降级)", _fetch_weather(999, 999) is None)
+    # 接口层：缺参/非法参数必须 {ok:false} 且 200（不 5xx，前端静默降级）
+    s, body, _ = req("GET", "/api/weather", headers=AUTH)
+    w = json.loads(body)
+    check("weather 缺参数 → {ok:false}（不5xx）", s == 200 and w.get("ok") is False, body[:100])
+    s, body, _ = req("GET", "/api/weather?lat=999&lng=999", headers=AUTH)
+    w = json.loads(body)
+    check("weather 非法坐标 → {ok:false}（不5xx）", s == 200 and w.get("ok") is False, body[:100])
+    s, body, _ = req("GET", "/api/recommend?lat=31.23&lng=121.47&hour=14", headers=AUTH)
+    rl = json.loads(body)
+    check("recommend 带天气参数 → 正常返回列表（天气不可用静默降级）",
+          s == 200 and isinstance(rl, list), body[:100])
+    # 融合排序断言：应景歌吃个性化吻合分——常听歌手的雨歌排在普通雨歌前面
+    import random
+    conn1 = sqlite3.connect(db_path)
+    _now2 = time.time()
+    for rid, ttl, art, alb, g in [
+        ("scene_a", "雨天 温柔版", "测试歌手", "雨专辑", "流行"),
+        ("scene_b", "雨中漫步", "隔壁歌手", "雨专辑2", "流行"),
+    ]:
+        conn1.execute("INSERT OR IGNORE INTO collected_tracks"
+            "(id,title,artist,album,cover,duration,source,source_id,play_url,size,created,"
+            "user_id,play_count,like_count,share_count,lrc,offline,genre)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (rid, ttl, art, alb, "", 200, "smoke24", rid + "-1", rid + ".mp3", 0, _now2,
+             "rec_owner", 0, 0, 0, "", 0, g))
+    conn1.commit()
+    from server.recommend import build_recommendations as _br
+    scene_rain = {"key": "rain", "label": "雨天治愈", "kw": ["雨", "下雨", "rain", "治愈", "温柔"]}
+    pairs = _br(conn1, uid, rnd=random.Random("scene-test"), scene=scene_rain)
+    ids = [t for t, _ in pairs]
+    check("场景路: 雨歌进入推荐", "scene_a" in ids and "scene_b" in ids, f"ids={ids[:12]}")
+    check("融合排序: 常听歌手的雨歌排在前面", ids.index("scene_a") < ids.index("scene_b"),
+          f"ids={ids[:12]}")
+    conn1.close()
+
 
 if __name__ == "__main__":
     main()

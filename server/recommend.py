@@ -29,7 +29,7 @@ from server.config import *
 from server.database import db
 from server.common import *
 
-__all__ = ['_rec_age_weight', '_rec_next_seq', '_rec_pieces', '_rec_reason', '_rec_recent_pushed', '_rec_remember_pushed', '_rec_seq_lock', '_rec_seq_state', '_rec_sim', '_rec_title_key', '_rec_title_sim', 'build_recommendations']
+__all__ = ['_rec_age_weight', '_rec_next_seq', '_rec_pieces', '_rec_reason', '_rec_recent_pushed', '_rec_remember_pushed', '_rec_seq_lock', '_rec_seq_state', '_rec_sim', '_rec_title_key', '_rec_title_sim', '_fetch_weather', '_scene_for', 'build_recommendations']
 
 def _rec_age_weight(age_days):
     """行为事件时间窗口权重：越近越重要（短期兴趣驱动实时推荐）
@@ -150,17 +150,109 @@ def _rec_title_sim(a, b):
 
 def _rec_reason(sources):
     """从召回来源集合推导推荐理由标签：按「可解释性」优先级取一路——
-    常听歌手 > 同风格 > 相似歌曲 > 新歌 > 热门 > 为你探索
+    常听歌手 > 同风格 > 相似歌曲 > 应景推荐 > 新歌 > 热门 > 为你探索
     （不用权重：行为相似路常因歌手关键词命中而覆盖歌手路，权重优先会让"常听歌手"几乎不出现）"""
     _labels = {"artist": "常听歌手", "genre": "同风格", "behavior": "相似歌曲",
-               "fresh": "新歌", "hot": "热门", "explore": "为你探索"}
-    for s in ("artist", "genre", "behavior", "fresh", "hot", "explore"):
+               "scene": "应景推荐", "fresh": "新歌", "hot": "热门", "explore": "为你探索"}
+    for s in ("artist", "genre", "behavior", "scene", "fresh", "hot", "explore"):
         if s in sources:
             return _labels[s]
     return "推荐"
 
 
-def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pushed=None):
+# ---------------- M2：天气×时段心情场景（个性化×场景双向融合） ----------------
+
+_WEATHER_CACHE = {}
+_WEATHER_CACHE_LOCK = threading.Lock()
+
+
+def _fetch_weather(lat, lng):
+    """调 Open-Meteo 取当前天气（TTL 缓存 WEATHER_TTL 秒）。
+    失败/参数无效返回 None，绝不抛异常（前端静默降级，推荐照常）。"""
+    if lat is None or lng is None:
+        return None
+    try:
+        lat, lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return None
+    key = "%.3f,%.3f" % (lat, lng)
+    now = time.time()
+    with _WEATHER_CACHE_LOCK:
+        hit = _WEATHER_CACHE.get(key)
+        if hit and now - hit[0] < WEATHER_TTL:
+            return hit[1]
+        if len(_WEATHER_CACHE) > 2000:
+            _WEATHER_CACHE.clear()
+    try:
+        url = ("%s?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code"
+               "&timezone=auto" % (WEATHER_ENDPOINT, lat, lng))
+        req = urllib.request.Request(url, headers={"User-Agent": "LiuyingMusic/1.0"})
+        with urllib.request.urlopen(req, timeout=WEATHER_TIMEOUT) as r:
+            data = json.loads(r.read().decode("utf-8", "ignore"))
+        cur = (data or {}).get("current") or {}
+        out = {"temp": cur.get("temperature_2m"), "code": cur.get("weather_code")}
+        with _WEATHER_CACHE_LOCK:
+            _WEATHER_CACHE[key] = (now, out)
+        return out
+    except Exception:
+        return None
+
+
+def _hour_band(hour):
+    """晴天按时段选场景：清晨 / 午后 / 傍晚"""
+    if 5 <= hour < 11:
+        return "clear_day_morning"
+    if 11 <= hour < 18:
+        return "clear_day_afternoon"
+    return "clear_day_evening"
+
+
+_SCENES = {
+    "rain":  {"key": "rain",  "label": "雨天治愈", "kw": ["雨", "下雨", "rain", "治愈", "温柔"]},
+    "snow":  {"key": "snow",  "label": "冬日暖歌", "kw": ["雪", "冬天", "圣诞", "温暖"]},
+    "hot":   {"key": "hot",   "label": "夏日清凉", "kw": ["夏天", "夏日", "清凉", "海风"]},
+    "cold":  {"key": "cold",  "label": "冬日温暖", "kw": ["冷", "冬天", "温暖", "炉火"]},
+    "clear_day_morning":   {"key": "clear_day_morning",   "label": "元气清晨", "kw": ["清晨", "早安", "morning", "元气", "阳光"]},
+    "clear_day_afternoon": {"key": "clear_day_afternoon", "label": "午后阳光", "kw": ["午后", "下午", "阳光", "温柔", "咖啡"]},
+    "clear_day_evening":   {"key": "clear_day_evening",   "label": "宁静傍晚", "kw": ["傍晚", "黄昏", "日落", "夕阳"]},
+    "night": {"key": "night", "label": "深夜陪伴", "kw": ["深夜", "晚安", "陪伴", "安静", "星空"]},
+    "cloudy": {"key": "cloudy", "label": "阴天舒缓", "kw": ["阴", "cloudy", "舒缓", "慢"]},
+}
+
+
+def _scene_for(code, temp, hour=None):
+    """天气条件 × 时段 → 心情场景（返回 {key,label,kw} 副本）。
+    深夜（22 点-5 点）优先"深夜陪伴"；无天气数据时按时段兜底；输入无效返回 None。"""
+    hour = max(0, min(23, int(hour if hour is not None else time.localtime().tm_hour)))
+    if hour >= 22 or hour < 5:
+        return dict(_SCENES["night"])
+    if code is None:
+        return dict(_SCENES[_hour_band(hour)])
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return dict(_SCENES[_hour_band(hour)])
+    if 51 <= code <= 67 or 80 <= code <= 82 or 95 <= code <= 99:   # 毛毛雨/雨/阵雨/雷暴
+        return dict(_SCENES["rain"])
+    if code in (71, 73, 75, 77, 85, 86):                            # 雪
+        return dict(_SCENES["snow"])
+    if temp is not None:
+        try:
+            temp = float(temp)
+            if temp >= 30:
+                return dict(_SCENES["hot"])
+            if temp <= 5:
+                return dict(_SCENES["cold"])
+        except (TypeError, ValueError):
+            pass
+    if code <= 3:                                                   # 晴/少云/多云 → 按时段
+        return dict(_SCENES[_hour_band(hour)])
+    return dict(_SCENES["cloudy"])                                  # 阴/雾/其他 → 阴天舒缓
+
+
+def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pushed=None, scene=None):
     """多路召回 → 加权融合 → MMR 重排，返回推荐 (歌曲id, 推荐理由) 列表（≤20，去重、排除本人上传与 exclude）。
 
     exclude: 已推荐过的歌曲 id 集合（推荐流无限续推时防重复推荐同一批）。
@@ -170,6 +262,10 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
          同一时间桶内的主批稳定可复现，会话内连续获取轮换不同批；
          不传时回退全局 random（兼容直接调用场景）。
     pushed: 3 小时内已推送过的歌曲 id 集合——本次推荐直接排除，不重复推送。
+    scene: 天气×时段心情场景 {key,label,kw}（M2）——场景路召回 + 个性化×场景双向融合：
+           应景歌吃吻合分（常听歌手/常听风格/行为关键词 ×REC_SCENE_PROFILE），
+           已进候选的近期爱听歌若含场景关键词则加权前移（×REC_SCENE_BOOST）。
+           None/无效时整路静默跳过（推荐照常，向后兼容）。
     viewer_id 为空/未登录时：无行为画像，走「热度 + 新歌 + 随机探索」三路兜底。
     """
     now = time.time()
@@ -422,6 +518,44 @@ def build_recommendations(c, viewer_id, exclude=None, fresh=False, rnd=None, pus
         if rid in cand or rid in avoid:
             continue
         _add(rid, w_explore, "explore", rartist, ralbum, rtitle, rgenre)
+
+    # ---------- 路 7：天气×时段心情场景召回（M2，个性化×场景双向融合） ----------
+    # 场景上下文由 handler 层天气+时段生成（失败为 None → 整路静默跳过，推荐照常）。
+    # 融合语义（用户已确认）：不是"纯应景歌单"，而是——
+    #   ① 应景歌也吃个性化吻合分（常听歌手/常听风格/行为关键词 × REC_SCENE_PROFILE），
+    #      保证"你喜欢的雨歌"排在"随便一首雨歌"前面；
+    #   ② 你近期爱听的歌若与场景吻合，整体前移（× REC_SCENE_BOOST）。
+    if scene and scene.get("kw"):
+        _skw = list(scene["kw"])[:6]
+        for kw in _skw:
+            like = "%" + kw + "%"
+            for rid, rtitle, rartist, ralbum, rgenre in _rows(
+                    "(title LIKE ? OR artist LIKE ? OR album LIKE ?)", [like, like, like],
+                    REC_LIMITS["scene"]):
+                sc = REC_WEIGHTS["scene"] * REC_SCENE_BOOST
+                # 吻合分：常听歌手
+                if rartist and artist_hist.get(rartist):
+                    sc += artist_hist[rartist] * REC_SCENE_PROFILE
+                # 吻合分：常听风格
+                if rgenre:
+                    for _g in rgenre.split(","):
+                        _g = _g.strip()
+                        if genre_set.get(_g):
+                            sc += genre_set[_g] * REC_SCENE_PROFILE
+                            break
+                # 吻合分：行为关键词（歌名/歌手命中用户近期搜索或常听关键词）
+                for _k, _ksc in dedup[:8]:
+                    if _k.lower() in (rtitle or "").lower() or _k.lower() in (rartist or "").lower():
+                        sc += _ksc * REC_SCENE_PROFILE
+                        break
+                _add(rid, sc, "scene", rartist, ralbum, rtitle, rgenre)
+        # 近期爱听歌场景前移：已进候选（行为/歌手/风格等路）的歌若含场景关键词，加权并挂场景标签
+        _boost = REC_WEIGHTS["scene"] * REC_SCENE_BOOST
+        for tid, it in list(cand.items()):
+            _t = ((it["title"] or "") + " " + (it["artist"] or "")).lower()
+            if any(k.lower() in _t for k in _skw):
+                it["score"] += _boost
+                it["sources"].add("scene")
 
     # ---------- MMR 重排（相关分 − 与已选歌的相似度；同歌手/同风格设上限） ----------
     pool = [(tid, it) for tid, it in cand.items()]

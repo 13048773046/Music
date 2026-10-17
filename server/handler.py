@@ -1136,6 +1136,35 @@ class H(BaseHTTPRequestHandler):
                 self._json(200, {"list": [{"id": r[0], "content": r[1], "created": r[2], "sender": r[3]} for r in rows]})
                 return
 
+            # 天气×心情场景快照（M2）：前端"今日心情卡片"用；失败返回 {ok:false}，绝不 5xx（前端静默降级）
+            if u.path == "/api/weather":
+                if not rate_limit(self, "weather"):
+                    self._err(429, "请求过于频繁，请稍后再试")
+                    return
+                qs = urllib.parse.parse_qs(u.query)
+                try:
+                    _lat_s = (qs.get("lat", [""])[0] or "").strip()
+                    _lng_s = (qs.get("lng", [""])[0] or "").strip()
+                    if not _lat_s or not _lng_s:
+                        self._json(200, {"ok": False, "error": "missing lat/lng"})
+                        return
+                    _lat, _lng = float(_lat_s), float(_lng_s)
+                    _hour_s = (qs.get("hour", [""])[0] or "").strip()
+                    _hour = int(_hour_s) if _hour_s.isdigit() and 0 <= int(_hour_s) <= 23 else None
+                    _wx = _fetch_weather(_lat, _lng)
+                    if not _wx:
+                        self._json(200, {"ok": False, "error": "weather unavailable"})
+                        return
+                    _scene = _scene_for(_wx.get("code"), _wx.get("temp"), _hour)
+                    self._json(200, {"ok": True,
+                                     "temp": _wx.get("temp"), "code": _wx.get("code"),
+                                     "hour": _hour if _hour is not None else int(time.localtime().tm_hour),
+                                     "scene": _scene.get("key") if _scene else None,
+                                     "sceneLabel": _scene.get("label") if _scene else None})
+                except Exception:
+                    self._json(200, {"ok": False, "error": "invalid params"})
+                return
+
             if u.path == "/api/recommend":
                 if not rate_limit(self, "recommend"):
                     self._err(429, "请求过于频繁，请稍后再试")
@@ -1157,6 +1186,21 @@ class H(BaseHTTPRequestHandler):
                 # 不排除已推歌也不记录本次推送（去重只对播放页首页推荐流生效）
                 _source = (qs.get("source", [""])[0] or "").strip()
                 _now = time.time()
+                # M2 场景上下文：前端传 lat/lng（可选 hour）→ 取天气（TTL 缓存）+ 时段 → 心情场景。
+                # 任何异常/缺参 → scene=None（静默降级，推荐照常，不影响主流程）
+                _scene = None
+                try:
+                    _lat_s = (qs.get("lat", [""])[0] or "").strip()
+                    _lng_s = (qs.get("lng", [""])[0] or "").strip()
+                    _hour_s = (qs.get("hour", [""])[0] or "").strip()
+                    if _lat_s and _lng_s:
+                        _lat, _lng = float(_lat_s), float(_lng_s)
+                        _hour = int(_hour_s) if _hour_s.isdigit() and 0 <= int(_hour_s) <= 23 else None
+                        _wx = _fetch_weather(_lat, _lng)
+                        _scene = _scene_for(_wx.get("code") if _wx else None,
+                                            _wx.get("temp") if _wx else None, _hour)
+                except Exception:
+                    _scene = None
                 # 3 小时推送去重：取该用户 3 小时内已推送过的歌，本次不再推送
                 # （仅播放页首页推荐流；发现页猜你喜欢不受限）
                 _pushed = set()
@@ -1169,7 +1213,7 @@ class H(BaseHTTPRequestHandler):
                          viewer_id or "-", _bucket, _seq, _fresh, len(_pushed))
                 # 多路召回 + 加权融合 + MMR 重排（算法见 build_recommendations）
                 rec_pairs = build_recommendations(c, viewer_id, exclude=_excl, fresh=_fresh, rnd=_rnd,
-                                                  pushed=_pushed)
+                                                  pushed=_pushed, scene=_scene)
                 chosen = [tid for tid, _ in rec_pairs]
                 reason_map = dict(rec_pairs)
                 if not chosen:

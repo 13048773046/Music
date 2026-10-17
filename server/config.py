@@ -237,3 +237,15 @@ REC_PUSH_WINDOW = int(os.environ.get("MUSIC_REC_PUSH_WINDOW", str(24 * 3600)))
 # 用户最近 N 天内听完成分 ≥ 阈值的歌，视为"已听过"，长期不再重复推荐（只推没听过的新内容）
 REC_REPLAY_DAYS = int(os.environ.get("MUSIC_REC_REPLAY_DAYS", "30"))
 REC_REPLAY_FRACTION_MIN = float(os.environ.get("MUSIC_REC_REPLAY_FRAC", "0.5"))
+
+# ---------------- 天气×时段心情场景推荐参数（M2） ----------------
+# 默认 Open-Meteo（免费、无需 key）；备选和风天气需用户自备 key 时替换 endpoint
+WEATHER_ENDPOINT = _cfg_str("weather_endpoint", "MUSIC_WEATHER_ENDPOINT",
+                            "https://api.open-meteo.com/v1/forecast")
+WEATHER_TTL = int(os.environ.get("MUSIC_WEATHER_TTL", "1800"))     # 天气缓存 30 分钟
+WEATHER_TIMEOUT = 10                                                # 出站请求超时 10s
+# 场景路权重与融合系数（方案 §3.5：个性化×场景双向融合）
+REC_WEIGHTS["scene"] = float(os.environ.get("MUSIC_REC_W_SCENE", "2.0"))
+REC_LIMITS["scene"] = 25
+REC_SCENE_BOOST = float(os.environ.get("MUSIC_REC_SCENE_BOOST", "1.5"))     # 场景加权倍数（近期爱听歌场景前移）
+REC_SCENE_PROFILE = float(os.environ.get("MUSIC_REC_SCENE_PROFILE", "0.5")) # 应景歌吃个性化分的系数（吻合加权）
