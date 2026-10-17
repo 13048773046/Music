@@ -1,130 +1,650 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0b0b0d">
-<title>流萤音乐 · 为你而选的好音乐</title>
-<meta name="description" content="流萤音乐：个性化推荐、流式播放不等待、逐字歌词跟着唱。">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0A0A0E">
+<title>流萤音乐 · 好听的不止一首</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-:root{--bg:#0b0b0d;--fg:#f5f5f5;--sub:#8e8e93;--line:#262629;--blue:#2a6df4}
-html,body{background:var(--bg);color:var(--fg);
-font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
-min-height:100vh;-webkit-font-smoothing:antialiased}
-.wrap{max-width:720px;margin:0 auto;padding:0 22px;min-height:100vh;display:flex;flex-direction:column}
-.hero{flex:1;display:flex;flex-direction:column;justify-content:center;padding:70px 0 40px;text-align:center}
-.logo{font-size:56px;line-height:1}
-h1{font-size:34px;font-weight:800;margin-top:22px;letter-spacing:1px}
-.slogan{font-size:16px;color:var(--sub);margin-top:16px;line-height:1.7}
-.feats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:40px 0 8px}
-.feat{background:#17171a;border:1px solid var(--line);border-radius:14px;padding:18px 10px}
-.feat .ico{font-size:24px}.feat .t{font-size:13px;margin-top:10px;font-weight:600}
-.feat .d{font-size:11.5px;color:var(--sub);margin-top:5px;line-height:1.5}
-.dl{margin-top:38px;display:flex;flex-direction:column;gap:12px}
-.btn{display:block;width:100%;padding:16px;border-radius:14px;font-size:16px;font-weight:600;
-text-decoration:none;text-align:center}
-.btn.ios{background:var(--fg);color:#0b0b0d}
-.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
-.soon{font-size:12px;color:var(--sub);margin-top:10px}
-footer{padding:26px 0 calc(28px + env(safe-area-inset-bottom));text-align:center;font-size:12px;color:#5a5a60}
-footer a{color:var(--sub);text-decoration:none;margin:0 8px}
-/* 官网轮播图（后台「网站管理」动态管理，数量不固定；无图时整块隐藏） */
-.banners{display:none;position:relative;width:100%;margin:34px 0 6px;border-radius:16px;overflow:hidden;background:#141417;border:1px solid var(--line)}
-.banners.on{display:block}
-.b-track{display:flex;transition:transform .5s ease}
-.b-track img{width:100%;flex-shrink:0;display:block;aspect-ratio:16/7;object-fit:cover}
-.b-caption{position:absolute;left:0;right:0;bottom:0;padding:34px 16px 12px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.72));color:#fff;font-size:14px;font-weight:600;text-align:left;pointer-events:none}
-.b-dots{position:absolute;left:0;right:0;bottom:8px;display:flex;justify-content:center;gap:6px}
-.b-dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.38);cursor:pointer;transition:background .3s}
-.b-dots i.on{background:#fff}
-@media(max-width:420px){h1{font-size:28px}.feats{grid-template-columns:1fr}}
+/* ============ 设计系统 ============ */
+:root {
+    --bg: #0A0A0E;
+    --surface: #121218;
+    --surface-2: #17171F;
+    --border: rgba(255,255,255,.08);
+    --border-strong: rgba(255,255,255,.14);
+    --text: #F2F2F5;
+    --text-2: #A0A0AB;
+    --text-3: #63636E;
+    --accent: #4CD9A5;
+    --accent-dim: rgba(76,217,165,.12);
+    --accent-2: #8F84C7;
+    --radius: 14px;
+    --radius-lg: 22px;
+    --max: 1160px;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; }
+body {
+    font-family: var(--font); background: var(--bg); color: var(--text);
+    overflow-x: hidden; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+a { text-decoration: none; color: inherit; }
+img { display: block; }
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 28px; position: relative; z-index: 1; }
+
+/* 背景：细微网格 + 光晕（克制） */
+.bg-grid {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+        linear-gradient(rgba(255,255,255,.014) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.014) 1px, transparent 1px);
+    background-size: 64px 64px;
+    -webkit-mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 0%, transparent 75%);
+    mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 0%, transparent 75%);
+}
+.glow {
+    position: fixed; border-radius: 50%; filter: blur(130px); z-index: 0; pointer-events: none; opacity: .22;
+}
+.glow-1 { width: 560px; height: 560px; background: rgba(76,217,165,.05); top: -220px; right: -140px; }
+.glow-2 { width: 480px; height: 480px; background: rgba(143,132,199,.045); bottom: -160px; left: -180px; }
+
+/* ============ 导航 ============ */
+nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(10,10,14,.72); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border);
+}
+.nav-in { max-width: var(--max); margin: 0 auto; padding: 0 28px; height: 64px;
+    display: flex; align-items: center; justify-content: space-between; }
+.logo { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.logo-mark {
+    width: 34px; height: 34px; border-radius: 10px; overflow: hidden; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), #2FA57C);
+    box-shadow: 0 6px 22px rgba(76,217,165,.35), inset 0 1px 0 rgba(255,255,255,.25);
+    display: flex; align-items: center; justify-content: center;
+}
+.logo-mark img { width: 100%; height: 100%; border-radius: 10px; object-fit: cover; display: block; }
+.logo-mark svg { width: 18px; height: 18px; fill: #0A0A0E; }
+.nav-links { display: flex; gap: 32px; font-size: 14px; color: var(--text-2); }
+.nav-links a { position: relative; padding: 4px 0; transition: color .2s; }
+.nav-links a:hover, .nav-links a.active { color: var(--text); }
+.nav-links a.active::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px;
+    border-radius: 2px; background: var(--accent);
+}
+@media (max-width: 640px) {
+    .nav-links { gap: 20px; font-size: 13px; }
+}
+
+/* ============ Hero ============ */
+.hero { padding: 120px 0 72px; text-align: center; }
+.hero .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--accent); letter-spacing: .06em; font-weight: 600;
+    background: var(--accent-dim); border: 1px solid rgba(76,217,165,.22);
+    padding: 7px 16px; border-radius: 999px; margin-bottom: 30px;
+}
+.hero .eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.hero h1 {
+    font-size: clamp(52px, 9vw, 96px); font-weight: 800; letter-spacing: -.045em;
+    line-height: 1.02; margin-bottom: 26px;
+}
+.hero h1 .grad {
+    background: linear-gradient(100deg, var(--accent) 0%, #7AB8D9 50%, var(--accent-2) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.hero .sub { font-size: clamp(15px, 2vw, 18px); color: var(--text-2); max-width: 560px; margin: 0 auto 44px; }
+.dl-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.dl {
+    display: inline-flex; align-items: center; gap: 12px;
+    padding: 15px 32px; border-radius: 14px; font-weight: 600; font-size: 15px;
+    transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease;
+}
+.dl:active { transform: scale(.97); }
+.dl svg { width: 21px; height: 21px; fill: currentColor; }
+.dl-meta { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.dl-meta small { font-size: 10px; opacity: .65; font-weight: 500; letter-spacing: .02em; }
+.dl-ios {
+    background: var(--text); color: #0A0A0E;
+    box-shadow: 0 10px 34px rgba(242,242,245,.14);
+}
+.dl-ios:hover { transform: translateY(-2px); box-shadow: 0 16px 44px rgba(242,242,245,.2); }
+.dl-android {
+    background: linear-gradient(135deg, var(--accent), #35B587); color: #06281C;
+    box-shadow: 0 10px 34px rgba(76,217,165,.32);
+}
+.dl-android:hover { transform: translateY(-2px); box-shadow: 0 16px 48px rgba(76,217,165,.45); }
+@media (hover: none) { .dl:hover { transform: none; } }
+
+/* ============ 轮播 ============ */
+.shots { margin: 64px 0 0; overflow: hidden; position: relative; padding: 8px 0 16px; }
+.shots::before {
+    content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+    background: linear-gradient(90deg, var(--bg) 0%, rgba(10,10,14,0) 10%, rgba(10,10,14,0) 90%, var(--bg) 100%);
+}
+.shots.hidden { display: none; }
+.shots-track { display: flex; align-items: flex-start; gap: 30px; width: max-content; padding: 12px 0;
+    animation: scroll 14s linear infinite; cursor: grab; }
+.shots:active .shots-track { cursor: grabbing; }
+.shots:hover .shots-track { animation-play-state: paused; }
+@keyframes scroll { from { transform: translate3d(0,0,0); } to { transform: translate3d(-50%,0,0); } }
+.shot-card {
+    width: min(248px, 56vw); aspect-ratio: 9 / 19.5; border-radius: 34px;
+    background: #000; border: 1px solid var(--border-strong); overflow: hidden; flex-shrink: 0;
+    box-shadow: 0 34px 80px rgba(0,0,0,.6), 0 0 0 7px #16161D, 0 0 0 8px var(--border);
+    position: relative; display: block;
+}
+.shot-card img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.shot-meta { text-align: center; margin-top: 14px; font-size: 13px; color: var(--text-3); font-weight: 600; max-width: 248px; }
+.shot-meta b { color: var(--text-2); }
+
+/* ============ 数字条 ============ */
+.stats {
+    display: flex; justify-content: center; align-items: stretch; flex-wrap: wrap;
+    padding: 96px 0 24px;
+}
+.stat { text-align: center; padding: 12px 44px; border-right: 1px solid var(--border); }
+.stat:last-child { border-right: none; }
+.stat .num { font-size: 34px; font-weight: 800; letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat .num em { color: var(--accent); font-style: normal; }
+.stat .lbl { font-size: 12.5px; color: var(--text-3); margin-top: 4px; letter-spacing: .02em; }
+@media (max-width: 720px) {
+    .stat { padding: 10px 22px; }
+    .stat:nth-child(2) { border-right: none; }
+}
+
+/* ============ 区块通用 ============ */
+section { padding: 96px 0; }
+.sec-head { text-align: center; margin-bottom: 56px; }
+.sec-head .kicker {
+    font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: .14em;
+    text-transform: uppercase; margin-bottom: 14px;
+}
+.sec-head h2 { font-size: clamp(30px, 4.5vw, 46px); font-weight: 800; letter-spacing: -.03em; line-height: 1.15; }
+.sec-head p { color: var(--text-2); font-size: 15px; margin-top: 14px; max-width: 520px; margin-left: auto; margin-right: auto; }
+
+/* ============ 特性：两列网格 ============ */
+.features { padding-top: 72px; }
+.feat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+.feat {
+    background: linear-gradient(165deg, var(--surface), rgba(18,18,24,.4));
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 30px 30px 28px; transition: border-color .22s ease, transform .22s ease, background .22s ease;
+    position: relative; overflow: hidden;
+}
+.feat::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(76,217,165,.4), transparent);
+    opacity: 0; transition: opacity .22s ease;
+}
+.feat:hover { border-color: var(--border-strong); transform: translateY(-3px); background: linear-gradient(165deg, var(--surface-2), rgba(18,18,24,.5)); }
+.feat:hover::before { opacity: 1; }
+.feat .ic {
+    width: 42px; height: 42px; border-radius: 11px; margin-bottom: 18px;
+    background: var(--accent-dim); border: 1px solid rgba(76,217,165,.18);
+    display: flex; align-items: center; justify-content: center; color: var(--accent);
+}
+.feat .ic svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.feat h3 { font-size: 19px; font-weight: 700; margin-bottom: 7px; letter-spacing: -.01em; }
+.feat p { font-size: 14px; color: var(--text-2); line-height: 1.65; }
+.feat.wide { grid-column: 1 / -1; text-align: center; }
+.feat.wide .ic { margin-left: auto; margin-right: auto; }
+@media (max-width: 760px) { .feat-grid { grid-template-columns: 1fr; } .feat.wide { grid-column: auto; } }
+
+/* ============ 更新日志：时间线 ============ */
+.timeline { max-width: 760px; margin: 0 auto; position: relative; padding-left: 34px; }
+.timeline::before { content: ""; position: absolute; left: 7px; top: 8px; bottom: 8px; width: 1px; background: var(--border-strong); }
+.tl-item { position: relative; padding-bottom: 34px; }
+.tl-item:last-child { padding-bottom: 0; }
+.tl-item::before {
+    content: ""; position: absolute; left: -34px; top: 8px; width: 15px; height: 15px;
+    border-radius: 50%; background: var(--bg); border: 2px solid var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-dim);
+}
+.tl-item .date { font-size: 12.5px; color: var(--accent); font-weight: 700; letter-spacing: .06em; margin-bottom: 8px; }
+.tl-item h3 { font-size: 18px; font-weight: 700; margin-bottom: 5px; letter-spacing: -.01em; }
+.tl-item p { font-size: 14px; color: var(--text-2); }
+
+/* ============ AI 乐评人 ============ */
+.ai-card {
+    background: linear-gradient(135deg, rgba(76,217,165,.1), rgba(143,132,199,.1));
+    border: 1px solid rgba(76,217,165,.2); border-radius: 26px;
+    padding: 64px 40px; text-align: center; position: relative; overflow: hidden;
+}
+.ai-card::after {
+    content: ""; position: absolute; width: 380px; height: 380px; border-radius: 50%;
+    background: rgba(143,132,199,.14); filter: blur(90px); bottom: -160px; left: 50%; transform: translateX(-50%);
+}
+.ai-avatar {
+    width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 22px; position: relative; z-index: 1;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 14px 44px rgba(76,217,165,.4);
+}
+.ai-avatar svg { width: 32px; height: 32px; fill: #0A0A0E; }
+.ai-card h2 { font-size: clamp(26px, 4vw, 36px); font-weight: 800; letter-spacing: -.02em; margin-bottom: 14px; position: relative; z-index: 1; }
+.ai-card p { color: var(--text-2); max-width: 560px; margin: 0 auto; font-size: 15px; position: relative; z-index: 1; }
+.ai-tags { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 26px; position: relative; z-index: 1; }
+.ai-tags span {
+    font-size: 12.5px; color: var(--text); background: rgba(255,255,255,.06);
+    border: 1px solid var(--border-strong); border-radius: 999px; padding: 7px 16px;
+}
+
+/* ============ 三步 ============ */
+.steps { padding-top: 0; }
+.step-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.step {
+    border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 30px;
+    background: var(--surface);
+}
+.step .n {
+    font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 16px;
+    color: rgba(76,217,165,.55);
+}
+@supports (-webkit-text-stroke: 1px black) {
+    .step .n { color: transparent; -webkit-text-stroke: 1.4px rgba(76,217,165,.55); }
+}
+.step h3 { font-size: 17px; font-weight: 700; margin-bottom: 7px; }
+.step p { font-size: 13.5px; color: var(--text-2); line-height: 1.65; }
+@media (max-width: 760px) { .step-grid { grid-template-columns: 1fr; } }
+
+/* ============ CTA ============ */
+.cta-inner {
+    position: relative; overflow: hidden; text-align: center;
+    background: linear-gradient(135deg, #101F19, #16131F);
+    border: 1px solid rgba(76,217,165,.24); border-radius: 28px; padding: 72px 30px;
+}
+.cta-inner::before {
+    content: ""; position: absolute; width: 340px; height: 340px; border-radius: 50%;
+    background: rgba(76,217,165,.13); filter: blur(90px); top: -120px; right: -80px;
+}
+.cta-inner h2 { font-size: clamp(28px, 4vw, 42px); font-weight: 800; letter-spacing: -.03em; position: relative; z-index: 1; }
+.cta-inner p { color: var(--text-2); margin: 12px 0 34px; position: relative; z-index: 1; }
+.cta-inner .dl-row { position: relative; z-index: 1; }
+
+/* ============ Footer ============ */
+footer { text-align: center; padding: 44px 0 60px; color: var(--text-3); font-size: 13px; border-top: 1px solid var(--border); }
+footer .f-brand { color: var(--text-2); font-weight: 600; }
+
+/* ============ 二维码弹窗 ============ */
+.qr-modal { position: fixed; inset: 0; z-index: 99; background: rgba(0,0,0,.66);
+    display: flex; align-items: center; justify-content: center; padding: 24px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.qr-modal.hidden { display: none; }
+.qr-box {
+    background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 22px;
+    padding: 32px; text-align: center; max-width: 320px; width: 100%;
+    box-shadow: 0 40px 100px rgba(0,0,0,.6);
+    animation: qrIn .22s ease;
+}
+@keyframes qrIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+.qr-box h3 { margin-bottom: 18px; font-size: 18px; font-weight: 700; }
+.qr-canvas { width: 216px; height: 216px; margin: 0 auto 16px; background: #fff;
+    border-radius: 12px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.qr-canvas canvas, .qr-canvas img { display: block; }
+.qr-tip { font-size: 13px; color: var(--text-3); margin-bottom: 18px; }
+.qr-close { padding: 9px 28px; border: 0; border-radius: 10px; background: var(--border-strong); color: var(--text);
+    font-size: 14px; cursor: pointer; transition: background .2s; }
+.qr-close:hover { background: rgba(255,255,255,.22); }
+@media (max-width: 640px) { .qr-box { max-width: 280px; padding: 26px; } }
+
+/* ============ 滚动入场（防御式：内容默认可见，动画只是增强；IO 异常/JS 失败都不会隐藏内容） ============ */
+.reveal { opacity: 1; transform: none; }
+.reveal.pending { opacity: 0; transform: translateY(22px); transition: opacity .65s ease, transform .65s ease; }
+.reveal.pending.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+    .reveal.pending { opacity: 1; transform: none; transition: none; }
+    html { scroll-behavior: auto; }
+}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <section class="hero">
-    <div class="logo">&#9835;</div>
-    <h1>流萤音乐</h1>
-    <p class="slogan">为你精心挑选的音乐<br>流式播放不等待，逐字歌词跟着唱</p>
+<div class="bg-grid"></div>
+<div class="glow glow-1"></div>
+<div class="glow glow-2"></div>
 
-    <div class="banners" id="banners">
-      <div class="b-track" id="bTrack"></div>
-      <div class="b-caption" id="bCap"></div>
-      <div class="b-dots" id="bDots"></div>
+<nav>
+    <div class="nav-in">
+        <div class="logo">
+            <div class="logo-mark"><img src="logo.png" alt="流萤音乐" id="logoImg"></div>
+            <span id="navSiteName">流萤音乐</span>
+        </div>
+        <div class="nav-links">
+            <a href="#features">特性</a>
+            <a href="#updates">更新</a>
+            <a href="#steps">使用</a>
+            <a href="#download">下载</a>
+        </div>
     </div>
+</nav>
 
-    <div class="feats">
-      <div class="feat"><div class="ico">&#127925;</div><div class="t">个性推荐</div><div class="d">懂你的口味，每次打开都有新惊喜</div></div>
-      <div class="feat"><div class="ico">&#9889;</div><div class="t">秒开播放</div><div class="d">音频流式加载，预缓存切歌不等待</div></div>
-      <div class="feat"><div class="ico">&#128214;</div><div class="t">逐字歌词</div><div class="d">跟随节拍高亮，沉浸式跟唱</div></div>
+<section class="hero" id="download">
+    <div class="wrap">
+        <div class="eyebrow" id="heroEyebrow">流式播放 · 逐字歌词 · 个性推荐</div>
+        <h1>好听的不止一首<br><span class="grad">流萤都懂你</span></h1>
+        <p class="sub" id="heroSub">为你精心挑选的音乐，懂天气、懂时段、更懂你。流式播放不等待，逐字歌词跟着唱。</p>
+        <div class="dl-row" id="dlRow"></div>
     </div>
+</section>
 
-    <div class="dl">
-      <!-- 下载地址可在后台「站点配置」维护；此处为静态占位，部署后可替换 -->
-      <a class="btn ios" href="#" onclick="return false">下载 iOS 版</a>
-      <a class="btn ghost" href="/music/admin.html">管理后台</a>
-    </div>
-    <p class="soon">Android 版本即将上线</p>
-  </section>
-  <footer>
-    <div>© 流萤音乐 Liuying Music</div>
-    <div style="margin-top:8px">
-      <a href="/music/collect.html">音源采集</a>·<a href="/api/health">服务状态</a>
-    </div>
-  </footer>
+<!-- 轮播横滚带（后台「网站管理」动态管理，展示 App 界面，数量不限） -->
+<div class="shots" id="shots">
+    <div class="shots-track" id="shotsTrack"></div>
 </div>
+
+<div class="wrap">
+    <!-- 数字条 -->
+    <div class="stats reveal">
+        <div class="stat"><div class="num"><em id="statTracks">—</em></div><div class="lbl">在线歌曲</div></div>
+        <div class="stat"><div class="num"><em>逐字</em></div><div class="lbl">卡拉OK歌词</div></div>
+        <div class="stat"><div class="num"><em>5 路</em></div><div class="lbl">个性推荐召回</div></div>
+        <div class="stat"><div class="num"><em>206</em></div><div class="lbl">流式分片播放</div></div>
+    </div>
+</div>
+
+<!-- 特性 -->
+<section class="features" id="features">
+    <div class="wrap">
+        <div class="sec-head reveal">
+            <div class="kicker">Features</div>
+            <h2>为什么选择流萤</h2>
+            <p>每一个细节都为听歌体验打磨</p>
+        </div>
+        <div class="feat-grid">
+            <div class="feat reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h10M4 17.5h7"/></svg></div>
+                <h3>逐字卡拉OK歌词</h3>
+                <p>每个字独立时间轴，跟着节奏逐字高亮，像 KTV 一样唱。</p>
+            </div>
+            <div class="feat reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 14h6L9.5 22 19 10h-6l1-8z"/></svg></div>
+                <h3>流式不等待</h3>
+                <p>音频边下边播，下一首提前预加载封面、歌词、主色调，切歌秒切。</p>
+            </div>
+            <div class="feat reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3.5 14.4 9l6 .8-4.5 4 1.2 6-5.1-2.9-5.1 2.9 1.2-6-4.5-4 6-.8L12 3.5z"/></svg></div>
+                <h3>个性推荐</h3>
+                <p>常听歌手、风格标签、听歌历史五路召回融合，越听越懂你。</p>
+            </div>
+            <div class="feat reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 9.5v5M8 6.5v11M12 4v16M16 7.5v9M20 10v4"/></svg></div>
+                <h3>音效引擎</h3>
+                <p>3D 环绕音效，蓝牙耳机插拔自动恢复，切后台不中断。</p>
+            </div>
+            <div class="feat reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.3 12.6 3.6 3.6 0 0 0 7 19h10.5z"/></svg></div>
+                <h3>天气 × 时段场景推荐</h3>
+                <p>雨天、深夜、清晨……场景不是替代你的口味，而是叠加在你常听的歌之上：应景的歌里，你喜欢的永远排前面。</p>
+            </div>
+            <div class="feat reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0M16.4 5.4a3.1 3.1 0 0 1 0 5.4M15.5 14.8a5.3 5.3 0 0 1 5 5.2"/></svg></div>
+                <h3>多账号一键切换</h3>
+                <p>本地保存多个账号，设置页随时切换，切换后歌单、收藏与推荐立即刷新。</p>
+            </div>
+            <div class="feat wide reveal">
+                <div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4.5 17.5 9 13l2.5 2.3L14 12.5l5.5 5"/></svg></div>
+                <h3>带图评论</h3>
+                <p>评论支持发布图片，配上此刻的截图或心情，和乐迷分享。</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 最近更新 -->
+<section class="updates" id="updates">
+    <div class="wrap">
+        <div class="sec-head reveal">
+            <div class="kicker">Changelog</div>
+            <h2>最近更新</h2>
+            <p>一直有在好好打磨</p>
+        </div>
+        <div class="timeline">
+            <div class="tl-item reveal">
+                <div class="date">2026.10</div>
+                <h3>AI 乐评人上线</h3>
+                <p>主动在热门歌曲下评论，实时追最新网络热梗，偶尔甩张表情包——你的歌被评论，可能就来自 TA。</p>
+            </div>
+            <div class="tl-item reveal">
+                <div class="date">2026.10</div>
+                <h3>天气 × 时段场景推荐</h3>
+                <p>雨天、深夜、清晨……应景的歌里，永远优先放你爱听的。</p>
+            </div>
+            <div class="tl-item reveal">
+                <div class="date">2026.10</div>
+                <h3>多账号切换 + 带图评论</h3>
+                <p>多账号本地保存一键切换；评论可以带上图片，分享此刻心情。</p>
+            </div>
+            <div class="tl-item reveal">
+                <div class="date">2026.10</div>
+                <h3>官网轮播图后台动态管理</h3>
+                <p>轮播图数量不限、后台直接上传管理，数据持久化存储，重开不丢失。</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- AI 乐评人 -->
+<section class="ai" id="ai">
+    <div class="wrap">
+        <div class="ai-card reveal">
+            <div class="ai-avatar"><svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg></div>
+            <h2>流萤 AI 乐评人</h2>
+            <p>一位住在流萤里的乐评人，会主动在你喜欢的歌曲下评论，接得住当下的网络热梗，也会用表情包跟你互动。它的名字、头像和签名，都可以在官网后台自定义。</p>
+            <div class="ai-tags">
+                <span>实时热梗</span><span>表情包互动</span><span>主动评论</span><span>形象可自定义</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 三步 -->
+<section class="steps" id="steps">
+    <div class="wrap">
+        <div class="sec-head reveal">
+            <div class="kicker">Getting Started</div>
+            <h2>三步开始听歌</h2>
+            <p>下载 → 安装 → 打开即听</p>
+        </div>
+        <div class="step-grid">
+            <div class="step reveal"><div class="n">01</div><h3>下载安装包</h3><p>点击上方对应平台按钮，下载 iOS 或 Android 安装包。</p></div>
+            <div class="step reveal"><div class="n">02</div><h3>信任开发者证书</h3><p>iOS 在「设置 - 通用 - VPN与设备管理」中信任证书后打开。</p></div>
+            <div class="step reveal"><div class="n">03</div><h3>开始听歌</h3><p>打开 App 自动注册账号，首页即是为你推荐的音乐。</p></div>
+        </div>
+    </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+    <div class="wrap">
+        <div class="cta-inner reveal">
+            <h2>现在就开始听</h2>
+            <p>好听的不止一首，流萤陪你度过每一段时光</p>
+            <div class="dl-row" id="dlRow2"></div>
+        </div>
+    </div>
+</section>
+
+<footer>
+    © <span id="footYear">2026</span> <span class="f-brand" id="footSiteName">流萤音乐</span> · www.dbmt999.asia
+</footer>
+
+<!-- 下载二维码弹窗（电脑端点击下载弹出，扫码打开对应平台下载页） -->
+<div class="qr-modal hidden" id="qrModal" onclick="if(event.target===this)hideQR()">
+    <div class="qr-box">
+        <h3 id="qrTitle">下载</h3>
+        <div class="qr-canvas" id="qrBox"></div>
+        <p class="qr-tip">用手机相机扫码，打开对应平台下载页</p>
+        <button class="qr-close" onclick="hideQR()">关闭</button>
+    </div>
+</div>
+
+<script src="qrcode.min.js"></script>
 <script>
-// 官网轮播图：从后端动态读取，数量由后台「网站管理」控制（不限张数），无图时自动隐藏
-(function(){
-  var box=document.getElementById('banners'),track=document.getElementById('bTrack'),
-      cap=document.getElementById('bCap'),dots=document.getElementById('bDots');
-  var idx=0,timer=null;
-  function go(n){
-    if(!track.children.length)return;
-    idx=(n+track.children.length)%track.children.length;
-    track.style.transform='translateX(-'+(idx*100)+'%)';
-    var b=window.__banners[idx];
-    cap.textContent=b&&b.title?b.title:'';
-    cap.style.display=b&&b.title?'block':'none';
-    var ds=dots.children;
-    for(var i=0;i<ds.length;i++)ds[i].className=i===idx?'on':'';
-  }
-  function start(){
-    if(timer)clearInterval(timer);
-    timer=setInterval(function(){go(idx+1)},4000);
-  }
-  fetch('/music/api/site-config').then(function(r){return r.json()}).then(function(c){
+// ---- 下载区：手机只显示对应平台并直接跳转，电脑两个都显示并弹二维码 ----
+function detectDevice(){
+    var ua=navigator.userAgent||'';
+    var isIPad=/Macintosh/i.test(ua)&&navigator.maxTouchPoints>1;
+    if(/android/i.test(ua))return 'android';
+    if(/iphone|ipod/i.test(ua)||isIPad)return 'ios';
+    return 'desktop';
+}
+var _IOS_URL='',_ANDROID_URL='';
+function dlBtnHtml(t,dev){
+    var url=(t==='ios'?(_IOS_URL||'https://www.dbmt999.asia/'):(_ANDROID_URL||'https://www.dbmt999.asia/'));
+    var inner=(t==='ios')?
+        '<svg viewBox="0 0 24 24"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8.98-.2 1.92-.88 3.23-.8 1.76.14 3.1.93 3.98 2.33-3.4 2.03-2.6 6.5.57 7.66-.64 1.6-1.46 2.68-2.86 3.98zM12 7.25c-.1-2.85 2.38-4.25 2.5-4.25.13 2.5-2.05 4.75-2.5 4.25z"/></svg>'+
+        '<div class="dl-meta"><small>Download on</small>App Store</div>'
+        :
+        '<svg viewBox="0 0 24 24"><path d="M17.523 15.341a1.045 1.045 0 0 1-1.048-1.043c0-.575.47-1.043 1.048-1.043.578 0 1.049.468 1.049 1.043 0 .575-.47 1.043-1.049 1.043m-11.046 0a1.045 1.045 0 0 1-1.049-1.043c0-.575.471-1.043 1.049-1.043.578 0 1.048.468 1.048 1.043 0 .575-.47 1.043-1.048 1.043m11.422-6.084l2.096-3.625a.434.434 0 0 0-.751-.434L17.12 8.875a13.068 13.068 0 0 0-10.24 0L4.756 5.198a.434.434 0 0 0-.751.434l2.096 3.625A11.895 11.895 0 0 0 .75 17.5h22.5a11.895 11.895 0 0 0-5.351-8.243"/></svg>'+
+        '<div class="dl-meta"><small>Get it on</small>Android</div>';
+    if(dev==='ios'||dev==='android'){
+        return '<a class="dl '+(t==='ios'?'dl-ios':'dl-android')+'" href="'+url+'" target="_blank" rel="noopener">'+inner+'</a>';
+    }
+    return '<a class="dl '+(t==='ios'?'dl-ios':'dl-android')+'" href="javascript:void(0)" onclick="showQR(\''+t+'\')">'+inner+'</a>';
+}
+function renderDownload(){
+    var dev=detectDevice(),b='';
+    if(dev!=='android')b+=dlBtnHtml('ios',dev);
+    if(dev!=='ios')b+=dlBtnHtml('android',dev);
+    var r1=document.getElementById('dlRow'),r2=document.getElementById('dlRow2');
+    if(r1)r1.innerHTML=b;
+    if(r2)r2.innerHTML=b;
+}
+function showQR(t){
+    var url=(t==='ios'?(_IOS_URL||'https://www.dbmt999.asia/'):(_ANDROID_URL||'https://www.dbmt999.asia/'));
+    document.getElementById('qrTitle').textContent=(t==='ios'?'iOS 下载':'安卓下载');
+    var box=document.getElementById('qrBox');box.innerHTML='';
+    if(window.QRCode){
+        try{ new QRCode(box,{text:url,width:216,height:216,correctLevel:QRCode.CorrectLevel.M}); }
+        catch(e){ box.innerHTML='<p style="color:#63636E;padding:40px 12px;font-size:13px">二维码生成失败，请直接访问 '+url+'</p>'; }
+    }else{
+        box.innerHTML='<p style="color:#63636E;padding:40px 12px;font-size:13px">二维码组件加载失败，请直接访问 '+url+'</p>';
+    }
+    document.getElementById('qrModal').classList.remove('hidden');
+}
+function hideQR(){ document.getElementById('qrModal').classList.add('hidden'); }
+document.addEventListener('keydown',function(e){ if(e.key==='Escape')hideQR(); });
+renderDownload();
+
+// ---- 站点配置：名称 / 副标题 / 下载链接 / 歌曲数 / 轮播图 ----
+fetch('/music/api/site-config').then(function(r){return r.json();}).then(function(c){
+    if(c.site_name){
+        document.title = c.site_name + ' · 好听的不止一首';
+        document.getElementById('navSiteName').textContent = c.site_name;
+        document.getElementById('footSiteName').textContent = c.site_name;
+    }
+    if(c.hero_subtitle) document.getElementById('heroSub').textContent = c.hero_subtitle;
+    if(c.ios_url) _IOS_URL = c.ios_url;
+    if(c.android_url) _ANDROID_URL = c.android_url;
+    if(c.track_total) document.getElementById('statTracks').textContent = '+' + c.track_total;
+    // 轮播图：后台动态管理，数量不限；空则隐藏；≥2 张克隆两组无缝自动滚动，1 张只显示一张
     var bs=(c&&c.banners)||[];
-    window.__banners=bs;
-    if(!bs.length){box.className='banners';return;}
-    box.className='banners on';
-    track.innerHTML='';
-    dots.innerHTML='';
-    bs.forEach(function(b,i){
-      var im=document.createElement('img');
-      im.src='/music/api/banner/'+encodeURIComponent(b.name);
-      im.alt=b.title||'';
-      im.loading='lazy';
-      if(b.link){
-        var a=document.createElement('a');
-        a.href=b.link;a.target='_blank';a.rel='noopener';
-        a.appendChild(im);track.appendChild(a);
-      }else track.appendChild(im);
-      var d=document.createElement('i');
-      d.onclick=function(){go(i);start();};
-      dots.appendChild(d);
-    });
-    go(0);
-    start();
-    var sx=0;
-    box.addEventListener('touchstart',function(e){sx=e.touches[0].clientX},{passive:true});
-    box.addEventListener('touchend',function(e){
-      var dx=e.changedTouches[0].clientX-sx;
-      if(Math.abs(dx)>40){go(idx+(dx<0?1:-1));start();}
-    },{passive:true});
-  }).catch(function(){box.className='banners';});
+    var box=document.getElementById('shots'),track=document.getElementById('shotsTrack');
+    if(!bs.length){ box.classList.add('hidden'); return; }
+    var cards=bs.map(function(b){
+        var inner='<img src="/music/api/banner/'+encodeURIComponent(b.name)+'" alt="'+((b.title||'').replace(/"/g,'&quot;'))+'">';
+        return (b.link
+            ? '<div style="flex-shrink:0"><a class="shot-card" href="'+b.link+'" target="_blank" rel="noopener">'+inner+'</a></div>'
+            : '<div style="flex-shrink:0"><div class="shot-card">'+inner+'</div></div>');
+    }).join('');
+    if(bs.length>1){ track.innerHTML=cards+cards; }else{ track.innerHTML=cards; track.style.animation='none'; }
+    // 手动拖动：按住左右拖动（关动画 JS 接管位移，边界限制在一组内），松手后从当前位置继续自动滚动
+    (function(){
+        if(bs.length<=1)return;
+        var dragging=false,startX=0,baseX=0;
+        var groupW=parseFloat(window.getComputedStyle(track).width)/2;
+        track.addEventListener('pointerdown',function(e){
+            if(e.target.closest('a'))return;
+            dragging=true;startX=e.clientX;
+            var m=window.getComputedStyle(track).transform;
+            var mm=m&&m!=='none'?m.match(/matrix\(([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)\)/):null;
+            baseX=mm?parseFloat(mm[5]):0;
+            track.style.animation='none';
+            if(e.cancelable)e.preventDefault();
+        });
+        window.addEventListener('pointermove',function(e){
+            if(!dragging)return;
+            var x=baseX+e.clientX-startX;
+            if(x>0)x=0;
+            if(x<-groupW)x=-groupW;
+            track.style.transform='translateX('+x+'px)';
+        });
+        function endDrag(){
+            if(!dragging)return;
+            dragging=false;
+            var m=window.getComputedStyle(track).transform;
+            var mm=m&&m!=='none'?m.match(/matrix\(([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)\)/):null;
+            var x=mm?parseFloat(mm[5]):0;
+            track.style.transform='';
+            if(x<=-1){
+                var t=-x*14/groupW;
+                track.style.animationName='scroll';
+                track.style.animationDuration='14s';
+                track.style.animationTimingFunction='linear';
+                track.style.animationIterationCount='infinite';
+                track.style.animationDelay='-'+t+'s';
+            }else{
+                track.style.animation='';
+            }
+        }
+        window.addEventListener('pointerup',endDrag);
+        window.addEventListener('pointercancel',endDrag);
+        window.addEventListener('blur',endDrag);
+    })();
+}).catch(function(){ document.getElementById('statTracks').textContent = '1900+'; });
+
+// ---- 滚动入场 + 导航高亮 + 页脚年份（防御式：内容默认可见，入场只是增强；双重兜底，任何情况下都不隐藏内容） ----
+(function(){
+    var els=document.querySelectorAll('.reveal');
+    // 导航锚点高亮：rAF 每帧校准（不依赖 scroll 事件，任何设备/滚动方式都同步）
+    var links=document.querySelectorAll('.nav-links a');
+    var secs=[];
+    for(var n=0;n<links.length;n++){
+        var id=links[n].getAttribute('href').slice(1);
+        var el=document.getElementById(id);
+        if(el)secs.push({link:links[n],el:el});
+    }
+    function updateActive(){
+        try{
+            var thr=Math.max(120, window.innerHeight*0.18);
+            var cur=null;
+            for(var p=0;p<secs.length;p++){
+                if(secs[p].el.getBoundingClientRect().top<=thr)cur=secs[p].link;
+            }
+            for(var q=0;q<links.length;q++){
+                var on=links[q]===cur;
+                if(links[q].classList.contains('active')!==on)links[q].classList.toggle('active',on);
+            }
+        }catch(e){}
+    }
+    window.addEventListener('scroll',updateActive,{passive:true});
+    window.addEventListener('resize',updateActive,{passive:true});
+    document.addEventListener('scroll',updateActive,{passive:true,capture:true});
+    window.addEventListener('hashchange',updateActive);
+    setInterval(updateActive,400);
+    updateActive();
+    // 不支持 IntersectionObserver：内容保持可见，不做入场动画
+    if(!('IntersectionObserver' in window))return;
+    // 第一重：进入视口时显示
+    for(var i=0;i<els.length;i++)els[i].classList.add('pending');
+    var io=new IntersectionObserver(function(entries){
+        for(var j=0;j<entries.length;j++){
+            if(entries[j].isIntersecting){
+                var t=entries[j].target;
+                t.classList.add('in'); t.classList.remove('pending'); io.unobserve(t);
+            }
+        }
+    },{threshold:.12});
+    for(var k=0;k<els.length;k++)io.observe(els[k]);
+    // 第二重兜底：1.6 秒后仍未触发的元素强制显示（IO 回调异常时内容也绝不消失）
+    setTimeout(function(){
+        for(var m=0;m<els.length;m++){
+            if(els[m].classList.contains('pending'))els[m].classList.remove('pending');
+        }
+    },1600);
 })();
+document.getElementById('footYear').textContent=new Date().getFullYear();
 </script>
 </body>
 </html>
