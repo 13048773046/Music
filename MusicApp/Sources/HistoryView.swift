@@ -1,21 +1,15 @@
 import SwiftUI
 
-/// 播放历史页面
+/// 播放历史页面（数据源：本地存储 LocalPlayHistory，MRU 最近播放置顶）
 struct HistoryView: View {
     @EnvironmentObject private var player: PlayerManager
     @Environment(\.dismiss) private var dismiss
-    @State private var items: [HistoryTrack] = []
-    @State private var isLoading = false
-    @State private var page = 1
-    @State private var hasMore = true
+    @State private var items: [LocalPlayHistory.Item] = []
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                if items.isEmpty && isLoading {
-                    ProgressView()
-                        .padding(.top, 60)
-                } else if items.isEmpty {
+                if items.isEmpty {
                     emptyState
                         .padding(.top, 80)
                 } else {
@@ -29,12 +23,6 @@ struct HistoryView: View {
                     ForEach(items) { item in
                         historyRow(item)
                             .padding(.horizontal, 16)
-                    }
-
-                    if hasMore {
-                        ProgressView()
-                            .padding(.vertical, 16)
-                            .onAppear { loadMore() }
                     }
                 }
             }
@@ -55,7 +43,9 @@ struct HistoryView: View {
                 }
             }
         }
-        .onAppear { Task { await reload() } }
+        .onAppear {
+            items = LocalPlayHistory.load()
+        }
     }
 
     private var emptyState: some View {
@@ -71,7 +61,7 @@ struct HistoryView: View {
             Text("暂无播放历史")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
-            Text("你听过的歌曲会记录在这里")
+            Text("你听过的歌曲会记录在这里（仅保存在本机）")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textTertiary)
         }
@@ -97,9 +87,9 @@ struct HistoryView: View {
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private func historyRow(_ item: HistoryTrack) -> some View {
+    private func historyRow(_ item: LocalPlayHistory.Item) -> some View {
         Button {
-            let track = Track(id: item.trackId, title: item.title, artist: item.artist,
+            let track = Track(id: item.id, title: item.title, artist: item.artist,
                               album: nil, cover: item.cover, size: nil,
                               dur: nil, durText: nil, created: item.created,
                               playCount: nil, likeCount: nil, shareCount: nil,
@@ -127,33 +117,5 @@ struct HistoryView: View {
             .padding(.vertical, 10)
         }
         .buttonStyle(PressableButtonStyle())
-    }
-
-    private func reload() async {
-        page = 1
-        hasMore = true
-        await loadPage()
-    }
-
-    private func loadMore() {
-        guard !isLoading, hasMore else { return }
-        Task { await loadPage() }
-    }
-
-    private func loadPage() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            let newItems = try await API.fetchHistory(page: page, pageSize: 30)
-            if page == 1 {
-                items = newItems
-            } else {
-                items.append(contentsOf: newItems)
-            }
-            hasMore = newItems.count >= 30
-            page += 1
-        } catch {
-            // 静默失败
-        }
     }
 }

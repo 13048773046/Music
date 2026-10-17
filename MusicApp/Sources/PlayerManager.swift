@@ -1697,7 +1697,9 @@ final class PlayerManager: NSObject, ObservableObject {
         loadArtworkIfNeeded()
         Task {
             await API.reportPlay(current.id)
-            // 记录播放历史
+            // 播放历史本地存储（MRU 去重置顶）：同一首歌重复播放直接排到第一
+            LocalPlayHistory.record(track: current)
+            // 后端上报保留（听歌时长统计/推荐行为数据依赖），失败静默不影响播放
             await API.recordHistory(
                 trackId: current.id,
                 title: current.title,
