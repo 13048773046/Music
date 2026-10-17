@@ -101,6 +101,8 @@ final class PlayerManager: NSObject, ObservableObject {
     }
     /// 已从低码率升级到原码率重试的曲目（low 失败 → high 兜底，避免同一首反复卡 low）
     private var bitrateUpgraded: Set<String> = []
+    /// W1 正在预热引擎缓存的曲目（防同曲重复下载；完成后移除，失败静默）
+    private var warmingTracks: Set<String> = []
     /// 加载期间（duration==0）的待应用拖动位置：就绪后立即跳到该处
     private var pendingSeekFraction: Double?
 
@@ -1292,6 +1294,38 @@ final class PlayerManager: NSObject, ObservableObject {
         queueRevision += 1   // 队列内容已变：通知 VerticalPager 刷新（当前页索引已同步）
     }
 
+    /// W1 · 引擎缓存预热（音效秒切换的关键路径）：
+    /// 原音播放中后台把「当前曲」整曲下载到共享 AudioCache（不启动引擎、不占用播放器），
+    /// 用户点音效瞬间缓存命中 → AudioEnginePlayer.prepare 缓存分支直接读 file:// → ≤80ms 接管。
+    /// 策略（工业级取舍）：
+    /// - 仅预热当前曲 1 首（切音效时正播的就是它；队列后续曲目切到再下，控制写盘与流量）
+    /// - Wi-Fi 预热原码率 / 蜂窝预热 low（体积减半，流量可控，且蜂窝引擎本就走 low）
+    /// - 每曲仅一次（warmingTracks 防重）；缓存已命中任意码率则跳过；失败静默（下次重载会再试）
+    /// - 线程模型：签名请求异步（后台）；下载完成回主线程落盘（与引擎操作严格串行，见 W5）
+    private func warmEngineCache(trackId: String) {
+        guard !NetworkMonitor.shared.isOffline else { return }
+        guard !warmingTracks.contains(trackId) else { return }
+        // 缓存已命中（任意码率）→ 无需预热（引擎/原音切换均可秒开）
+        if AudioCache.shared.exists(trackId: trackId, low: true) ||
+           AudioCache.shared.exists(trackId: trackId, low: false) { return }
+        warmingTracks.insert(trackId)
+        let low = NetworkMonitor.shared.isCellular
+        let bitrate: API.Bitrate = low ? .low : .high
+        Task { [weak self] in
+            let url = await API.signedStreamURL(for: trackId, bitrate: bitrate)
+            guard !Task.isCancelled else { return }
+            let task = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, _, error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.warmingTracks.remove(trackId)
+                    guard let tempURL = tempURL, error == nil else { return }
+                    _ = AudioCache.shared.store(fromTemp: tempURL, trackId: trackId, low: low)
+                }
+            }
+            task.resume()
+        }
+    }
+
     /// 2) 用 AVURLAsset 预热连接/资源头部（只拉前一小部分 metadata，不整首下载）。
     /// 播放位置或队列变化时重新计算窗口；同一位置只预加载一次。
     /// 幂等且防重：切歌会取消旧任务，队列再变也不会错取已不在队列的歌。
@@ -1466,15 +1500,19 @@ final class PlayerManager: NSObject, ObservableObject {
 
     // MARK: - Private
 
-    /// 播放 URL 决策（缓存共享 + 码率档）：
-    /// 共享缓存命中 → file:// 本地（秒开/离线）；否则按码率档签发网络 URL。
-    /// 返回 URL 与对应码率（引擎下载/缓存键需一致）。
+    /// 播放 URL 决策（缓存共享 + 码率档 + W2 缓存优先任意码率）：
+    /// 命中任意码率缓存 → file:// 本地（秒开/离线/秒切换）；否则按码率档签发网络 URL。
+    /// 返回 URL 与对应码率：命中文件的码率决定返回档位（与 prepare(low:) 缓存键严格一致，
+    /// 避免"返回 high 文件却传 low 标记"导致引擎重复下载）。
     private func playbackURL(for trackId: String) async -> (URL, API.Bitrate) {
+        if let cached = AudioCache.shared.existing(trackId: trackId, low: true) {
+            return (cached, .low)
+        }
+        if let cached = AudioCache.shared.existing(trackId: trackId, low: false) {
+            return (cached, .high)
+        }
         let low = effectiveBitrate == .low && !bitrateUpgraded.contains(trackId)
         let bitrate: API.Bitrate = low ? .low : .high
-        if let cached = AudioCache.shared.existing(trackId: trackId, low: low) {
-            return (cached, bitrate)
-        }
         return (await API.signedStreamURL(for: trackId, bitrate: bitrate), bitrate)
     }
 
@@ -1548,26 +1586,33 @@ final class PlayerManager: NSObject, ObservableObject {
         let task = Task { [weak self] in
             guard let self else { return }
             let trackId = current.id
-            // 播放 URL 决策（弱网 + 缓存共享核心）：
-            // ① 共享缓存命中（引擎下载过的整曲）→ file:// 本地播放（秒开 + 离线可播）
+            // 播放 URL 决策（弱网 + 缓存共享 + W2 缓存优先任意码率）：
+            // ① 共享缓存命中（引擎下载过/预热过的整曲，任意码率）→ file:// 本地播放
+            //    （秒开 + 离线可播 + 原音/引擎切换秒开；蜂窝播本地 high 不耗流量、必然流畅，
+            //     码率语义只在「需要下载/签发」时生效）
             // ② 预取签名 URL 池命中且码率与当前决策一致 → 免签发直接播（秒开）
             // ③ 其余 → 按码率档实时签发（蜂窝=low 96k / Wi-Fi=原码率）
             let lowDecision = (effectiveBitrate == .low && !bitrateUpgraded.contains(trackId))
-            let bitrate: API.Bitrate = lowDecision ? .low : .high
+            let cachedLow = AudioCache.shared.existing(trackId: trackId, low: true)
+            let cachedHigh = AudioCache.shared.existing(trackId: trackId, low: false)
             let url: URL
-            if let cachedURL = AudioCache.shared.existing(trackId: trackId, low: lowDecision) {
-                url = cachedURL
+            let bitrate: API.Bitrate
+            if let cached = lowDecision ? (cachedLow ?? cachedHigh) : (cachedHigh ?? cachedLow) {
+                url = cached
+                bitrate = (cached == cachedLow) ? .low : .high   // 命中文件的码率决定档位
             } else if let poolURL = await MainActor.run { () -> URL? in
                 // 码率与当前决策一致才复用（弱网语义严格：蜂窝必须 low，Wi-Fi 不播 low）
                 guard let c = self.signedURLPool[trackId],
-                      c.absoluteString.contains("br=96") == (bitrate == .low) else { return nil }
+                      c.absoluteString.contains("br=96") == (lowDecision) else { return nil }
                 self.signedURLPool.removeValue(forKey: trackId)
                 self.urlPoolOrder.removeAll { $0 == trackId }
                 return c
             } {
                 url = poolURL
+                bitrate = lowDecision ? .low : .high
             } else {
-                url = await API.signedStreamURL(for: trackId, bitrate: bitrate)
+                url = await API.signedStreamURL(for: trackId, bitrate: lowDecision ? .low : .high)
+                bitrate = lowDecision ? .low : .high
             }
             _ = await MainActor.run { self.activeBitrate = bitrate }
             guard !Task.isCancelled else { return }
@@ -1643,6 +1688,9 @@ final class PlayerManager: NSObject, ObservableObject {
                 self.updateNowPlaying(force: true)   // 切歌：立即刷新锁屏信息
                 // 新歌开始播放后，为「接下来 N 首」启动预加载（预热签名 URL + 连接头部）
                 self.schedulePrefetch()
+                // W1 音效秒切换：后台预热「当前曲」整曲到共享缓存（Wi-Fi 原码率/蜂窝 low），
+                // 用户点音效瞬间缓存命中 → 引擎 ≤80ms 接管
+                self.warmEngineCache(trackId: trackId)
             }
         }
         loadTask = task

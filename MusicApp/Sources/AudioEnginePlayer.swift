@@ -234,7 +234,9 @@ final class AudioEnginePlayer {
         onLoadingChanged?(true)
         pendingURL = url
 
-        // 缓存优先：共享缓存命中 → 免下载直接读本地文件（弱网/离线也能切音效）
+        // 缓存优先：共享缓存命中 → 免下载直接读本地文件（弱网/离线也能切音效）。
+        // ⚠ 契约：prepare 调用方必须保证主线程（PlayerManager 经 MainActor.run 调用）——
+        // 缓存分支同步执行 engine 操作并同步回调 completion，省一次主线程跳转（秒切换）。
         if let cached = AudioCache.shared.existing(trackId: trackId, low: low) {
             do {
                 let file = try AVAudioFile(forReading: cached)
@@ -246,10 +248,8 @@ final class AudioEnginePlayer {
                 try self.engine.start()
                 self.schedule(from: 0)
                 self.isPrepared = true
-                DispatchQueue.main.async {
-                    self.onLoadingChanged?(false)
-                    completion()
-                }
+                self.onLoadingChanged?(false)
+                completion()
                 return
             } catch {
                 print("[AudioEngine] cache load error: \(error)")
@@ -262,58 +262,53 @@ final class AudioEnginePlayer {
         }
 
         let task = Self.downloadSession.downloadTask(with: url) { [weak self] tempURL, _, error in
-            guard let self = self else { return }
-            // 切歌/切音效后旧任务迟到响应：直接丢弃，防止旧内容覆盖新状态
-            guard self.pendingURL == url else {
-                EngineDownloadDelegate.shared.unregister(url: url.absoluteString)
-                return
-            }
-            self.pendingURL = nil
-            EngineDownloadDelegate.shared.unregister(url: url.absoluteString)
-            if let error = error {
-                print("[AudioEngine] download error: \(error)")
-                DispatchQueue.main.async {
-                    self.onLoadingChanged?(false)
-                    self.onLoadFailed?()   // 上层自愈：重试 UI + 有限自动重试
-                }
-                return
-            }
-            guard let tempURL = tempURL else {
-                DispatchQueue.main.async {
-                    self.onLoadingChanged?(false)
-                    self.onLoadFailed?()
-                }
-                return
-            }
-            do {
-                // 落盘到共享缓存（downloadTask 完成后 tempURL 会被系统回收，必须先拷贝）。
-                // 原音/引擎共用 AudioCache：引擎下载的整曲，原音播放直接 file:// 秒开。
-                guard let permanent = AudioCache.shared.store(fromTemp: tempURL,
-                                                              trackId: trackId,
-                                                              low: low) else {
-                    DispatchQueue.main.async {
-                        self.onLoadingChanged?(false)
-                        self.onLoadFailed?()
-                    }
+            // 下载结果统一回主线程处理：AVAudioEngine 的 start/schedule/参数切换
+            // 必须与主线程的 seek/stop/切音效/配置变化回调串行执行，
+            // 后台线程直接操作引擎会与渲染线程并发 → 真机闪退（EXC_BAD_ACCESS / AVAudioEngineGraph）
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // 切歌/切音效后旧任务迟到响应：直接丢弃，防止旧内容覆盖新状态
+                guard self.pendingURL == url else {
+                    EngineDownloadDelegate.shared.unregister(url: url.absoluteString)
                     return
                 }
+                self.pendingURL = nil
+                EngineDownloadDelegate.shared.unregister(url: url.absoluteString)
+                if let error = error {
+                    print("[AudioEngine] download error: \(error)")
+                    self.onLoadingChanged?(false)
+                    self.onLoadFailed?()   // 上层自愈：重试 UI + 有限自动重试
+                    return
+                }
+                guard let tempURL = tempURL else {
+                    self.onLoadingChanged?(false)
+                    self.onLoadFailed?()
+                    return
+                }
+                do {
+                    // 落盘到共享缓存（downloadTask 完成后 tempURL 会被系统回收，必须先拷贝）。
+                    // 原音/引擎共用 AudioCache：引擎下载的整曲，原音播放直接 file:// 秒开。
+                    guard let permanent = AudioCache.shared.store(fromTemp: tempURL,
+                                                                  trackId: trackId,
+                                                                  low: low) else {
+                        self.onLoadingChanged?(false)
+                        self.onLoadFailed?()
+                        return
+                    }
 
-                let file = try AVAudioFile(forReading: permanent)
-                self.audioFile = file
-                self.fileFormat = file.processingFormat
-                self.totalFrames = file.length
-                self.pausedFrame = 0
-                self.apply(mode: mode)
-                try self.engine.start()
-                self.schedule(from: 0)
-                self.isPrepared = true
-                DispatchQueue.main.async {
+                    let file = try AVAudioFile(forReading: permanent)
+                    self.audioFile = file
+                    self.fileFormat = file.processingFormat
+                    self.totalFrames = file.length
+                    self.pausedFrame = 0
+                    self.apply(mode: mode)
+                    try self.engine.start()
+                    self.schedule(from: 0)
+                    self.isPrepared = true
                     self.onLoadingChanged?(false)
                     completion()
-                }
-            } catch {
-                print("[AudioEngine] load error: \(error)")
-                DispatchQueue.main.async {
+                } catch {
+                    print("[AudioEngine] load error: \(error)")
                     self.onLoadingChanged?(false)
                     self.onLoadFailed?()
                 }
@@ -522,8 +517,18 @@ final class AudioEnginePlayer {
 
     /// 每种音效的参数表：先全部关断，再按模式开启对应组合。
     /// 参数设计原则：三路分频混音叠加后 RMS ≈ 1.0，保证各音效响度一致、切换不突兀。
+    ///
+    /// 线程安全：调用方必须保证在主线程（setMode/prepare 已统一主线程串行）。
+    /// 渲染安全：引擎运行中修改 AVAudioUnit 配置（reverb/distortion 的 loadFactoryPreset、
+    /// EQ 分频点等）在部分 iOS 版本会触发渲染线程与配置变更并发崩溃 → 切换前先
+    /// engine.pause() 暂停渲染，改完再 start() 恢复；pause 保留 playerNode 已调度 segment
+    /// 与进度，恢复后从原位置继续输出（无感切换）。
     private func apply(mode: Mode) {
         self.mode = mode
+        let wasRunning = engine.isRunning
+        if wasRunning {
+            engine.pause()
+        }
         // 全关
         directMix.outputVolume = 0
         mixLow.outputVolume = 0
@@ -621,6 +626,11 @@ final class AudioEnginePlayer {
             reverb.wetDryMix = 12
             distortion.loadFactoryPreset(.multiDistortedSquared)
             distortion.wetDryMix = 12
+        }
+
+        // 恢复渲染（参数已全部就位）：playerNode 已调度 segment 保留，从原位置继续输出
+        if wasRunning {
+            try? engine.start()
         }
     }
 
