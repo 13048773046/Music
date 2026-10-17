@@ -26,6 +26,7 @@ struct MineView: View {
     @State private var followerCount: Int = 0
     @State private var followingCount: Int = 0
     @State private var mutualCount: Int = 0
+    @State private var likeCount: Int = 0
     // 历史和歌单总数
     @State private var historyTotal: Int = 0
     @State private var playlistTotal: Int = 0
@@ -299,6 +300,20 @@ struct MineView: View {
                             }
                         }
 
+                        // 性别 · 年龄 · 城市（大致地址，有值才显示）
+                        if let u, !((u.gender ?? "").isEmpty && (u.age ?? 0) <= 0 && (u.city ?? "").isEmpty) {
+                            let meta = [u.gender?.isEmpty ?? true ? nil : u.gender,
+                                        (u.age ?? 0) > 0 ? "\(u.age ?? 0) 岁" : nil,
+                                        u.city?.isEmpty ?? true ? nil : u.city]
+                                .compactMap { $0 }
+                            if !meta.isEmpty {
+                                Text(meta.joined(separator: " · "))
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .lineLimit(1)
+                            }
+                        }
+
                         if let sig = u?.signature, !sig.isEmpty {
                             Text(sig)
                                 .font(.system(size: 12))
@@ -319,6 +334,8 @@ struct MineView: View {
                     statInline(value: "\(followingCount)", label: "关注")
                     Divider().frame(height: 20)
                     statInline(value: "\(mutualCount)", label: "互关")
+                    Divider().frame(height: 20)
+                    statInline(value: "\(likeCount)", label: "获赞")
                 }
             }
             .padding(.horizontal, 20)
@@ -880,6 +897,7 @@ struct MineView: View {
                 followerCount = p.followerCount
                 followingCount = p.followingCount
                 mutualCount = p.mutualCount
+                likeCount = p.likeCount
             }
         }
     }

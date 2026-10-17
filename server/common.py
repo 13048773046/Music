@@ -46,7 +46,7 @@ def client_ip(handler):
 def public_user(row, token=None):
     """users 行 → 对外资料 JSON（不含密码哈希，可附带新签发 token）。
     row 顺序: id,account,password_hash,name,avatar,created,
-              gender,age,background_image,signature,ip_address"""
+              gender,age,background_image,signature,ip_address,city"""
     out = {
         "id": row[0],
         "account": row[1],
@@ -58,6 +58,7 @@ def public_user(row, token=None):
         "background": row[8] or "",
         "signature": row[9] or "",
         "ip": row[10] or "",
+        "city": row[11] or "" if len(row) > 11 else "",
     }
     if token:
         out["token"] = token

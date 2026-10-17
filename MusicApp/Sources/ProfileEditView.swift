@@ -9,6 +9,7 @@ struct ProfileEditView: View {
     @State private var gender = "保密"
     @State private var ageText = ""
     @State private var signature = ""
+    @State private var city = ""
     @State private var avatarData: Data?
     @State private var avatarImage: UIImage?
     @State private var bgData: Data?
@@ -220,6 +221,9 @@ struct ProfileEditView: View {
 
             Text("签名").font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textTertiary)
             field("一句话介绍自己", text: $signature)
+
+            Text("所在城市（大致地址）").font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textTertiary)
+            field("如：苏州市（留空则按登录 IP 自动估算）", text: $city)
         }
         .padding(18)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -243,6 +247,7 @@ struct ProfileEditView: View {
         gender = u.gender ?? "保密"
         ageText = (u.age ?? 0) > 0 ? String(u.age ?? 0) : ""
         signature = u.signature ?? ""
+        city = u.city ?? ""
     }
 
     private func pickedAvatar(_ data: Data) {
@@ -268,6 +273,7 @@ struct ProfileEditView: View {
                 gender: gender,
                 age: Int(ageText) ?? 0,
                 signature: signature.trimmingCharacters(in: .whitespaces),
+                city: city.trimmingCharacters(in: .whitespaces),
                 avatarData: avatarData,
                 backgroundData: bgData)
             showSaved = true

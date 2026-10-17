@@ -59,6 +59,34 @@ def _version_lt(a, b):
     return False
 
 
+def _geo_city(ip):
+    """按 IP 估算用户所在城市（大致地址，如"苏州市"）。
+    走 ip-api.com 免费接口（中文），2 秒超时；失败/内网/无法识别返回空串。
+    仅用于用户主页展示大致归属地，不做精确定位。"""
+    if not ip or ip in ("127.0.0.1", "::1", "localhost"):
+        return ""
+    if ip.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
+                      "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+                      "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+                      "172.30.", "172.31.")):
+        return ""
+    try:
+        import urllib.request as _ur
+        url = "http://ip-api.com/json/%s?lang=zh-CN&fields=status,regionName,city" % ip
+        req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with _ur.urlopen(req, timeout=2) as r:
+            d = json.loads(r.read().decode("utf-8", "ignore"))
+        if d.get("status") == "success":
+            city = (d.get("city") or "").strip()
+            region = (d.get("regionName") or "").strip()
+            if city and city != region:
+                return city
+            return region or city
+    except Exception:
+        pass
+    return ""
+
+
 def _render_template(name):
     """读取 server/templates/<name>（带简单缓存）。"""
     t = _TEMPLATE_CACHE.get(name)
@@ -417,7 +445,9 @@ class H(BaseHTTPRequestHandler):
                 # 当前登录用户（判断是否已关注）
                 me_uid = resolve_token(c, self.headers.get("Authorization", ""))
                 # 用户基本信息
-                urow = c.execute("SELECT id, account, name, avatar, signature, created, gender, age, is_ai FROM users WHERE id=?", (target_uid,)).fetchone()
+                urow = c.execute("SELECT id, account, name, avatar, signature, created, gender, age, is_ai,"
+                                 " background_image, city, ip_address FROM users WHERE id=?",
+                                 (target_uid,)).fetchone()
                 if not urow:
                     c.close()
                     self._err(404, "user not found"); return
@@ -440,6 +470,13 @@ class H(BaseHTTPRequestHandler):
                 if me_uid and me_uid != target_uid:
                     exist = c.execute("SELECT follower_id FROM follows WHERE follower_id=? AND following_id=?", (me_uid, target_uid)).fetchone()
                     is_following = bool(exist)
+                # 大致地址（城市）：懒定位——首次查看时按注册/登录 IP 估算并落库，失败保持空
+                city = urow[10] or ""
+                if not city and urow[11]:
+                    city = _geo_city(urow[11])
+                    if city:
+                        c.execute("UPDATE users SET city=? WHERE id=?", (city, target_uid))
+                        c.commit()
                 c.close()
                 self._json(200, {
                     "userId": urow[0], "account": urow[1], "name": urow[2],
@@ -448,7 +485,8 @@ class H(BaseHTTPRequestHandler):
                     "trackCount": track_count, "likeCount": like_count,
                     "followerCount": follower_count, "followingCount": following_count,
                     "mutualCount": mutual_count, "isFollowing": is_following,
-                    "isAi": bool(urow[8])
+                    "isAi": bool(urow[8]),
+                    "backgroundImage": urow[9] or "", "city": city
                 })
                 return
 
@@ -2897,7 +2935,7 @@ class H(BaseHTTPRequestHandler):
                     token = issue_token(c, uid)
                     c.commit()
                     row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
-                                      gender,age,background_image,signature,ip_address
+                                      gender,age,background_image,signature,ip_address,city
                                       FROM users WHERE id=?""", (uid,)).fetchone()
                     c.close()
                     self._json(200, public_user(row, token))
@@ -2922,7 +2960,7 @@ class H(BaseHTTPRequestHandler):
                     password = fields.get("password") or ""
                     c = db()
                     row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
-                                     gender,age,background_image,signature,ip_address,banned,ban_reason
+                                     gender,age,background_image,signature,ip_address,city,banned,ban_reason
                                      FROM users WHERE account=?""",
                                     (account,)).fetchone()
                     if not row or not verify_password(password, row[2]):
@@ -2943,7 +2981,7 @@ class H(BaseHTTPRequestHandler):
                     token = issue_token(c, row[0])
                     c.commit()
                     row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
-                                     gender,age,background_image,signature,ip_address
+                                     gender,age,background_image,signature,ip_address,city
                                      FROM users WHERE id=?""", (row[0],)).fetchone()
                     c.close()
                     self._json(200, public_user(row, token))
@@ -3013,6 +3051,7 @@ class H(BaseHTTPRequestHandler):
                     name = (fields.get("name") or "").strip()[:MAX_NAME]
                     gender = (fields.get("gender") or "").strip()[:8]
                     signature = (fields.get("signature") or "").strip()[:100]
+                    city = (fields.get("city") or "").strip()[:30]
                     try:
                         age = int(fields.get("age") or 0)
                     except Exception:
@@ -3047,23 +3086,23 @@ class H(BaseHTTPRequestHandler):
                     ip = client_ip(self)
                     if avatar_fname and bg_fname:
                         c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
-                                     avatar=?,background_image=?,ip_address=? WHERE id=?""",
-                                  (name, gender, age, signature, avatar_fname, bg_fname, ip, uid))
+                                     avatar=?,background_image=?,city=?,ip_address=? WHERE id=?""",
+                                  (name, gender, age, signature, avatar_fname, bg_fname, city, ip, uid))
                     elif avatar_fname:
                         c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
-                                     avatar=?,ip_address=? WHERE id=?""",
-                                  (name, gender, age, signature, avatar_fname, ip, uid))
+                                     avatar=?,city=?,ip_address=? WHERE id=?""",
+                                  (name, gender, age, signature, avatar_fname, city, ip, uid))
                     elif bg_fname:
                         c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
-                                     background_image=?,ip_address=? WHERE id=?""",
-                                  (name, gender, age, signature, bg_fname, ip, uid))
+                                     background_image=?,city=?,ip_address=? WHERE id=?""",
+                                  (name, gender, age, signature, bg_fname, city, ip, uid))
                     else:
                         c.execute("""UPDATE users SET name=?,gender=?,age=?,signature=?,
-                                     ip_address=? WHERE id=?""",
-                                  (name, gender, age, signature, ip, uid))
+                                     city=?,ip_address=? WHERE id=?""",
+                                  (name, gender, age, signature, city, ip, uid))
                     c.commit()
                     row = c.execute("""SELECT id,account,password_hash,name,avatar,created,
-                                      gender,age,background_image,signature,ip_address
+                                      gender,age,background_image,signature,ip_address,city
                                       FROM users WHERE id=?""", (uid,)).fetchone()
                     _pub = public_user(row)
                     c.close()

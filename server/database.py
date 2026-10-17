@@ -51,6 +51,7 @@ def db():
                        ("background_image", "TEXT DEFAULT ''"),
                        ("signature", "TEXT DEFAULT ''"),
                        ("ip_address", "TEXT DEFAULT ''"),
+                       ("city", "TEXT DEFAULT ''"),
                        ("banned", "INTEGER DEFAULT 0"),
                        ("ban_reason", "TEXT DEFAULT ''"),
                        ("is_ai", "INTEGER DEFAULT 0")]:

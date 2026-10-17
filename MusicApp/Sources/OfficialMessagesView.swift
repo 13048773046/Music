@@ -3,6 +3,7 @@ import SwiftUI
 /// 官方通知聊天记录样式：像微信聊天一样，官方消息靠右/左对齐展示，只读不可回复
 struct OfficialMessagesView: View {
     @EnvironmentObject private var auth: AuthManager
+    @Environment(\.dismiss) private var dismiss
 
     @State private var messages: [API.OfficialMessage] = []
     @State private var isLoading = false
@@ -47,6 +48,29 @@ struct OfficialMessagesView: View {
             }
             .padding(.horizontal, 16)
         }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { dismiss() } label: {
+                    Circle()
+                        .fill(.black.opacity(0.28))
+                        .frame(width: 34, height: 34)
+                        .overlay(
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                        )
+                }
+            }
+            ToolbarItem(placement: .principal) {
+                Text("官方通知")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+            }
+        }
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(Theme.background, for: .navigationBar)
         .appBottomTabSpacing()
         .refreshable { await loadMessages() }
         .task { await loadMessages() }

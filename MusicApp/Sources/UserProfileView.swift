@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 用户主页页面
 struct UserProfileView: View {
@@ -12,15 +13,26 @@ struct UserProfileView: View {
     @State private var page = 1
     @State private var hasMore = true
 
+    /// 状态栏高度：背景图延伸到状态栏后面需要用它铺满顶部
+    private static var statusBarHeight: CGFloat {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let ws = scene as? UIWindowScene,
+                  let window = ws.keyWindow else { continue }
+            let top = window.safeAreaInsets.top
+            if top > 0 { return top }
+        }
+        return 44
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             Theme.background.ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 0) {
-                    // 背景图区域
+                    // 背景图区域（延伸到状态栏，与"我的"页面一致：有图用图，无图用渐变）
                     headerBackground
-                        .frame(height: 220)
+                        .frame(height: 220 + Self.statusBarHeight)
 
                     // 头像和基本信息（向上重叠）
                     profileInfoSection
@@ -53,9 +65,14 @@ struct UserProfileView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { dismiss() } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
+                    Circle()
+                        .fill(.black.opacity(0.28))
+                        .frame(width: 34, height: 34)
+                        .overlay(
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                        )
                 }
             }
         }
@@ -66,22 +83,31 @@ struct UserProfileView: View {
     // MARK: - 背景图
 
     private var headerBackground: some View {
-        ZStack(alignment: .bottomLeading) {
-            // 渐变背景（模拟用户背景图）
+        ZStack(alignment: .bottom) {
+            // 用户背景图（有图用图，无图用渐变，与"我的"页面一致）
+            Group {
+                if let p = profile, !p.backgroundImage.isEmpty {
+                    CachedCoverImage(url: API.backgroundURL(p.userId), title: p.name,
+                                     placeholder: Rectangle().fill(Theme.card))
+                } else {
+                    LinearGradient(
+                        colors: [Theme.accent.opacity(0.22), Theme.accent.opacity(0.05)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+            }
+
+            // 底部渐变遮罩：让背景图和下面的内容自然融合
             LinearGradient(
-                gradient: Gradient(colors: [Theme.accent.opacity(0.4), Theme.background]),
+                colors: [Color.clear, Theme.background],
                 startPoint: .top,
                 endPoint: .bottom
             )
-
-            // 暗色遮罩
-            LinearGradient(
-                gradient: Gradient(colors: [.clear, .black.opacity(0.3)]),
-                startPoint: .center,
-                endPoint: .bottom
-            )
+            .frame(height: 110)
         }
         .frame(maxWidth: .infinity)
+        .clipped()
     }
 
     // MARK: - 个人信息
@@ -112,10 +138,23 @@ struct UserProfileView: View {
                     .overlay(Circle().stroke(Theme.background, lineWidth: 4))
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(profile?.name.isEmpty ?? true ? "用户" : profile!.name)
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(Theme.textPrimary)
+
+                // 性别 · 年龄 · 城市（大致地址，有值才显示）
+                if let p = profile {
+                    let meta = [p.gender.isEmpty ? nil : p.gender,
+                                p.age > 0 ? "\(p.age) 岁" : nil,
+                                p.city.isEmpty ? nil : p.city]
+                        .compactMap { $0 }
+                    if !meta.isEmpty {
+                        Text(meta.joined(separator: " · "))
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                }
 
                 Text("账号：\(profile?.account ?? "")")
                     .font(.system(size: 13))
@@ -151,27 +190,33 @@ struct UserProfileView: View {
         .buttonStyle(PressableButtonStyle())
     }
 
-    // MARK: - 统计卡片
+    // MARK: - 统计卡片（歌曲/粉丝/关注/互关/获赞）
 
     private func statsCard(p: UserProfile) -> some View {
         HStack(spacing: 0) {
             statItem(value: "\(p.trackCount)", label: "歌曲")
-            Divider().frame(height: 30)
+            Divider().frame(height: 26)
             statItem(value: "\(p.followerCount)", label: "粉丝")
-            Divider().frame(height: 30)
+            Divider().frame(height: 26)
             statItem(value: "\(p.followingCount)", label: "关注")
+            Divider().frame(height: 26)
+            statItem(value: "\(p.mutualCount)", label: "互关")
+            Divider().frame(height: 26)
+            statItem(value: "\(p.likeCount)", label: "获赞")
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, 13)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func statItem(value: String, label: String) -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 3) {
             Text(value)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: 16, weight: .bold))
                 .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundColor(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
@@ -284,7 +329,8 @@ struct UserProfileView: View {
                     trackCount: p.trackCount, likeCount: p.likeCount,
                     followerCount: p.followerCount + (newState ? 1 : -1),
                     followingCount: p.followingCount, mutualCount: p.mutualCount,
-                    isFollowing: newState
+                    isFollowing: newState,
+                    backgroundImage: p.backgroundImage, city: p.city
                 )
             }
         } catch {}

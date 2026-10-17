@@ -912,6 +912,30 @@ def run_all(port, root, strict_port, strict_root):
     cu3 = json.loads(body)
     check("编辑后同版本不提示", s == 200 and cu3.get("hasUpdate") is False, body[:100])
 
+    print("== 26. 用户主页资料（背景图/城市懒定位与手填）==")
+    # 注册用户（测试环境 IP=127.0.0.1，city 懒定位应返回空串但字段必须存在）
+    body, ct = multipart({"password": "secret123",
+                          "name": "主页测试", "gender": "男", "age": "25",
+                          "signature": "hi"}, {})
+    s, body, _ = req("POST", "/api/register", body, {"Content-Type": ct})
+    u2 = json.loads(body)
+    uid2 = u2.get("id", "")
+    check("register 主页测试用户 200", s == 200 and bool(uid2), body[:200])
+    s, body, _ = req("GET", f"/api/user/{uid2}/profile")
+    p = json.loads(body)
+    check("profile 返回 backgroundImage 字段", s == 200 and "backgroundImage" in p, body[:200])
+    check("profile 返回 city 字段（测试环境为空）", s == 200 and "city" in p and p.get("city") == "", body[:200])
+    check("profile 返回 5 项统计", s == 200 and all(k in p for k in ("trackCount", "likeCount", "followerCount", "followingCount", "mutualCount")), body[:200])
+    # 资料更新手填城市 → 再查主页城市生效
+    body, ct = multipart({"account": u2.get("account", ""), "password": "secret123",
+                          "name": "主页测试", "gender": "男", "age": "25",
+                          "signature": "hi", "city": "苏州市"}, {})
+    s, body, _ = req("POST", "/api/profile/update", body, {"Content-Type": ct})
+    check("profile/update 带 city 200", s == 200, body[:200])
+    s, body, _ = req("GET", f"/api/user/{uid2}/profile")
+    p2 = json.loads(body)
+    check("主页 city 手填生效", s == 200 and p2.get("city") == "苏州市", body[:200])
+
 
 if __name__ == "__main__":
     main()

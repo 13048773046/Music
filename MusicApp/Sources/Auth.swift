@@ -13,6 +13,7 @@ struct User: Codable, Identifiable, Hashable {
     let background: String?    // 服务端背景图文件名
     let signature: String?      // 用户签名
     let ip: String?            // 最近登录 IP（后端自动获取）
+    let city: String?          // 大致城市（后端按 IP 估算，如"苏州市"）
     let created: Double?       // 注册时间戳
     /// 登录/注册时后端签发的 Bearer Token；旧会话无 token（兼容模式下仍可用，严格模式下需重新登录）
     var token: String?
@@ -172,12 +173,12 @@ final class AuthManager: ObservableObject {
     }
 
     /// 更新资料，成功后同步刷新本地登录态
-    func updateProfile(name: String, gender: String, age: Int, signature: String,
+    func updateProfile(name: String, gender: String, age: Int, signature: String, city: String,
                        avatarData: Data?, backgroundData: Data?) async throws {
         guard let u = currentUser else { return }
         let updated = try await API.updateProfile(account: u.account, name: name,
                                                   gender: gender, age: age,
-                                                  signature: signature,
+                                                  signature: signature, city: city,
                                                   avatarData: avatarData,
                                                   backgroundData: backgroundData)
         saveSession(updated)

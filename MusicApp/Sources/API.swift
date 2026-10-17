@@ -520,7 +520,7 @@ enum API {
 
     /// 更新当前用户资料（可选替换头像/背景图）
     static func updateProfile(account: String, name: String, gender: String, age: Int,
-                              signature: String,
+                              signature: String, city: String,
                               avatarData: Data?, backgroundData: Data?) async throws -> User {
         var body = MultipartBody()
         body.field("account", account)
@@ -528,6 +528,7 @@ enum API {
         body.field("gender", gender)
         body.field("age", String(age))
         body.field("signature", signature)
+        body.field("city", city)
         if let avatarData {
             body.file("avatar", fileName: "avatar.jpg", contentType: "image/jpeg", fileData: avatarData)
         }
@@ -974,4 +975,6 @@ struct UserProfile: Decodable {
     let followingCount: Int
     let mutualCount: Int
     let isFollowing: Bool
+    let backgroundImage: String
+    let city: String
 }
