@@ -435,12 +435,13 @@ struct PlayerCard: View {
                     AlbumArt(size: coverSize, title: track.title, coverURL: track.coverURL, radius: 12)
 
                     // 歌曲名称 + 作者名称：左对齐，左外距与封面一致
+                    // （三个点菜单按钮已移至下方互动行右侧，此处仅保留歌名/作者）
                     HStack(alignment: .center, spacing: 10) {
                         VStack(alignment: .leading, spacing: 6) {
                             MarqueeText(
                                 text: track.title,
                                 font: .system(size: 24, weight: .bold),
-                                // 歌名太长会被右侧音效按钮遮住时：缩小字号 + 跑马灯滚动
+                                // 歌名太长时：缩小字号 + 跑马灯滚动
                                 compactFont: .system(size: 18, weight: .semibold),
                                 color: textPrimary(onLight: onLight),
                                 active: isCurrent
@@ -459,21 +460,6 @@ struct PlayerCard: View {
                             }
                         }
                         .layoutPriority(1)
-
-                        // 更多按钮：竖排三点，打开歌曲信息菜单（无背景，仅图标）
-                        Button {
-                            showMenu = true
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 19, weight: .semibold))
-                                .rotationEffect(.degrees(90))
-                                .foregroundColor(textPrimary(onLight: onLight))
-                                .frame(width: 34, height: 34)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .fixedSize()
-                        .layoutPriority(2)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, sidePadding)
@@ -492,7 +478,8 @@ struct PlayerCard: View {
 
                     Spacer(minLength: 12)
 
-                    // 互动操作行：点赞 / 评论 / 分享（紧贴进度条上方；左对齐，数量角标）
+                    // 互动操作行：点赞 / 评论 / 分享 / 更多（紧贴进度条上方；左对齐，数量角标；
+                    // 三个点菜单按钮移至本行最右侧，打开歌曲信息菜单）
                     HStack(spacing: 30) {
                         actionButton(
                             icon: "heart.fill",
@@ -512,6 +499,20 @@ struct PlayerCard: View {
                             count: shareCount,
                             onLight: onLight
                         ) { Task { await share() } }
+                        Spacer()
+                        // 更多按钮：竖排三点，打开歌曲信息菜单（无背景，仅图标）
+                        Button {
+                            showMenu = true
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 19, weight: .semibold))
+                                .rotationEffect(.degrees(90))
+                                .foregroundColor(textPrimary(onLight: onLight))
+                                .frame(width: 34, height: 34)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .fixedSize()
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, sidePadding)

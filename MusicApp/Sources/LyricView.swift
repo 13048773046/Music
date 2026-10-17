@@ -268,31 +268,51 @@ struct LyricRowView: View, Equatable {
         lhs.fontWeight == rhs.fontWeight
     }
 
+    /// 逐字填充的"空洞压缩"阈值（秒）：字间间隔超过该值视为句内停顿（不承载唱词），
+    /// 后续字的时间戳整体前移、压缩到 gapKeep，避免卡拉OK填充在长停顿处长时间静止
+    /// ——这是"逐字歌词有时走不完一整句"的根因（线上 KRC 数据 35.9% 行存在 >300ms 空洞，
+    /// 最大 40.9s）。压缩只影响填充进度节奏，不改变字序与唱词，停顿本就没有字在唱。
+    private static let gapThreshold: Double = 0.6
+    /// 压缩后保留的停顿（秒），保持一点换气/间奏感
+    private static let gapKeep: Double = 0.15
+
     /// 已唱区间宽度 = 已唱完字宽之和 + 正在唱的字宽 × 字内进度
+    /// （字时间戳经空洞压缩；字宽缺失时用字号估算兜底，保证 mask 永远能走到句尾）
     private var filledWidth: CGFloat {
         guard currentTime >= 0 else { return 0 }
+        let words = line.words
         // LRC 整句行（无逐字时间戳，words 只有 1 个）：句开始即整行一次性亮起，
         // 不做"按整句时长线性填充"——没有逐字时间时线性填充必然和真实演唱错位
         // （快唱的字被拖慢、拖长的字提前），整句高亮才是 LRC 的正确显示方式。
-        if line.words.count <= 1 {
-            if let w = line.words.first, currentTime >= w.start {
+        if words.count <= 1 {
+            if let w = words.first, currentTime >= w.start {
                 return charWidths.reduce(0, +)
             }
             return 0
         }
         var w: CGFloat = 0
-        for (i, word) in line.words.enumerated() {
-            let cw = charWidths.indices.contains(i) ? charWidths[i] : 0
-            if currentTime >= word.end {
+        var carry: Double = 0          // 已压缩掉的累计空洞（秒）
+        var prevEnd: Double = words[0].start   // 上一字压缩后的结束时间
+        for (i, word) in words.enumerated() {
+            // 空洞压缩：字 start 与上一字 end 的间隔超过阈值，该字及后续整体前移
+            let gap = word.start - prevEnd
+            if gap > Self.gapThreshold { carry += gap - Self.gapKeep }
+            let s = word.start - carry
+            let e = word.end - carry
+            // 字宽兜底：缓存缺失/过期时用字号×1.0 估算中文字宽，
+            // 后半句不会因缓存长度不足而宽度=0、mask 封顶半句
+            let cw = charWidths.indices.contains(i) ? charWidths[i] : max(fontSize * 1.0, 8)
+            if currentTime >= e {
                 w += cw
-            } else if currentTime >= word.start {
-                let span = max(word.end - word.start, 0.001)
-                let p = min(max((currentTime - word.start) / span, 0), 1)
+            } else if currentTime >= s {
+                let span = max(e - s, 0.001)
+                let p = min(max((currentTime - s) / span, 0), 1)
                 w += cw * p
                 break
             } else {
                 break
             }
+            prevEnd = e
         }
         return w
     }
