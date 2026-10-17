@@ -51,7 +51,7 @@ final class WeatherContext: NSObject, ObservableObject, CLLocationManagerDelegat
             //   ——否则会阻塞发现页内容加载（「加载中…」卡死）。
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 let timer = Timer(timeInterval: 3.0, repeats: false) { _ in
-                    pendingAuth = nil
+                    self.pendingAuth = nil
                     cont.resume()
                 }
                 RunLoop.main.add(timer, forMode: .common)
@@ -69,7 +69,7 @@ final class WeatherContext: NSObject, ObservableObject, CLLocationManagerDelegat
         // 定位等待同样带 3s 超时（requestLocation 偶发无回调，防挂起 → 按无定位降级）
         let location: CLLocation? = await withCheckedContinuation { (cont: CheckedContinuation<CLLocation?, Never>) in
             let timer = Timer(timeInterval: 3.0, repeats: false) { _ in
-                pendingLocation = nil
+                self.pendingLocation = nil
                 cont.resume(returning: nil)
             }
             RunLoop.main.add(timer, forMode: .common)
