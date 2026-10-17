@@ -1,15 +1,15 @@
 # 流萤音乐 Liuying Music
 
-iOS（SwiftUI）音乐 App 的一体化后端：Python 标准库 HTTP 服务 + SQLite + NodeJS 音源桥，
-内置管理后台 H5、音源采集控制台、个性化推荐、WebSocket、音频 206 流式播放与防盗链，
-并提供 **H5 自动安装向导**（下载 → 上传解压 → 浏览器访问即完成部署）。
+音乐 App 一体化仓库：Python 后端 + SQLite + NodeJS 音源桥 + **iOS (SwiftUI) 客户端** + **Android (Jetpack Compose) 客户端**。
+
+内置管理后台 H5、音源采集控制台、个性化推荐、WebSocket、音频 206 流式播放与防盗链。
 
 - 后端端口：`127.0.0.1:8788`（由 Nginx 反代对外）
 - 音源桥端口：`127.0.0.1:8789`
 - 最低要求：Python 3.8+、NodeJS 16+、Nginx（推荐）、SQLite（Python 内置）
 
-> **完整交接文档见 [`docs/流萤音乐-完整交接文档-20261018.md`](docs/流萤音乐-完整交接文档-20261018.md)**（v13，基于 `4b1c072` + 线上实测）：
-> 覆盖 GitHub 仓库 / 线上服务器 / 后端 / 音源桥 / 官网 / iOS 前端全量说明、CI 流水线、运维高频命令、任务总清单（45+ 项已完成）。
+> **完整交接文档见 [`docs/流萤音乐-完整交接文档-20261018.md`](docs/流萤音乐-完整交接文档-20261018.md)**
+> **Android 客户端文档见 [`docs/android-client.md`](docs/android-client.md)**
 
 ---
 
@@ -50,6 +50,11 @@ iOS（SwiftUI）音乐 App 的一体化后端：Python 标准库 HTTP 服务 + S
 ├── requirements.txt          # Python 依赖（Pillow / mutagen）
 ├── tests/                    # 冒烟测试与专项验证
 ├── MusicApp/                 # iOS SwiftUI 客户端
+├── android/                  # Android Jetpack Compose 客户端
+│   └── app/src/main/java/app/star2936/guava3291/
+│       ├── state/            # PlayerManager / AuthManager / NotificationBus
+│       ├── data/             # Api / Models
+│       └── ui/              # 主框架/播放页/发现/我的/通知/侧边栏
 └── .github/workflows/        # CI：冒烟测试 + 未签名 IPA 打包
 ```
 
