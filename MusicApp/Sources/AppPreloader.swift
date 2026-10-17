@@ -26,9 +26,10 @@ final class AppPreloader: ObservableObject {
     @Published var commentsTotal: Int = 0
     @Published var mineLoaded: Bool = false
 
-    /// 启动数据是否全部就绪（发现 / 播放 / 我的）：启动页放行条件
+    /// 启动数据是否全部就绪（发现 / 播放 / 我的）：启动页放行条件。
+    /// 天气场景不参与放行——后台独立加载（DiscoverView 展示时自取，失败降级「仅时段」）。
     var startupReady: Bool {
-        discoverRecommendedReady && playerReady && weatherReady && mineLoaded
+        discoverRecommendedReady && playerReady && mineLoaded
     }
 
     private init() {}
@@ -46,13 +47,14 @@ final class AppPreloader: ObservableObject {
         commentsTotal = 0
     }
 
-    /// 启动时并行预加载：发现页推荐 / 播放页曲库 / 我的页统计与列表 / 天气场景
+    /// 启动时并行预加载：发现页推荐 / 播放页曲库 / 我的页统计与列表（天气场景后台独立加载，不阻塞启动页）
     func preload() async {
         async let r: Void = loadRecommended()
         async let p: Void = loadPlayer()
         async let m: Void = loadMine()
-        async let w: Void = loadWeather()
-        _ = await (r, p, m, w)
+        _ = await (r, p, m)
+        // 天气：放后台异步跑（不参与启动放行；DiscoverView 展示心情卡片时自取，失败降级「仅时段」）
+        Task { await loadWeather() }
     }
 
     // MARK: - 发现页
