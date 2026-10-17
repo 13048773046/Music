@@ -897,13 +897,15 @@ enum API {
             let trackCount: Int; let likeCount: Int
             let followerCount: Int; let followingCount: Int; let mutualCount: Int
             let isFollowing: Bool
+            let backgroundImage: String; let city: String
         }
         let r = try JSONDecoder().decode(Resp.self, from: data)
         return UserProfile(userId: r.userId, account: r.account, name: r.name, avatar: r.avatar,
                           signature: r.signature, created: r.created, gender: r.gender, age: r.age,
                           trackCount: r.trackCount, likeCount: r.likeCount,
                           followerCount: r.followerCount, followingCount: r.followingCount,
-                          mutualCount: r.mutualCount, isFollowing: r.isFollowing)
+                          mutualCount: r.mutualCount, isFollowing: r.isFollowing,
+                          backgroundImage: r.backgroundImage, city: r.city)
     }
 
     /// 关注/取关用户
