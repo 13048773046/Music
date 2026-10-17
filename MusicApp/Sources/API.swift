@@ -777,8 +777,16 @@ enum API {
     }
 
     /// 获取播放历史
+    /// ⚠ 必须用 URLComponents 拼 query：appendingPathComponent("history?page=..&size=..")
+    ///   会把 ? 和 & 百分号编码成 %3F/%26 → 后端匹配不到 /api/history → 404 → 列表永远为空。
     static func fetchHistory(page: Int = 1, pageSize: Int = 30) async throws -> [HistoryTrack] {
-        var req = URLRequest(url: base.appendingPathComponent("history?page=\(page)&size=\(pageSize)"))
+        var comps = URLComponents(url: base.appendingPathComponent("history"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "page", value: "\(page)"),
+            URLQueryItem(name: "size", value: "\(pageSize)")
+        ]
+        var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 15
         applyAuth(&req)
         let (data, resp) = try await URLSession.shared.data(for: req)
