@@ -56,7 +56,7 @@ final class WeatherContext: NSObject, ObservableObject, CLLocationManagerDelegat
             return false
         }
         let location: CLLocation? = await withCheckedContinuation { (cont: CheckedContinuation<CLLocation?, Never>) in
-            pendingLocation = cont
+            pendingLocation = { loc in cont.resume(returning: loc) }
             manager.requestLocation()
         }
         guard let loc = location else { return false }
