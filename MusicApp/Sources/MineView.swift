@@ -300,33 +300,34 @@ struct MineView: View {
                             }
                         }
 
-                        // 性别 · 年龄 · 城市（大致地址，有值才显示）
-                        if let u, !((u.gender ?? "").isEmpty && (u.age ?? 0) <= 0 && (u.city ?? "").isEmpty) {
-                            let meta = [u.gender?.isEmpty ?? true ? nil : u.gender,
-                                        (u.age ?? 0) > 0 ? "\(u.age ?? 0) 岁" : nil,
-                                        u.city?.isEmpty ?? true ? nil : u.city]
-                                .compactMap { $0 }
-                            if !meta.isEmpty {
-                                Text(meta.joined(separator: " · "))
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.white.opacity(0.7))
-                                    .lineLimit(1)
+                        // 性别 · 年龄 · 城市（大致地址，有值才显示）＋ 累计听歌时长（小时为单位）同行：
+                        // 性别/年龄/城市在左，听歌时长胶囊在右（时长胶囊与 ID 徽标同款样式）
+                        HStack(spacing: 8) {
+                            if let u, !((u.gender ?? "").isEmpty && (u.age ?? 0) <= 0 && (u.city ?? "").isEmpty) {
+                                let meta = [u.gender?.isEmpty ?? true ? nil : u.gender,
+                                            (u.age ?? 0) > 0 ? "\(u.age ?? 0) 岁" : nil,
+                                            u.city?.isEmpty ?? true ? nil : u.city]
+                                    .compactMap { $0 }
+                                if !meta.isEmpty {
+                                    Text(meta.joined(separator: " · "))
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.white.opacity(0.7))
+                                        .lineLimit(1)
+                                }
                             }
-                        }
-
-                        // 累计听歌时长（小时为单位）：与 ID 徽标同款白色半透明胶囊，属「个人音乐履历」信息层
-                        if !listenHoursText.isEmpty {
-                            HStack(spacing: 5) {
-                                Image(systemName: "clock.fill")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.85))
-                                Text(listenHoursText)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.9))
+                            if !listenHoursText.isEmpty {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "clock.fill")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.85))
+                                    Text(listenHoursText)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.9))
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(.white.opacity(0.15)))
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(.white.opacity(0.15)))
                         }
 
                         if let sig = u?.signature, !sig.isEmpty {
