@@ -4,6 +4,8 @@ struct DiscoverView: View {
     @EnvironmentObject private var player: PlayerManager
     @EnvironmentObject private var library: Library
     @Environment(\.scenePhase) private var scenePhase
+    /// M2 天气×时段场景上下文（全局单例）：定位失败/拒绝 → 仅时段降级，不阻塞发现页
+    @ObservedObject private var weather = WeatherContext.shared
     @State private var state: LoadState = .loading
     @State private var latest: [Track] = []
     @State private var recommended: [Track] = []
@@ -49,6 +51,8 @@ struct DiscoverView: View {
             }
             .navigationBarHidden(true)
             .task {
+                // M2：进入发现页先取天气×时段场景（30 分钟节流；失败静默降级为仅时段）
+                await weather.refresh()
                 if case .loaded = state {} else {
                     await load()
                 }
@@ -74,6 +78,8 @@ struct DiscoverView: View {
         // 后端 3 小时去重保证重拉拿到新一批（不重复推同一首）。
         .onChange(of: scenePhase) { phase in
             guard phase == .active else { return }
+            // M2：切前台也顺带刷新天气场景（WeatherContext 内部 30 分钟节流）
+            Task { await weather.refresh() }
             guard Date().timeIntervalSince(lastRecommendAt) >= 300 else { return }
             lastRecommendAt = Date()
             Task { await loadRecommended() }
@@ -88,6 +94,11 @@ struct DiscoverView: View {
             LazyVStack(alignment: .leading, spacing: 28) {
                 // 头部
                 header
+
+                // M2 今日心情卡片：天气×时段场景快照（定位/天气不可用时整卡隐藏，不影响浏览）
+                if weather.isAvailable, let label = weather.sceneLabel {
+                    weatherCard(label: label)
+                }
 
                 if !recommended.isEmpty {
                     // 默认推荐位 = 猜你喜欢：基于听歌行为的个性化推荐（未登录/无行为时后端随机兜底）
@@ -192,6 +203,60 @@ struct DiscoverView: View {
         .padding(.horizontal, 20)
     }
 
+    // MARK: - 今日心情卡片（M2）
+
+    /// 天气×时段场景卡片：展示场景标签 + 温度/城市；右上角可手动刷新（强制重取，绕过 30 分钟节流）
+    private func weatherCard(label: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: weatherIcon)
+                .font(.system(size: 24))
+                .foregroundColor(Theme.accent)
+                .frame(width: 48, height: 48)
+                .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("今日心情 · \(label)")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                HStack(spacing: 4) {
+                    if let temp = weather.temperature {
+                        Text("\(Int(temp.rounded()))°C")
+                    }
+                    if let city = weather.city, !city.isEmpty {
+                        Text("· \(city)")
+                    }
+                }
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+            Button {
+                Task { await weather.refresh(force: true) }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.accent)
+            }
+            .buttonStyle(.plain)
+        }
+        .softCard(radius: 16, padding: 14)
+        .padding(.horizontal, 20)
+    }
+
+    /// 场景 → SF Symbol 图标（与后端场景 key 一一对应；未知场景用 sparkles 兜底）
+    private var weatherIcon: String {
+        switch weather.scene {
+        case "rain": return "cloud.rain.fill"
+        case "snow": return "snowflake"
+        case "hot": return "sun.max.fill"
+        case "cold": return "thermometer.snowflake"
+        case "clear_day_morning", "clear_day_afternoon": return "sun.max.fill"
+        case "clear_day_evening": return "sunset.fill"
+        case "night": return "moon.stars.fill"
+        case "cloudy": return "cloud.fill"
+        default: return "sparkles"
+        }
+    }
+
     // MARK: - 加载（复用启动页预加载的 Library 数据）
 
     func load() async {
@@ -233,9 +298,13 @@ struct DiscoverView: View {
     /// 拉取个性化推荐填充「猜你喜欢」区块（失败静默，区块自动隐藏）。
     /// source=discover：猜你喜欢不参与播放页首页的 3 小时推送去重，
     /// 换一批永远能拿到新候选（不再被去重窗口排空导致区块消失）。
+    /// M2：附带场景参数（lat/lng/hour）——定位未就绪时传 nil，后端按时段兜底。
     private func loadRecommended() async {
         do {
-            let tracks = try await API.recommend(source: "discover")
+            let tracks = try await API.recommend(source: "discover",
+                                                 lat: weather.lat,
+                                                 lng: weather.lng,
+                                                 hour: weather.hour)
             guard !Task.isCancelled else { return }
             // 防御：接口返回空时不覆盖旧推荐（区块不消失），仅在新数据非空时更新
             if !tracks.isEmpty {

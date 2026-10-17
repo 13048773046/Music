@@ -792,8 +792,12 @@ final class PlayerManager: NSObject, ObservableObject {
                 await Library.shared.loadMore()
             } else {
                 // 推荐流：拉下一批个性化推荐，排除已推荐 id，实现汽水式无限续推
+                // M2：附带天气场景参数（定位未就绪时为 nil，后端按时段兜底）
                 let excluding = Array(recommendedIds.suffix(recommendedExcludeCap))
-                let next = (try? await API.recommend(excluding: excluding)) ?? []
+                let next = (try? await API.recommend(excluding: excluding,
+                                                     lat: WeatherContext.shared.lat,
+                                                     lng: WeatherContext.shared.lng,
+                                                     hour: WeatherContext.shared.hour)) ?? []
                 if !next.isEmpty {
                     recommendedIds.formUnion(next.map { $0.id })
                     let existing = Set(queue.map { $0.id })
@@ -966,7 +970,11 @@ final class PlayerManager: NSObject, ObservableObject {
         }
         let excluding = Array(recommendedIds.suffix(recommendedExcludeCap))
         Task { @MainActor in
-            let list = (try? await API.recommend(excluding: excluding, fresh: fresh)) ?? []
+            // M2：附带天气场景参数（定位未就绪时为 nil，后端按时段兜底）
+            let list = (try? await API.recommend(excluding: excluding, fresh: fresh,
+                                                 lat: WeatherContext.shared.lat,
+                                                 lng: WeatherContext.shared.lng,
+                                                 hour: WeatherContext.shared.hour)) ?? []
             if list.isEmpty {
                 // 推荐不可用（未登录/曲库太小/网络失败）：回退保底队列
                 if !fallback.isEmpty {

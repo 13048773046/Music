@@ -188,8 +188,12 @@ enum API {
     /// - Parameter excluding: 已推荐过的歌曲 id（推荐流无限续推防重复，后端逐条排除）
     /// - Parameter fresh: 长时间重开 App 的新鲜会话——后端加大随机扰动/探索权重，
     ///   让重新开始的一批推荐带随机性、不固定重复上次
+    /// - Parameter lat/lng/hour: M2 天气×时段场景上下文——后端据此叠加"应景推荐"（个性化×场景双向融合）；
+    ///   传 nil 时后端按时段兜底场景，推荐照常返回
     static func recommend(userId: String? = nil, excluding: [String] = [],
-                           fresh: Bool = false, source: String? = nil) async throws -> [Track] {
+                           fresh: Bool = false, source: String? = nil,
+                           lat: Double? = nil, lng: Double? = nil,
+                           hour: Int? = nil) async throws -> [Track] {
         var components = URLComponents(url: base.appendingPathComponent("recommend"),
                                        resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = []
@@ -206,6 +210,16 @@ enum API {
         if let source, !source.isEmpty {
             items.append(URLQueryItem(name: "source", value: source))
         }
+        // M2 场景上下文：定位可用时叠加；不可用时缺省（后端时段兜底，不阻塞推荐）
+        if let lat {
+            items.append(URLQueryItem(name: "lat", value: String(format: "%.4f", lat)))
+        }
+        if let lng {
+            items.append(URLQueryItem(name: "lng", value: String(format: "%.4f", lng)))
+        }
+        if let hour {
+            items.append(URLQueryItem(name: "hour", value: String(hour)))
+        }
         if !items.isEmpty {
             components.queryItems = items
         }
@@ -217,6 +231,37 @@ enum API {
             throw URLError(.badServerResponse)
         }
         return try JSONDecoder().decode([Track].self, from: data)
+    }
+
+    /// 天气×心情场景快照（M2）：发现页"今日心情卡片"用。
+    /// 失败（网络/参数/服务不可用）返回 nil，调用方静默降级为"仅时段"。
+    struct WeatherInfo: Decodable {
+        let ok: Bool
+        let temp: Double?
+        let code: Int?
+        let hour: Int?
+        let scene: String?
+        let sceneLabel: String?
+    }
+
+    static func fetchWeather(lat: Double, lng: Double, hour: Int? = nil) async -> WeatherInfo? {
+        var components = URLComponents(url: base.appendingPathComponent("weather"),
+                                       resolvingAgainstBaseURL: false)!
+        var items = [
+            URLQueryItem(name: "lat", value: String(format: "%.4f", lat)),
+            URLQueryItem(name: "lng", value: String(format: "%.4f", lng)),
+        ]
+        if let hour {
+            items.append(URLQueryItem(name: "hour", value: String(hour)))
+        }
+        components.queryItems = items
+        var req = URLRequest(url: components.url!)
+        req.timeoutInterval = 10
+        let (data, resp) = (try? await URLSession.shared.data(for: req)) ?? (Data(), nil)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(WeatherInfo.self, from: data)
     }
 
     /// 我的喜欢：用户点赞过的歌曲列表（上传+采集混合，按点赞时间倒序）
