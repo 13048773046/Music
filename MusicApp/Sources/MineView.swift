@@ -314,6 +314,21 @@ struct MineView: View {
                             }
                         }
 
+                        // 累计听歌时长（小时为单位）：与 ID 徽标同款白色半透明胶囊，属「个人音乐履历」信息层
+                        if !listenHoursText.isEmpty {
+                            HStack(spacing: 5) {
+                                Image(systemName: "clock.fill")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.85))
+                                Text(listenHoursText)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(.white.opacity(0.15)))
+                        }
+
                         if let sig = u?.signature, !sig.isEmpty {
                             Text(sig)
                                 .font(.system(size: 12))
@@ -803,6 +818,19 @@ struct MineView: View {
             return "\(Int(listenSeconds / 60)) 分钟"
         }
         return String(format: "%.1f 小时", hours)
+    }
+
+    /// 累计听歌时长（小时为单位，千分位）：<1 小时保留 1 位小数（0.5 小时），≥1 取整
+    private var listenHoursText: String {
+        guard listenSeconds > 0 else { return "" }
+        let hours = Double(listenSeconds) / 3600.0
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .decimal
+        fmt.maximumFractionDigits = hours < 1 ? 1 : 0
+        guard let n = fmt.string(from: NSNumber(value: hours)) else {
+            return String(format: "%.1f 小时", hours)
+        }
+        return "\(n) 小时"
     }
 
     // MARK: - 数据加载（分页）
