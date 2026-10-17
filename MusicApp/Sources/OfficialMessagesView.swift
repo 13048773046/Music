@@ -48,6 +48,7 @@ struct OfficialMessagesView: View {
             }
             .padding(.horizontal, 16)
         }
+        .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
