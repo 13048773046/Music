@@ -139,7 +139,8 @@ struct SettingsView: View {
                     content: u.content ?? "",
                     version: u.version ?? "",
                     forceUpdate: u.forceUpdate ?? 0,
-                    downloadUrl: u.downloadUrl ?? ""
+                    downloadUrl: u.downloadUrl ?? "",
+                    downloadUrlIos: u.downloadUrlIos ?? ""
                 ))
                 .presentationDetents([.medium])
             }

@@ -575,6 +575,7 @@ enum API {
         let version: String?
         let forceUpdate: Int?
         let downloadUrl: String?
+        let downloadUrlIos: String?
     }
 
     /// 手动检查版本更新
