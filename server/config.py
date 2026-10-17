@@ -197,6 +197,13 @@ AI_API_BASE_DEFAULT = ("https://ws-5usvd1tklaq38lj3.cn-beijing.maas.aliyuncs.com
 AI_MODEL_DEFAULT = "qwen-turbo"
 AI_UID = "ai_liuying_comment"
 
+# ---------------- AI 主动乐评（定时自动评论） ----------------
+# 后端定时为歌曲生成并发布 AI 乐评。默认值可被「网站管理」页保存到 ai_comment_cfg 表动态覆盖（无需重启）。
+AI_AUTO_INTERVAL = _cfg_int("ai_auto_interval", "MUSIC_AI_AUTO_INTERVAL", 3600)          # 自动评论周期（秒），默认 1 小时
+AI_AUTO_COUNT = _cfg_int("ai_auto_count", "MUSIC_AI_AUTO_COUNT", 2)                      # 每轮评论歌曲数，默认 2 首
+AI_AUTO_MAX_PER_TRACK = _cfg_int("ai_auto_max_per_track", "MUSIC_AI_AUTO_MAX_PER_TRACK", 2)  # 每首歌最多 AI 乐评条数
+AI_AUTO_SKIP_DAYS = _cfg_int("ai_auto_skip_days", "MUSIC_AI_AUTO_SKIP_DAYS", 7)          # 近 N 天已自动评过的歌不再选（防集中）
+
 # ---------------- 汽水音乐分享解析 UA ----------------
 
 QISHUI_SHARE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "

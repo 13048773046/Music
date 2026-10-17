@@ -192,6 +192,8 @@ def db():
         c.execute("ALTER TABLE comments ADD COLUMN images TEXT DEFAULT ''")
     if "like_count" not in cmt_cols:
         c.execute("ALTER TABLE comments ADD COLUMN like_count INTEGER DEFAULT 0")
+    if "is_ai" not in cmt_cols:
+        c.execute("ALTER TABLE comments ADD COLUMN is_ai INTEGER DEFAULT 0")
 
     # 评论点赞表
     c.execute("""CREATE TABLE IF NOT EXISTS comment_likes(
@@ -217,6 +219,19 @@ def db():
         uid TEXT NOT NULL, track_id TEXT NOT NULL, pushed_at REAL NOT NULL,
         PRIMARY KEY(uid, track_id))""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_push_uid_ts ON recommend_push_history(uid, pushed_at)")
+
+    # AI 主动乐评：动态配置表（key→value，网站管理页可改，DB 优先于 config.py 默认值）
+    c.execute("""CREATE TABLE IF NOT EXISTS ai_comment_cfg(
+        key TEXT PRIMARY KEY, value TEXT DEFAULT '')""")
+
+    # AI 主动乐评执行记录（run_type: auto=定时/manual=手动；status: ok/fail）
+    c.execute("""CREATE TABLE IF NOT EXISTS ai_comment_logs(
+        id TEXT PRIMARY KEY, run_type TEXT DEFAULT 'auto', track_id TEXT, track_title TEXT,
+        status TEXT DEFAULT 'ok', comment_id TEXT DEFAULT '', reason TEXT DEFAULT '', created REAL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ai_log_created ON ai_comment_logs(created)")
+
+    # 回填历史 AI 乐评的 is_ai 标识（早期被动评论未写该列）
+    c.execute("UPDATE comments SET is_ai=1 WHERE user_id=? AND is_ai=0", ("ai_liuying_comment",))
 
     c.commit()
     return c

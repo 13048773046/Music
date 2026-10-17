@@ -772,6 +772,82 @@ class H(BaseHTTPRequestHandler):
                 self._json(200, {"ok":True,"total":total,"page":page,"size":size,
                     "list":[{"id":r[0],"track_id":r[1],"user":r[2] or "","content":r[3] or "","created":r[4] or 0,"track_title":r[5]} for r in rows]});return
 
+            # ---------- AI 接口配置（网站管理：AI key/base/model，写 ai_config.json 即时生效） ----------
+            if u.path == "/api/admin/ai-config":
+                if not _admin_auth(self): self._err(401, "unauthorized"); return
+                if self.command == "GET":
+                    cfg = _ai_cfg()
+                    key = cfg.get("key") or ""
+                    masked = (key[:4] + "****" + key[-4:]) if len(key) > 8 else ("已配置" if key else "")
+                    self._json(200, {"ok": True, "base": cfg.get("base", ""),
+                                     "model": cfg.get("model", ""),
+                                     "keyMasked": masked, "hasKey": bool(key)})
+                    return
+                if self.command == "POST":
+                    try:
+                        ln = int(self.headers.get("Content-Length") or 0)
+                        body = json.loads(self.rfile.read(ln).decode("utf-8") or "{}") if ln else {}
+                    except Exception:
+                        body = {}
+                    _ai_save_config(base=body.get("base"), key=body.get("key"), model=body.get("model"))
+                    self._json(200, {"ok": True, "saved": True}); return
+                self._err(400, "bad request"); return
+
+            # ---------- AI 主动乐评管理（网站管理：状态/配置/手动触发/删除） ----------
+            if u.path.startswith("/api/admin/ai-comment"):
+                if not _admin_auth(self): self._err(401, "unauthorized"); return
+                seg = u.path[len("/api/admin/ai-comment"):]
+                if u.path == "/api/admin/ai-comment":
+                    if self.command == "GET":
+                        stats = _ai_comment_stats()
+                        c = db()
+                        try:
+                            logs = c.execute(
+                                "SELECT id,run_type,track_id,track_title,status,comment_id,reason,created "
+                                "FROM ai_comment_logs ORDER BY created DESC LIMIT 50").fetchall()
+                        finally:
+                            c.close()
+                        stats["logs"] = [{"id": r[0], "runType": r[1], "trackId": r[2],
+                                          "trackTitle": r[3], "status": r[4], "commentId": r[5],
+                                          "reason": r[6], "created": r[7]} for r in logs]
+                        self._json(200, {"ok": True, **stats}); return
+                    if self.command == "POST":
+                        try:
+                            ln = int(self.headers.get("Content-Length") or 0)
+                            body = json.loads(self.rfile.read(ln).decode("utf-8") or "{}") if ln else {}
+                        except Exception:
+                            body = {}
+                        c = db()
+                        try:
+                            for k in ("enabled", "interval", "count", "max_per_track", "skip_days"):
+                                if k in body:
+                                    c.execute("INSERT OR REPLACE INTO ai_comment_cfg(key,value) VALUES(?,?)",
+                                              (k, str(body[k])))
+                            c.commit()
+                        finally:
+                            c.close()
+                        self._json(200, {"ok": True, "settings": _ai_auto_settings()}); return
+                    self._err(400, "bad request"); return
+                if seg == "/run" and self.command == "POST":
+                    try:
+                        ln = int(self.headers.get("Content-Length") or 0)
+                        body = json.loads(self.rfile.read(ln).decode("utf-8") or "{}") if ln else {}
+                    except Exception:
+                        body = {}
+                    res = _ai_auto_run("manual", count=body.get("count"),
+                                       force=bool(body.get("force", False)))
+                    self._json(200, {"ok": True, **res}); return
+                if seg.startswith("/") and len(seg) > 1 and self.command == "DELETE":
+                    cid = seg[1:]
+                    c = db()
+                    try:
+                        c.execute("DELETE FROM comments WHERE id=? AND user_id=?", (cid, _ai_uid()))
+                        c.commit()
+                    finally:
+                        c.close()
+                    self._json(200, {"ok": True}); return
+                self._err(400, "bad request"); return
+
             if u.path == "/api/tracks":
                 if not rate_limit(self, "tracks"):
                     self._err(429, "请求过于频繁，请稍后再试")
@@ -1636,6 +1712,44 @@ class H(BaseHTTPRequestHandler):
         try:
             u = urllib.parse.urlparse(self.path)
             length = int(self.headers.get("Content-Length", 0))
+
+            # ---------- AI 乐评管理（网站管理）POST ----------
+            if u.path == "/api/admin/ai-config":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
+                except Exception:
+                    body = {}
+                _ai_save_config(base=body.get("base"), key=body.get("key"), model=body.get("model"))
+                self._json(200, {"ok": True, "saved": True}); return
+            if u.path == "/api/admin/ai-comment":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
+                except Exception:
+                    body = {}
+                c = db()
+                try:
+                    for k in ("enabled", "interval", "count", "max_per_track", "skip_days"):
+                        if k in body:
+                            c.execute("INSERT OR REPLACE INTO ai_comment_cfg(key,value) VALUES(?,?)",
+                                      (k, str(body[k])))
+                    c.commit()
+                finally:
+                    c.close()
+                self._json(200, {"ok": True, "settings": _ai_auto_settings()}); return
+            if u.path == "/api/admin/ai-comment/run":
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                try:
+                    body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
+                except Exception:
+                    body = {}
+                res = _ai_auto_run("manual", count=body.get("count"),
+                                   force=bool(body.get("force", False)))
+                self._json(200, {"ok": True, **res}); return
 
             # ---------- 关注/取关用户 ----------
             if u.path.startswith("/api/user/") and u.path.endswith("/follow"):
@@ -3030,8 +3144,8 @@ class H(BaseHTTPRequestHandler):
                         return
                     cid = uuid.uuid4().hex
                     now = time.time()
-                    c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created)
-                                 VALUES(?,?,?,?,?,?,?)""",
+                    c.execute("""INSERT INTO comments(id,track_id,user_id,user_name,content,images,created,is_ai)
+                                 VALUES(?,?,?,?,?,?,?,1)""",
                               (cid, tid, _ai_uid(), "AI 乐评", text, "[]", now))
                     c.commit()
                     # 通知歌曲上传者（AI 评论了你的歌曲）
@@ -3254,6 +3368,20 @@ class H(BaseHTTPRequestHandler):
     def do_DELETE(self):
         try:
             u = urllib.parse.urlparse(self.path)
+
+            # ---------- 删除 AI 乐评（网站管理） ----------
+            if u.path.startswith("/api/admin/ai-comment/"):
+                if self.headers.get("X-Admin-Token", "").strip() != _admin_token():
+                    self._err(401, "unauthorized"); return
+                cid = u.path[len("/api/admin/ai-comment/"):]
+                if cid:
+                    c = db()
+                    try:
+                        c.execute("DELETE FROM comments WHERE id=? AND user_id=?", (cid, _ai_uid()))
+                        c.commit()
+                    finally:
+                        c.close()
+                self._json(200, {"ok": True}); return
 
             # ---------- 清空搜索历史 ----------
             if u.path == "/api/search/history":

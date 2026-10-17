@@ -571,7 +571,40 @@ def run_all(port, root, strict_port, strict_root):
     check("admin users 200 含注册用户", s == 200 and any(u.get("account") == acc
                                                           for u in us.get("list", [])), body[:100])
 
-    print("== 21. WebSocket 握手与鉴权 ==")
+    print("== 21. AI 乐评管理接口（网站管理） ==")
+    s, body, _ = req("GET", "/api/admin/ai-comment")
+    check("ai-comment 无 token 401", s == 401, f"s={s}")
+    s, body, _ = req("GET", "/api/admin/ai-comment", headers=ADMIN)
+    a0 = json.loads(body)
+    check("ai-comment 状态 200 含字段", s == 200 and a0.get("ok") is True
+          and "keyConfigured" in a0 and isinstance(a0.get("logs"), list), body[:100])
+    s, body, _ = req("GET", "/api/admin/ai-config")
+    check("ai-config 无 token 401", s == 401, f"s={s}")
+    s, body, _ = req("GET", "/api/admin/ai-config", headers=ADMIN)
+    ai0 = json.loads(body)
+    check("ai-config 200 含 keyMasked/hasKey", s == 200 and "keyMasked" in ai0 and "hasKey" in ai0, body[:100])
+    # 保存主动评论配置
+    s, body, _ = req("POST", "/api/admin/ai-comment",
+                     body={"enabled": "1", "interval": 3600, "count": 2,
+                           "max_per_track": 2, "skip_days": 7}, headers=ADMIN)
+    check("ai-comment 保存配置 200", s == 200, body[:100])
+    s, body, _ = req("GET", "/api/admin/ai-comment", headers=ADMIN)
+    a1 = json.loads(body)
+    check("ai-comment 配置生效", a1.get("interval") == 3600 and a1.get("count") == 2, body[:100])
+    # 手动触发（测试环境无 AI key → 记录失败且不 5xx）
+    s, body, _ = req("POST", "/api/admin/ai-comment/run",
+                     body={"count": 2, "force": True}, headers=ADMIN)
+    a2 = json.loads(body)
+    check("ai-comment 手动触发 200 可统计",
+          s == 200 and a2.get("ok") is True and "ok_count" in a2 and "fail_count" in a2, body[:100])
+    s, body, _ = req("GET", "/api/admin/ai-comment", headers=ADMIN)
+    a3 = json.loads(body)
+    check("ai-comment 执行记录生成", s == 200 and isinstance(a3.get("logs"), list), body[:100])
+    # 删除 AI 评论（不存在 id → 幂等 200）
+    s, body, _ = req("DELETE", "/api/admin/ai-comment/notexistid", headers=ADMIN)
+    check("ai-comment 删除 200（幂等）", s == 200, body[:100])
+
+    print("== 22. WebSocket 握手与鉴权 ==")
     WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     def ws_handshake(path):
         sock = socket.create_connection(("127.0.0.1", port), timeout=5)
